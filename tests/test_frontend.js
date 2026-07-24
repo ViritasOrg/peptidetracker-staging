@@ -6324,6 +6324,38 @@ console.log('\n── Third dose slot (AM / Pre-GYM / PM) ───────�
     /rather than trial-backed/.test(_hghCat.protocol));
 }
 
+
+// ── Dose inputs must raise a numeric keypad on iOS ────────────────────────────
+// A bare type="text" input opens the QWERTY keyboard on iOS, so entering a dose
+// meant switching to the 123 layer every time. Dose fields are numeric (and may be
+// decimal: 0.09 ml, 2.5 mg), so every one carries inputmode="decimal". type="number"
+// is deliberately not used — it adds spinners and fights locale decimal separators.
+// Covers all three tiers: peptide, TRT and enhanced, editor and wizard alike.
+console.log('\n── Dose inputs: numeric keypad ────────────────────────────');
+{
+  const _stackSrc = fs.readFileSync(path.join(dir,'tab-stack.js'),'utf8');
+  const _textDose = _stackSrc.match(/class="dose-in" type="text"(?! inputmode="decimal")/g) || [];
+  check('every text dose input declares inputmode="decimal"', _textDose.length===0,
+    _textDose.length+' dose input(s) missing inputmode');
+  const _withMode = _stackSrc.match(/class="dose-in" type="text" inputmode="decimal"/g) || [];
+  check('all 9 dose inputs are covered', _withMode.length===9, 'found '+_withMode.length);
+
+  // The enhanced tier is where HGH actually lives, so pin its rendered markup directly.
+  // ENHANCEMENT_COMPOUNDS is backend-fetched, so seed the HGH entry the editor looks up.
+  var _prevEnhCat = G.ENHANCEMENT_COMPOUNDS;
+  G.ENHANCEMENT_COMPOUNDS = [{id:'hgh',name:'HGH (Somatropin)',group:'GH Axis',cls:'ghaxis',
+    dot:'#e8a020',defaultDose:2,unit:'IU/day',defaultDays:[1,2,3,4,5],
+    amPm:true,defaultDoseAm:2,defaultDosePm:0}];
+  var _enhHtml = G._renderEditEnhanced({enabled:true,compounds:[
+    {id:'hgh',name:'HGH',dose_am:'2',dose_mid:'2',dose_pm:'2',unit:'IU/day',days:[1],amPm:true}]});
+  var _enhInputs = (_enhHtml.match(/<input class="dose-in"[^>]*>/g)||[]);
+  check('enhanced tier renders dose inputs', _enhInputs.length>0);
+  check('every rendered enhanced dose input has the numeric keypad',
+    _enhInputs.length>0 && _enhInputs.every(function(t){return t.indexOf('inputmode="decimal"')>=0;}));
+  check('enhanced tier renders one dose input per slot', _enhInputs.length===3, 'got '+_enhInputs.length);
+  G.ENHANCEMENT_COMPOUNDS = _prevEnhCat;
+}
+
 console.log('\n───────────────────────────────────────────────────────────');
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 if(failed>0)process.exit(1);
