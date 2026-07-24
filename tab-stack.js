@@ -647,7 +647,7 @@ function showEnhancedCard(id){
     var eCat=(ENHANCEMENT_COMPOUNDS||[]).find(function(ec){return ec.id===id;});
     var isAmPm=userComp.amPm||(eCat&&eCat.amPm);
     activeDose=isAmPm?_enhSplitTotal(userComp):parseDec(userComp.dose||0);
-    if(isAmPm){TIME_SLOTS.forEach(function(t){var k=_slotKey(t);if(userComp['dose_'+k])parts.push(_slotLabel(t)+': '+userComp['dose_'+k]+' '+(userComp.unit?(userComp.unit.split('/')[0]):''));});}
+    if(isAmPm){_enhTimes(userComp).forEach(function(t){var k=_slotKey(t);if(userComp['dose_'+k])parts.push(_slotLabel(t)+': '+userComp['dose_'+k]+' '+(userComp.unit?(userComp.unit.split('/')[0]):''));});}
     else if(userComp.dose)parts.push(userComp.dose+(userComp.unit?' '+userComp.unit:''));
     if(parts.length)myDoseHtml='<div style="background:'+dot+'15;border:1px solid '+dot+'30;border-radius:10px;padding:10px 14px;margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:'+dot+';margin-bottom:3px;">Your dose</div><div style="font-size:13px;color:var(--text);">'+parts.join(' · ')+'</div></div>';
   }
@@ -707,21 +707,42 @@ function _slotFirstUnit(p){
   for(var i=0;i<TIME_SLOTS.length;i++){var v=p['unit_'+_slotKey(TIME_SLOTS[i])];if(v)return v;}
   return '';
 }
-// Total daily dose of a split enhanced compound across all slots. `amPm` is the
-// legacy field name for "this compound is split across intra-day slots" — kept as-is
-// so existing stored stacks keep working; it now covers three slots, not two.
+// Which intra-day slots a split enhanced compound is scheduled in, in chronological
+// order. `amPm` is the legacy field name for "this compound is split across intra-day
+// slots" — kept as-is so existing stored stacks keep working; it now covers three
+// slots, not two, and `times` says which of them are actually used.
+//
+// Back-compat: stacks saved before `times` existed have no such field. For those the
+// schedule is inferred from which slot doses are populated — which is exactly what
+// used to decide whether a slot generated an injection, so an existing stack keeps
+// the schedule it already had. If none are populated, fall back to AM+PM, the pair
+// that was always rendered before.
+function _enhTimes(c){
+  if(Array.isArray(c.times)&&c.times.length)
+    return TIME_SLOTS.filter(function(t){return c.times.indexOf(t)>=0;});
+  var inferred=TIME_SLOTS.filter(function(t){
+    var v=c['dose_'+_slotKey(t)];
+    return v&&parseDec(v)!==0;
+  });
+  return inferred.length?inferred:['AM','PM'];
+}
+// Total daily dose of a split enhanced compound — only slots it is scheduled in, so a
+// deselected slot's leftover value never inflates the total shown in dose guidance.
 function _enhSplitTotal(c){
   var n=0;
-  TIME_SLOTS.forEach(function(t){n+=parseDec(c['dose_'+_slotKey(t)]||0)||0;});
+  _enhTimes(c).forEach(function(t){n+=parseDec(c['dose_'+_slotKey(t)]||0)||0;});
   return n;
 }
 // Seed a stack entry's per-slot doses from the enhanced catalogue defaults
-// (defaultDoseAm / defaultDoseMid / defaultDosePm).
+// (defaultDoseAm / defaultDoseMid / defaultDosePm), and set the initial schedule to
+// whichever slots the catalogue actually gives a dose for.
 function _enhSeedSlots(e,cat){
   TIME_SLOTS.forEach(function(t){
     var k=_slotKey(t),C=k.charAt(0).toUpperCase()+k.slice(1);
     e['dose_'+k]=String(cat['defaultDose'+C]||'');
   });
+  var seeded=TIME_SLOTS.filter(function(t){return parseDec(e['dose_'+_slotKey(t)]||0)!==0;});
+  e.times=seeded.length?seeded:['AM'];
 }
 function _renderSlotTimingHint(id,times){
   if(!_isGhAxis(id)||!times||!times.length)return'';
@@ -1365,7 +1386,7 @@ function _getDynamicEnhancedDoses(d,withIds){
       var eCat=(ENHANCEMENT_COMPOUNDS||[]).find(function(ec){return ec.id===c.id;});
       var isAmPm=c.amPm||(eCat&&eCat.amPm);
       if(isAmPm){
-        TIME_SLOTS.forEach(function(t){
+        _enhTimes(c).forEach(function(t){
           var k=_slotKey(t);
           if(!c['dose_'+k]||parseDec(c['dose_'+k])===0)return;
           var slotEntry={name:c.name,detail:c['dose_'+k]+(baseUnit?' '+baseUnit:''),time:t,dot:dot,compId:c.id};
@@ -1488,6 +1509,27 @@ function editToggleEnhancedCompound(id){
 function editSetEnhDose(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.dose=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(v||0));}}
 function editSetEnhUnit(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
 function editSetEnhDoseSlot(id,slot,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c['dose_'+_slotKey(slot)]=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,_enhSplitTotal(c));}}
+// Toggle one intra-day slot for a split enhanced compound. Mirrors editToggleTime in
+// the peptide tier, including the guard that the last remaining slot cannot be removed.
+// A deselected slot keeps its dose value so re-selecting it restores what was typed.
+function editToggleEnhTime(id,t){
+  var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(!c)return;
+  var cur=_enhTimes(c).slice();
+  var i=cur.indexOf(t);
+  if(i===-1)cur.push(t); else if(cur.length>1)cur.splice(i,1);
+  c.times=TIME_SLOTS.filter(function(x){return cur.indexOf(x)>=0;});
+  _collectEditInputs();renderStackEditor();
+}
+function wizToggleEnhTime(id,t){
+  var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(!c)return;
+  var cur=_enhTimes(c).slice();
+  var i=cur.indexOf(t);
+  if(i===-1)cur.push(t); else if(cur.length>1)cur.splice(i,1);
+  c.times=TIME_SLOTS.filter(function(x){return cur.indexOf(x)>=0;});
+  wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
 function editSetEnhAmPm(id,on){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.amPm=!!on;_collectEditInputs();renderStackEditor();}
 function editSetEnhDays(id,di){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});renderStackEditor();}
 function _renderEditEnhanced(enh){
@@ -1511,11 +1553,16 @@ function _renderEditEnhanced(enh){
         html+='<div class="cfg-row" style="display:flex;align-items:center;justify-content:space-between"><div class="cfg-lbl" style="margin:0">Split across AM / Pre-GYM / PM</div><div onclick="editSetEnhAmPm(\''+c.id+'\','+(!_amPm)+')" style="cursor:pointer"><div class="toggle-sw'+(_amPm?' on':'')+'"></div></div></div>';
         if(_amPm){
           var _eUnit=(c.unit||'IU').split('/')[0];
-          TIME_SLOTS.forEach(function(t){var k=_slotKey(t);
+          var _eTimes=_enhTimes(selData);
+          html+='<div class="cfg-row"><div class="cfg-lbl">Timing</div><div class="time-chips">'
+            +TIME_SLOTS.map(function(t){
+              return '<div class="time-chip'+(_eTimes.indexOf(t)>=0?' sel':'')+'" onclick="editToggleEnhTime(\''+c.id+'\',\''+t+'\')">'+_slotLabel(t)+'</div>';
+            }).join('')
+            +'</div></div>';
+          _eTimes.forEach(function(t){var k=_slotKey(t);
             html+='<div class="cfg-row"><div class="cfg-lbl">'+_slotLabel(t)+' Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData['dose_'+k]||'')+'" oninput="editSetEnhDoseSlot(\''+c.id+'\',\''+k+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_eUnit+'</span></div></div>';
           });
-          // All three rows are on screen when split is on, so name all three windows.
-          html+=_renderSlotTimingHint(c.id,TIME_SLOTS);
+          html+=_renderSlotTimingHint(c.id,_eTimes);
           html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
         }else{
           html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="editSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="editSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
@@ -1541,7 +1588,7 @@ function _renderEnhancedViewTab(st){
       html+='<div class="cfg-block" style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">';
       html+='<div style="width:8px;height:8px;border-radius:50%;background:'+dot+';flex-shrink:0;"></div>';
       html+='<div style="flex:1;font-size:13px;font-weight:600;color:var(--text);">'+_esc(c.name||c.id)+'</div>';
-      var doseStr=c.amPm?(TIME_SLOTS.filter(function(t){return c['dose_'+_slotKey(t)];}).map(function(t){return c['dose_'+_slotKey(t)]+' '+_slotLabel(t);}).join(' / ')+' '+(c.unit||'IU').split('/')[0]+(days?' · '+days:'')):((c.dose?c.dose+(c.unit||'mg'):'')+(days?' · '+days:''));
+      var doseStr=c.amPm?(_enhTimes(c).filter(function(t){return c['dose_'+_slotKey(t)];}).map(function(t){return c['dose_'+_slotKey(t)]+' '+_slotLabel(t);}).join(' / ')+' '+(c.unit||'IU').split('/')[0]+(days?' · '+days:'')):((c.dose?c.dose+(c.unit||'mg'):'')+(days?' · '+days:''));
       html+='<div style="font-size:12px;color:var(--muted2);">'+doseStr+'</div>';
       html+='</div>';
     });
@@ -1842,10 +1889,16 @@ function wizStepEnhanced(body,footer){
         html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';
         if(c.amPm){
           var _wUnit=(c.unit||'IU').split('/')[0];
-          TIME_SLOTS.forEach(function(t){var k=_slotKey(t);
+          var _wTimes=_enhTimes(selData);
+          html+='<div class="cfg-row"><div class="cfg-lbl">Timing</div><div class="time-chips">'
+            +TIME_SLOTS.map(function(t){
+              return '<div class="time-chip'+(_wTimes.indexOf(t)>=0?' sel':'')+'" onclick="wizToggleEnhTime(\''+c.id+'\',\''+t+'\')">'+_slotLabel(t)+'</div>';
+            }).join('')
+            +'</div></div>';
+          _wTimes.forEach(function(t){var k=_slotKey(t);
             html+='<div class="cfg-row"><div class="cfg-lbl">'+_slotLabel(t)+' Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData['dose_'+k]||'')+'" oninput="wizSetEnhDoseSlot(\''+c.id+'\',\''+k+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_wUnit+'</span></div></div>';
           });
-          html+=_renderSlotTimingHint(c.id,TIME_SLOTS);
+          html+=_renderSlotTimingHint(c.id,_wTimes);
           html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
         }else{
           html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
@@ -2087,7 +2140,7 @@ function _genInjBatches(stack,cycleId,fromDate){
         if(c.days&&c.days.length&&!c.days.includes(d.getDay()))continue;
         var dk=dateKey(d);
         if(isAmPm){
-          TIME_SLOTS.forEach(function(t){var k=_slotKey(t);
+          _enhTimes(c).forEach(function(t){var k=_slotKey(t);
             if(c['dose_'+k]&&parseDec(c['dose_'+k])!==0)compEntries.push({cycle_id:cycleId,date:dk,compound_id:c.id,compound_name:c.name,tier:'enhanced',dose:c['dose_'+k],unit:baseUnit,dot:dot,time_of_day:t,active:true,logged:false});
           });
         }else{
