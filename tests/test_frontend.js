@@ -394,13 +394,13 @@ check('_wizFlow: peps+TRT ends with review', pepTrtFlow[pepTrtFlow.length-1]==='
 // _wizFlow: TRT + Enhanced (T3, trt enabled, enhanced goal, no pep goals)
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
 var trtEnhFlow=G._wizFlow();
-check('_wizFlow: TRT+enhanced has 8 steps', trtEnhFlow.length===8, 'got '+trtEnhFlow.length);
-check('_wizFlow: TRT+enhanced steps', trtEnhFlow.join(',')===('cycle,goals,trt,advise,enhanced,validate,nutrition,review'));
+check('_wizFlow: TRT+enhanced has 9 steps', trtEnhFlow.length===9, 'got '+trtEnhFlow.length);
+check('_wizFlow: TRT+enhanced steps', trtEnhFlow.join(',')===('cycle,goals,trt,base,advise,enhanced,validate,nutrition,review'));
 check('_wizFlow: advise precedes enhanced', trtEnhFlow.indexOf('advise')===trtEnhFlow.indexOf('enhanced')-1);
 // _wizFlow: Peps + TRT + Enhanced (T3, all tiers)
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced','muscle'];
 var allFlow=G._wizFlow();
-check('_wizFlow: peps+TRT+enhanced has 11 steps', allFlow.length===11, 'got '+allFlow.length);
+check('_wizFlow: peps+TRT+enhanced has 12 steps', allFlow.length===12, 'got '+allFlow.length);
 check('_wizFlow: peps+TRT+enhanced has advise', allFlow.includes('advise'));
 check('_wizFlow: peps+TRT+enhanced has peptides', allFlow.includes('peptides'));
 check('_wizFlow: peps+TRT+enhanced has trt',      allFlow.includes('trt'));
@@ -458,15 +458,16 @@ G.wizNext();G.wizNext();G.wizNext();G.wizNext();
 check('wizNext: TRT-only after 4 calls = step 4 (review)', G._wiz.step===4);
 G.wizNext();check('wizNext: TRT-only does not exceed step 4', G._wiz.step===4);
 G.wizBack();check('wizBack: TRT-only 4→3 (nutrition)', G._wiz.step===3);
-// TRT+Enhanced (no peps): flow is cycle,goals,trt,advise,enhanced,validate,nutrition,review
+// TRT+Enhanced (no peps): flow is cycle,goals,trt,base,advise,enhanced,validate,nutrition,review
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
-G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
-check('wizNext: TRT+enhanced after 7 calls = step 7 (review)', G._wiz.step===7);
-G.wizNext();check('wizNext: TRT+enhanced does not exceed step 7', G._wiz.step===7);
-G.wizBack();check('wizBack: TRT+enhanced 7→6 (nutrition)', G._wiz.step===6);
-G.wizBack();check('wizBack: TRT+enhanced 6→5 (validate)', G._wiz.step===5);
-G.wizBack();check('wizBack: TRT+enhanced 5→4 (enhanced)', G._wiz.step===4);
-G.wizBack();check('wizBack: TRT+enhanced 4→3 (advise)', G._wiz.step===3);
+G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
+check('wizNext: TRT+enhanced after 8 calls = step 8 (review)', G._wiz.step===8);
+G.wizNext();check('wizNext: TRT+enhanced does not exceed step 8', G._wiz.step===8);
+G.wizBack();check('wizBack: TRT+enhanced 8→7 (nutrition)', G._wiz.step===7);
+G.wizBack();check('wizBack: TRT+enhanced 7→6 (validate)', G._wiz.step===6);
+G.wizBack();check('wizBack: TRT+enhanced 6→5 (enhanced)', G._wiz.step===5);
+G.wizBack();check('wizBack: TRT+enhanced 5→4 (advise)', G._wiz.step===4);
+G.wizBack();check('wizBack: TRT+enhanced 4→3 (base)', G._wiz.step===3);
 G.wizBack();check('wizBack: TRT+enhanced 3→2 (trt)', G._wiz.step===2);
 // Peps+TRT: validate step appears
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
@@ -2114,7 +2115,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 4: TRT + Enhanced (T3, trt.enabled, enhanced goal, no pep goals)
   G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
   var f4=G._wizFlow();
-  check('flow TRT+enhanced: 8 steps', f4.length===8, 'got '+f4.length);
+  check('flow TRT+enhanced: 9 steps', f4.length===9, 'got '+f4.length);
   check('flow TRT+enhanced: has advise before enhanced', f4.indexOf('advise')===f4.indexOf('enhanced')-1);
   check('flow TRT+enhanced: has enhanced', f4.includes('enhanced'));
   check('flow TRT+enhanced: has validate', f4.includes('validate'));
@@ -2123,7 +2124,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 5: Peps + TRT + Enhanced (T3, all tiers)
   G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced','muscle'];
   var f5=G._wizFlow();
-  check('flow peps+TRT+enhanced: 11 steps', f5.length===11, 'got '+f5.length);
+  check('flow peps+TRT+enhanced: 12 steps', f5.length===12, 'got '+f5.length);
   check('flow peps+TRT+enhanced: has all tiers', f5.includes('peptides')&&f5.includes('trt')&&f5.includes('enhanced'));
   check('flow peps+TRT+enhanced: has validate', f5.includes('validate'));
 
@@ -6464,6 +6465,69 @@ console.log('\n── Enhanced tier: schedule chips ─────────�
     (_seed.times||[]).join('+')==='AM');
 
   G.ENHANCEMENT_COMPOUNDS = _prev;
+}
+
+
+// ── Wizard: mandatory testosterone-base step ──────────────────────────────────
+// The advisor used to present Testosterone Enanthate as "required base (always
+// included)" — the only ester on offer. Every enhanced cycle runs on a testosterone
+// base and the ester decides injection frequency for the whole cycle, so it is now
+// picked explicitly on its own step, before any other compound. Esters come from the
+// backend catalogue (cls==='base'); nothing is hardcoded in the frontend.
+console.log('\n── Wizard: testosterone base step ─────────────────────────');
+{
+  const _prevCat = G.ENHANCEMENT_COMPOUNDS;
+  G.ENHANCEMENT_COMPOUNDS = [
+    {id:'test_e',name:'Testosterone Enanthate',cls:'base',dot:'#e05050',defaultDose:300,unit:'mg/week',defaultDays:[1,4],
+     cadence:{rec:'2×/week',halfLife:'~7 days',note:'Twice-weekly smooths peak-to-trough.'}},
+    {id:'test_p',name:'Testosterone Propionate',cls:'base',dot:'#e05050',defaultDose:350,unit:'mg/week',defaultDays:[1,3,5],
+     cadence:{rec:'EOD or daily',halfLife:'~0.8 days',note:'Short ester — inject EOD.'}},
+    {id:'test_u',name:'Testosterone Undecanoate (Nebido)',cls:'base',dot:'#e05050',defaultDose:100,unit:'mg/week',defaultDays:[1],
+     cadence:{rec:'1000 mg every 10–14 weeks',halfLife:'~34 days',note:'Ultra-long ester.'}},
+    {id:'primo',name:'Primobolan',cls:'dht',dot:'#3b9eff',defaultDose:400,unit:'mg/week',defaultDays:[1,4]}];
+
+  G.initWizard(); G._wiz.goals=['enhanced'];
+  var _flow=G._wizFlow();
+  check('enhanced flow includes a base step', _flow.indexOf('base')>=0);
+  check('the base step comes before guidance', _flow.indexOf('base')<_flow.indexOf('advise'));
+  check('the base step comes before the enhanced compound list',
+    _flow.indexOf('base')<_flow.indexOf('enhanced'));
+
+  var _b={innerHTML:''}, _f={innerHTML:''};
+  G.wizStepBase(_b,_f);
+  check('every base ester in the catalogue is offered',
+    _b.innerHTML.indexOf('Testosterone Enanthate')>=0 && _b.innerHTML.indexOf('Testosterone Propionate')>=0
+      && _b.innerHTML.indexOf('Testosterone Undecanoate')>=0);
+  check('non-base compounds are not offered as a base', _b.innerHTML.indexOf('Primobolan')<0);
+  check('the recommended ester is badged, not forced', _b.innerHTML.indexOf('RECOMMENDED')>=0);
+  check('the step is mandatory — Next is gated until an ester is picked',
+    _f.innerHTML.indexOf('disabled')>=0);
+
+  G.wizSetBaseEster('test_p');
+  check('picking an ester records it as the base', G._wizBaseId()==='test_p');
+  check('the picked ester is added to the protocol',
+    ((G._wiz.enhanced&&G._wiz.enhanced.compounds)||[]).some(function(c){return c.id==='test_p';}));
+  G.wizStepBase(_b,_f);
+  check('Next is enabled once an ester is picked', _f.innerHTML.indexOf('disabled')<0);
+  check('the chosen ester shows its own cadence note', _b.innerHTML.indexOf('Short ester')>=0);
+
+  // switching must swap the base, never stack two testosterones
+  G._wizAdviseAdd('primo');
+  G.wizSetBaseEster('test_u');
+  var _ids=((G._wiz.enhanced&&G._wiz.enhanced.compounds)||[]).map(function(c){return c.id;});
+  check('switching ester replaces the old base', _ids.indexOf('test_p')<0 && _ids.indexOf('test_u')>=0);
+  check('switching ester leaves non-base compounds alone', _ids.indexOf('primo')>=0);
+  check('only ever one testosterone base in the protocol',
+    _ids.filter(function(i){return ['test_e','test_p','test_u'].indexOf(i)>=0;}).length===1);
+
+  check('the chosen ester is sent to the advisor', G._wizAdviseInputs().base_id==='test_u');
+
+  // the guidance step no longer calls the base "always included"
+  const _stackSrc = fs.readFileSync(path.join(dir,'tab-stack.js'),'utf8');
+  check('guidance no longer labels the base "always included"',
+    _stackSrc.indexOf('Required base (always included)')<0);
+
+  G.ENHANCEMENT_COMPOUNDS = _prevCat;
 }
 
 console.log('\n───────────────────────────────────────────────────────────');

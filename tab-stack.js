@@ -59,8 +59,10 @@ function _wizFlow(){
   var steps=['cycle','goals'];
   if(hasPeps){steps.push('peptides');steps.push('check');steps.push('configure');}
   if(hasTRT)steps.push('trt');
-  // 'advise' (guided recommendation) precedes the raw Enhanced compound list.
-  if(hasEnhanced){steps.push('advise');steps.push('enhanced');}
+  // Testosterone base is chosen first — every enhanced cycle runs on one, and which
+  // ester it is changes injection frequency for the whole cycle. Then 'advise' (guided
+  // recommendation), then the raw Enhanced compound list.
+  if(hasEnhanced){steps.push('base');steps.push('advise');steps.push('enhanced');}
   // VALIDATE when combining 2+ tiers so cross-tier conflicts are caught
   var tierCount=[hasPeps,hasTRT,hasEnhanced].filter(Boolean).length;
   if(tierCount>=2)steps.push('validate');
@@ -68,8 +70,8 @@ function _wizFlow(){
   steps.push('review');
   return steps;
 }
-var _WIZ_STEP_LABELS={advise:'GUIDANCE',nutrition:'MACROS'};
-var _WIZ_RENDERERS={cycle:function(b,f){wizStep1(b,f);},goals:wizStepGoals,peptides:wizStepPeptides,check:wizStepCheck,configure:wizStepConfig,trt:wizStepTRT,advise:wizStepAdvise,enhanced:wizStepEnhanced,validate:wizStepValidate,nutrition:wizStepNutrition,review:wizStepReview};
+var _WIZ_STEP_LABELS={base:'TEST BASE',advise:'GUIDANCE',nutrition:'MACROS'};
+var _WIZ_RENDERERS={cycle:function(b,f){wizStep1(b,f);},goals:wizStepGoals,base:function(b,f){wizStepBase(b,f);},peptides:wizStepPeptides,check:wizStepCheck,configure:wizStepConfig,trt:wizStepTRT,advise:wizStepAdvise,enhanced:wizStepEnhanced,validate:wizStepValidate,nutrition:wizStepNutrition,review:wizStepReview};
 function wizRender(){
   var flow=_wizFlow();
   var idx=Math.min(_wiz.step,flow.length-1);
@@ -1669,13 +1671,85 @@ function _wizAdviseState(){
   }
   return _wiz.advise;
 }
+// ── Wizard step: testosterone base ────────────────────────────────────────────
+// Every enhanced cycle runs on a testosterone base, and the ester decides injection
+// frequency for the whole cycle (propionate EOD vs undecanoate every 10-14 weeks), so
+// it is chosen explicitly before any other compound rather than assumed. Esters come
+// from the backend catalogue (cls==='base') — never hardcoded here.
+function _wizBaseList(){
+  return (typeof ENHANCEMENT_COMPOUNDS!=='undefined'?(ENHANCEMENT_COMPOUNDS||[]):[])
+    .filter(function(c){return c.cls==='base';});
+}
+// The base currently in the protocol, if any — the stack is the source of truth so a
+// user who swapped esters on a later step still sees the right one selected here.
+function _wizBaseId(){
+  var comps=(_wiz&&_wiz.enhanced&&_wiz.enhanced.compounds)||[];
+  var ids=_wizBaseList().map(function(c){return c.id;});
+  var hit=comps.find(function(c){return ids.indexOf(c.id)>=0;});
+  return hit?hit.id:'';
+}
+// Selecting an ester REPLACES any base already in the protocol — a cycle runs on one
+// testosterone, so switching must swap rather than stack. Non-base compounds are left
+// untouched. The advisor result is invalidated so guidance re-fetches for the new base.
+function wizSetBaseEster(id){
+  if(!_wiz.enhanced)_wiz.enhanced={enabled:false,compounds:[]};
+  if(!_wiz.enhanced.compounds)_wiz.enhanced.compounds=[];
+  var baseIds=_wizBaseList().map(function(c){return c.id;});
+  if(_wizBaseId()===id)return;
+  _wiz.enhanced.compounds=_wiz.enhanced.compounds.filter(function(c){return baseIds.indexOf(c.id)<0;});
+  _wizAdviseAdd(id);
+  _wiz.enhanced.enabled=(_wiz.enhanced.compounds||[]).length>0;
+  var st=_wizAdviseState();
+  if(st){st.result=null;st.fetched=false;st._seeded=false;st._autoSel=false;}
+  wizStepBase(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+function wizStepBase(body,footer){
+  var list=_wizBaseList();
+  var sel=_wizBaseId();
+  var recId='test_e';
+  var st=_wizAdviseState();
+  if(st&&st.result&&st.result.base&&st.result.base.recommended_id)recId=st.result.base.recommended_id;
+  var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:14px;line-height:1.5;">'
+    +'Every enhanced cycle runs on a testosterone base. The ester sets how often you inject '
+    +'and how fast a dose change shows up — pick the one that fits how you want to run the cycle.</div>';
+  if(!list.length){
+    html+='<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:8px;padding:10px 14px;font-size:12px;color:#f59e0b;">'
+      +'Compound catalogue not loaded yet — reopen this step in a moment.</div>';
+    body.innerHTML=html;
+    footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
+    return;
+  }
+  list.forEach(function(c){
+    var isSel=(c.id===sel);
+    var cad=c.cadence||{};
+    html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="wizSetBaseEster(\''+c.id+'\')" '
+      +'style="margin-bottom:'+(isSel?'0':'8px')+';align-items:flex-start;'
+      +(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+'">'
+      +'<div class="pep-dot-sm" style="background:'+(c.dot||'#e05050')+';margin-top:4px;"></div>'
+      +'<div class="pep-info"><div class="pep-name">'+_esc(c.name)
+      +(c.id===recId?'<span style="font-size:9px;font-weight:700;letter-spacing:1px;color:#0a0a0a;background:var(--accent);border-radius:8px;padding:2px 6px;margin-left:6px;vertical-align:middle;">RECOMMENDED</span>':'')
+      +'</div>'
+      +'<div class="pep-meta">'+_esc(cad.rec||'')+(cad.halfLife?' · '+_esc(cad.halfLife):'')+'</div></div>'
+      +'<div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div>'
+      +'</div>';
+    if(isSel&&cad.note){
+      html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:10px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);font-size:11px;color:var(--muted2);line-height:1.5;">'
+        +_esc(cad.note)+'</div>';
+    }
+  });
+  html+=_renderSafetyNote('enhanced');
+  body.innerHTML=html;
+  var canNext=!!_wizBaseId();
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1"'+(canNext?'':' disabled')+' onclick="wizNext()">Next →</button>'
+    +(canNext?'':'<div style="font-size:11px;color:var(--muted2);margin-top:8px;">Pick a testosterone base to continue.</div>');
+}
 function _wizAdviseInputs(){
   var st=_wizAdviseState();
   var prof=(typeof getData==='function')?getData('pep-profile',null):null;
   var sex=(prof&&prof.sex)||(typeof _userProfile==='function'&&_userProfile().sex)||'male';
   var bfEntry=(typeof _latestBodyFat==='function')?_latestBodyFat():null;
   var bf=(bfEntry&&typeof bfEntry.bf==='number')?bfEntry.bf:(typeof bfEntry==='number'?bfEntry:null);
-  return {experience:_advNormExp(st.experience),sex:sex,objective:st.objective,body_fat:bf,flags:st.flags||{}};
+  return {experience:_advNormExp(st.experience),sex:sex,objective:st.objective,body_fat:bf,flags:st.flags||{},base_id:_wizBaseId()};
 }
 function wizAdviseSetExperience(v){
   var st=_wizAdviseState();st.experience=v;st.result=null;st.fetched=false;st._seeded=false;
@@ -1819,7 +1893,7 @@ function wizStepAdvise(body,footer){
     // Selection is live here — tap to add/remove.
     if((res.primary&&res.primary.length)||(res.consider&&res.consider.length)||res.best_addition){
       html+='<div style="font-size:11px;color:var(--muted2);margin-bottom:10px;line-height:1.5;">Tap a compound to add or remove it — ✓ means it\'s in your protocol. Your picks carry to the next step.</div>';}
-    if(res.base){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">Required base (always included)</div>'+_wizAdviseCompoundRow({name:res.base.name,reason:res.base.note},'primary',{selectable:false})+'</div>';}
+    if(res.base){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">Your testosterone base</div>'+_wizAdviseCompoundRow({name:res.base.name,reason:res.base.note},'primary',{selectable:false})+'</div>';}
     // Best addition (the single top pick), then the rest of primary — all tappable.
     var bestId=res.best_addition&&res.best_addition.id;
     var restPrimary=(res.primary||[]).filter(function(p){return p.id!==bestId;});
