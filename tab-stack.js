@@ -668,8 +668,13 @@ var UNITS=['mg','µg','IU','ml','%'];var UNIT_LABELS={mcg:'µg'};
 var SLOT_FASTED_HINT={AM:'fasted',MID:'2 h fasted',PM:'2 h fasted'};
 function _isGhAxis(id){
   var cat=(typeof PEPTIDE_CAT!=='undefined')?PEPTIDE_CAT.find(function(c){return c.id===id;}):null;
-  if(!cat||!cat.cg)return false;
-  return cat.cg.indexOf('hgh')>=0||cat.cg.indexOf('ghrh')>=0||cat.cg.indexOf('ghrp')>=0;
+  if(cat&&cat.cg&&(cat.cg.indexOf('hgh')>=0||cat.cg.indexOf('ghrh')>=0||cat.cg.indexOf('ghrp')>=0))return true;
+  // Enhanced-tier compounds come from the backend catalogue and carry no `cg` array —
+  // identify them by their class/group instead. HGH is reachable from both tiers, so
+  // the fasted guidance must resolve from either catalogue.
+  var eCat=(typeof ENHANCEMENT_COMPOUNDS!=='undefined')?(ENHANCEMENT_COMPOUNDS||[]).find(function(c){return c.id===id;}):null;
+  if(eCat&&(eCat.cls==='ghaxis'||eCat.group==='GH Axis'))return true;
+  return false;
 }
 // Build the per-slot dose/unit fields of a stack peptide item from a PEPTIDE_CAT
 // `dflt` block. Catalogue keys are camelCase per slot (doseAm/doseMid/dosePm).
@@ -1509,6 +1514,8 @@ function _renderEditEnhanced(enh){
           TIME_SLOTS.forEach(function(t){var k=_slotKey(t);
             html+='<div class="cfg-row"><div class="cfg-lbl">'+_slotLabel(t)+' Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData['dose_'+k]||'')+'" oninput="editSetEnhDoseSlot(\''+c.id+'\',\''+k+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_eUnit+'</span></div></div>';
           });
+          // All three rows are on screen when split is on, so name all three windows.
+          html+=_renderSlotTimingHint(c.id,TIME_SLOTS);
           html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
         }else{
           html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="editSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="editSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
@@ -1838,6 +1845,7 @@ function wizStepEnhanced(body,footer){
           TIME_SLOTS.forEach(function(t){var k=_slotKey(t);
             html+='<div class="cfg-row"><div class="cfg-lbl">'+_slotLabel(t)+' Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData['dose_'+k]||'')+'" oninput="wizSetEnhDoseSlot(\''+c.id+'\',\''+k+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_wUnit+'</span></div></div>';
           });
+          html+=_renderSlotTimingHint(c.id,TIME_SLOTS);
           html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
         }else{
           html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
