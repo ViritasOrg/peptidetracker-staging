@@ -340,6 +340,13 @@ function _tcCompInfo(compId) {
       name:            extra.name,
       dot:             extra.dot,
       halfLifeDays:    extra.halfLifeDays || 1,
+      // Depot esters have a genuinely wide half-life range — the backend serves low/high
+      // where the literature spread is material (see the backend's
+      // docs/enhanced-bodybuilding/11-testosterone-undecanoate-pk.md). Absent an explicit
+      // range, low == high == central and no band is drawn.
+      halfLifeDaysLow:  extra.halfLifeDaysLow  || extra.halfLifeDays || 1,
+      halfLifeDaysHigh: extra.halfLifeDaysHigh || extra.halfLifeDays || 1,
+      halfLifeNote:    extra.halfLifeNote || '',
       halfLifeStr:     extra.halfLife || '',
       bioavailability: extra.bioavailability || 1,
       maxDailyDoseMg:  extra.maxDailyDoseMg || null,
@@ -354,6 +361,9 @@ function _tcCompInfo(compId) {
     name:         cat   ? cat.name  : compId,
     dot:          cat   ? cat.dot   : '#e8a020',
     halfLifeDays: hl,
+    halfLifeDaysLow:  hl,
+    halfLifeDaysHigh: hl,
+    halfLifeNote: '',
     halfLifeStr:  guide ? guide.halfLife : ''
   };
 }
@@ -1121,24 +1131,42 @@ function _tcFreeTSeries(sorted, hooks) {
 
   var maxHL = 1;
   sorted.forEach(function(e) {
-    var hl = (_tcCompInfo(e.compId).halfLifeDays) || 1;
+    var _ci = _tcCompInfo(e.compId);
+    // Size the washout window off the slowest plausible half-life, or a wide band's
+    // tail gets clipped before it has decayed.
+    var hl = (_ci.halfLifeDaysHigh || _ci.halfLifeDays) || 1;
     if (hl > maxHL) maxHL = hl;
   });
   var washoutDays = Math.ceil(4.3 * maxHL);
 
   var totalDays = Math.ceil((lastDate - firstDate) / 86400000) + washoutDays + 1;
   var total = new Float64Array(totalDays + 1);
+  // PK uncertainty band. Depot esters are flip-flop kinetic — the apparent half-life is
+  // the oil depot releasing, not testosterone clearing — and the published range is wide
+  // enough that steady-state level differs >2x across it. Where the backend declares a
+  // range we project the low and high series alongside the central estimate so callers
+  // can show a band rather than a line implying precision the data does not support.
+  var totalLo = new Float64Array(totalDays + 1);
+  var totalHi = new Float64Array(totalDays + 1);
+  var hasPkBand = false;
 
   sorted.forEach(function(e) {
     var cd    = _tcCompInfo(e.compId);
     var hl    = cd.halfLifeDays || 1;
+    var hlLo  = cd.halfLifeDaysLow  || hl;
+    var hlHi  = cd.halfLifeDaysHigh || hl;
+    if (hlLo !== hl || hlHi !== hl) hasPkBand = true;
     var bioav = cd.bioavailability || 1;
-    var ke    = Math.LN2 / hl;
-    var ka    = _tcKa(hl);
     var injectDay = Math.round((new Date(e.date) - firstDate) / 86400000);
     var absorbed  = parseDec(e.doseMg) * bioav;
-    for (var t = injectDay; t <= totalDays; t++) {
-      total[t] += _tcPkConc(absorbed, ka, ke, t - injectDay);
+    var series = [[hl, total], [hlLo, totalLo], [hlHi, totalHi]];
+    for (var si = 0; si < series.length; si++) {
+      var _hl = series[si][0], arr = series[si][1];
+      var ke  = Math.LN2 / _hl;
+      var ka  = _tcKa(_hl);
+      for (var t = injectDay; t <= totalDays; t++) {
+        arr[t] += _tcPkConc(absorbed, ka, ke, t - injectDay);
+      }
     }
   });
 
@@ -1315,6 +1343,9 @@ function _tcFreeTSeries(sorted, hooks) {
       }
       for (var _blt = 0; _blt <= totalDays; _blt++) {
         total[_blt] += _p2Baseline;
+        // Endogenous baseline is not half-life dependent — add it to the band series too
+        // so they stay directly comparable to the central curve.
+        if (hasPkBand) { totalLo[_blt] += _p2Baseline; totalHi[_blt] += _p2Baseline; }
       }
     }
   }
@@ -1537,6 +1568,7 @@ function _tcFreeTSeries(sorted, hooks) {
   // starts at the baseline and rises — not below it.
   if (hooks.start) hooks.start(total[0] * (calFT_arr ? calFT_arr[0] : scale));
   return { firstDate: firstDate, totalDays: totalDays, total: total, calFT: calFT, scale: scale,
+           totalLo: totalLo, totalHi: totalHi, hasPkBand: hasPkBand,
            calFT_arr: calFT_arr, calFTlo: _calFTlo, calFThi: _calFThi, unitLabel: unitLabel,
            measuredFT: _mftNum, ghAnnot: _ghAnnot, betaAnnot: _betaAnnot, bfAnnot: _bfAnnot, tier: _tier, sorted: sorted };
 }
