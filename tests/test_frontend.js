@@ -6599,6 +6599,43 @@ console.log('\n── Depot-ester PK band ────────────�
   G._tcExtraCatalog = _prevExtra;
 }
 
+
+// ── T-Calc x-axis label density ───────────────────────────────────────────────
+// The label-spacing ladder topped out at one label per 28 days. That was fine while
+// the widest span was a few months, but a slow depot ester now carries a washout tail
+// sized off its half-life, so the visible span can exceed a year — at which point
+// 28-day spacing packs ~14 labels into room for ~8 and they overlap into a smear.
+// Spacing now widens when labels genuinely would not fit, scoped to the >84 d regime
+// so every shorter window keeps its previous spacing exactly.
+console.log('\n── T-Calc x-axis label density ────────────────────────────');
+{
+  // Mirror of the in-chart calculation (the draw path needs a live canvas).
+  var _spacing = function(winDays, xDays, cW){
+    var e = winDays <= 7 ? 1 : winDays <= 30 ? 5 : xDays <= 28 ? 7 : xDays <= 84 ? 14 : 28;
+    if (xDays > 84) {
+      var maxL = Math.max(2, Math.floor(cW / 44));
+      while (Math.floor(xDays / e) + 1 > maxL) e *= 2;
+    }
+    return e;
+  };
+  var _count = function(xDays, e){ return Math.floor(xDays / e) + 1; };
+  var _W = 330;                       // representative phone chart width
+  var _fits = Math.floor(_W / 44);
+
+  check('short and medium spans keep their previous spacing',
+    _spacing(7,7,_W)===1 && _spacing(30,30,_W)===5 && _spacing(84,84,_W)===14);
+  check('a 146 d span still uses the ladder top (28 d)', _spacing(146,146,_W)===28);
+  check('a year-long depot span widens past the ladder', _spacing(390,390,_W) > 28);
+  check('labels fit at every span up to 500 d',
+    [90,146,232,390,500].every(function(x){ return _count(x,_spacing(x,x,_W)) <= _fits; }));
+  check('the old 28 d spacing would NOT have fit at 390 d (regression is real)',
+    _count(390,28) > _fits, 'old gave '+_count(390,28)+' labels, room for '+_fits);
+  check('spacing never collapses to zero or negative',
+    [7,30,84,146,232,390,500,900].every(function(x){ return _spacing(x,x,_W) >= 1; }));
+  check('a wider canvas is allowed more labels',
+    _spacing(390,390,900) <= _spacing(390,390,300));
+}
+
 console.log('\n───────────────────────────────────────────────────────────');
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 if(failed>0)process.exit(1);
