@@ -6356,6 +6356,41 @@ console.log('\n── Dose inputs: numeric keypad ──────────
   G.ENHANCEMENT_COMPOUNDS = _prevEnhCat;
 }
 
+
+// ── Fasted-window labels reach the Enhanced tier ──────────────────────────────
+// HGH is reachable from BOTH the peptide catalogue and the backend enhanced
+// catalogue, and it is the enhanced tier that users actually configure it from.
+// The per-slot fasted qualifier — AM (fasted) / Pre-GYM (2 h fasted) / PM (2 h
+// fasted) — must therefore render in the enhanced editor and wizard too, not just
+// the peptide ones. Enhanced catalogue entries carry no `cg` array, so _isGhAxis
+// resolves them by cls/group instead.
+console.log('\n── Enhanced tier: fasted-window labels ────────────────────');
+{
+  const _prevCat = G.ENHANCEMENT_COMPOUNDS;
+  G.ENHANCEMENT_COMPOUNDS = [
+    {id:'hgh',name:'HGH (Somatropin)',group:'GH Axis',cls:'ghaxis',dot:'#e8a020',
+     defaultDose:2,unit:'IU/day',defaultDays:[1,2,3,4,5],amPm:true,defaultDoseAm:2,defaultDosePm:0},
+    {id:'test_e',name:'Testosterone Enanthate',group:'Base',cls:'base',dot:'#e05050',
+     defaultDose:300,unit:'mg/week',defaultDays:[1,4],amPm:true,defaultDoseAm:150,defaultDosePm:150}];
+
+  check('_isGhAxis resolves an enhanced-catalogue GH compound', G._isGhAxis('hgh')===true);
+  check('_isGhAxis is false for a non-GH enhanced compound', G._isGhAxis('test_e')===false);
+
+  var _mk=function(id){return G._renderEditEnhanced({enabled:true,compounds:[
+    {id:id,name:id,dose_am:'2',dose_mid:'2',dose_pm:'2',unit:'IU/day',days:[1],amPm:true}]});};
+  var _hghHtml=_mk('hgh'), _tHtml=_mk('test_e');
+
+  check('enhanced editor names all three fasted windows',
+    _hghHtml.indexOf('AM (fasted)')>=0 && _hghHtml.indexOf('Pre-GYM (2 h fasted)')>=0
+      && _hghHtml.indexOf('PM (2 h fasted)')>=0);
+  check('enhanced editor explains why (low-insulin window)',
+    _hghHtml.indexOf('low-insulin window')>=0);
+  check('non-GH enhanced compound gets no fasted hint',
+    _tHtml.indexOf('(fasted)')<0);
+
+  G.ENHANCEMENT_COMPOUNDS = _prevCat;
+}
+
 console.log('\n───────────────────────────────────────────────────────────');
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 if(failed>0)process.exit(1);
