@@ -6535,19 +6535,20 @@ console.log('\n── Wizard: testosterone base step ─────────
 // T-Calc modelled testosterone undecanoate at ~34 d, parsed from the hardcoded
 // TRT_GUIDE string. That is the fitted SINGLE-DOSE terminal half-life for castor-oil
 // TU — real, but the wrong figure for projecting months of accumulation, which it
-// under-predicts by ~1.6x in steady-state level. The backend now serves 54 d central
-// with a 34-90 d band (derivation and provenance caveat in the backend's
+// under-predicts by ~1.7x in steady-state level. The backend now serves 58 d central
+// with a 34-90 d band, derived from the primary SmPC's steady-state Cmax/Cmin
+// (37/16 nmol/L over a 70-day interval). See the backend's
 // docs/enhanced-bodybuilding/11-testosterone-undecanoate-pk.md). _tcCompInfo already
 // prefers /trt-catalog over the hardcoded fallback, so the correction flows through.
 console.log('\n── Depot-ester PK band ────────────────────────────────────');
 {
   const _prevExtra = G._tcExtraCatalog;
   G._tcExtraCatalog = [{id:'nebido',name:'Nebido (Testosterone Undecanoate)',dot:'#e8a020',
-    halfLife:'~54 days effective (34-90 d depot release)',
-    halfLifeDays:54, halfLifeDaysLow:34, halfLifeDaysHigh:90}];
+    halfLife:'~58 days effective (34-90 d depot release)',
+    halfLifeDays:58, halfLifeDaysLow:34, halfLifeDaysHigh:90}];
 
   var _ci = G._tcCompInfo('nebido');
-  check('backend PK override reaches T-Calc (54 d, not the hardcoded 34)', _ci.halfLifeDays===54);
+  check('backend PK override reaches T-Calc (58 d, not the hardcoded 34)', _ci.halfLifeDays===58);
   check('half-life band is exposed', _ci.halfLifeDaysLow===34 && _ci.halfLifeDaysHigh===90);
 
   // A compound with no declared range must not produce a spurious band.
@@ -6557,7 +6558,7 @@ console.log('\n── Depot-ester PK band ────────────�
     _plain.halfLifeDaysLow===_plain.halfLifeDays && _plain.halfLifeDaysHigh===_plain.halfLifeDays);
 
   G._tcExtraCatalog = [{id:'nebido',name:'Nebido',dot:'#e8a020',
-    halfLifeDays:54, halfLifeDaysLow:34, halfLifeDaysHigh:90}];
+    halfLifeDays:58, halfLifeDaysLow:34, halfLifeDaysHigh:90}];
 
   // Frequent micro-dosing — the regimen the single-exponential model fits best, since
   // dosing far inside the half-life drives peak-to-trough toward 1.
