@@ -1823,6 +1823,19 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
 
   ctx.fillStyle = '#555'; ctx.font = '9px -apple-system,system-ui,sans-serif'; ctx.textAlign = 'center';
   var labelEvery = winDays <= 7 ? 1 : winDays <= 30 ? 5 : xDays <= 28 ? 7 : xDays <= 84 ? 14 : 28;
+  // The ladder above tops out at one label per 28 days, which was fine while the widest
+  // span was a few months. A slow depot ester now carries a washout tail sized off its
+  // half-life, so the visible span can exceed a year — at which point 28-day spacing
+  // packs ~14 labels into room for ~8 and they overlap into an unreadable smear.
+  // Widen only when they genuinely would not fit, so every span that already fitted
+  // keeps its existing spacing exactly.
+  // Scoped to the >84 d regime the ladder pins at 28 — the shorter windows were never
+  // the problem and keep their spacing untouched.
+  if (xDays > 84) {
+    var _lblMinPx  = 44;   // "26 Sep" at 9px plus breathing room
+    var _maxLabels = Math.max(2, Math.floor(cW / _lblMinPx));
+    while (Math.floor(xDays / labelEvery) + 1 > _maxLabels) labelEvery *= 2;
+  }
   for (var dl = xStart; dl <= xEnd; dl += labelEvery) {
     var lx = xOf(dl);
     var labelDate = new Date(firstDate.getTime() + dl * 86400000);
