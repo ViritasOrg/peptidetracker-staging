@@ -6530,6 +6530,75 @@ console.log('\n── Wizard: testosterone base step ─────────
   G.ENHANCEMENT_COMPOUNDS = _prevCat;
 }
 
+
+// ── Depot-ester PK: corrected half-life + uncertainty band ────────────────────
+// T-Calc modelled testosterone undecanoate at ~34 d, parsed from the hardcoded
+// TRT_GUIDE string. That is the fitted SINGLE-DOSE terminal half-life for castor-oil
+// TU — real, but the wrong figure for projecting months of accumulation, which it
+// under-predicts by ~1.6x in steady-state level. The backend now serves 54 d central
+// with a 34-90 d band (derivation and provenance caveat in the backend's
+// docs/enhanced-bodybuilding/11-testosterone-undecanoate-pk.md). _tcCompInfo already
+// prefers /trt-catalog over the hardcoded fallback, so the correction flows through.
+console.log('\n── Depot-ester PK band ────────────────────────────────────');
+{
+  const _prevExtra = G._tcExtraCatalog;
+  G._tcExtraCatalog = [{id:'nebido',name:'Nebido (Testosterone Undecanoate)',dot:'#e8a020',
+    halfLife:'~54 days effective (34-90 d depot release)',
+    halfLifeDays:54, halfLifeDaysLow:34, halfLifeDaysHigh:90}];
+
+  var _ci = G._tcCompInfo('nebido');
+  check('backend PK override reaches T-Calc (54 d, not the hardcoded 34)', _ci.halfLifeDays===54);
+  check('half-life band is exposed', _ci.halfLifeDaysLow===34 && _ci.halfLifeDaysHigh===90);
+
+  // A compound with no declared range must not produce a spurious band.
+  G._tcExtraCatalog = [];
+  var _plain = G._tcCompInfo('testoviron');
+  check('without a declared range, low == high == central',
+    _plain.halfLifeDaysLow===_plain.halfLifeDays && _plain.halfLifeDaysHigh===_plain.halfLifeDays);
+
+  G._tcExtraCatalog = [{id:'nebido',name:'Nebido',dot:'#e8a020',
+    halfLifeDays:54, halfLifeDaysLow:34, halfLifeDaysHigh:90}];
+
+  // Frequent micro-dosing — the regimen the single-exponential model fits best, since
+  // dosing far inside the half-life drives peak-to-trough toward 1.
+  var _log=[], _t0=new Date('2026-01-01');
+  for (var _d=0; _d<420; _d+=2) {
+    _log.push({date:new Date(_t0.getTime()+_d*86400000).toISOString().slice(0,10),
+               compId:'nebido', doseMg:'100'});
+  }
+  var _S = G._tcFreeTSeries(_log, {});
+  check('a declared range switches the band on', _S.hasPkBand===true);
+  check('band arrays are returned', !!_S.totalLo && !!_S.totalHi);
+
+  var _wk = function(w){ return Math.min(Math.round(w*7), _S.totalDays); };
+  check('band brackets the central curve throughout',
+    [8,16,26,33,52].every(function(w){
+      var t=_wk(w);
+      return _S.totalLo[t] <= _S.total[t]+1e-9 && _S.total[t] <= _S.totalHi[t]+1e-9;
+    }));
+  check('a slower half-life accumulates to a higher level',
+    _S.totalHi[_wk(52)] > _S.total[_wk(52)] && _S.total[_wk(52)] > _S.totalLo[_wk(52)]);
+
+  // The clinically important consequence: on the corrected model, an early plateau is
+  // an illusion — week 8 is roughly halfway to where a constant dose is heading.
+  // Measure the RISE from day 0, not the absolute level: any additive endogenous
+  // baseline cancels in the difference, so this isolates the injection-driven
+  // accumulation the claim is actually about.
+  var _base  = _S.total[0];
+  var _rise  = function(w){ return _S.total[_wk(w)] - _base; };
+  var _full  = _rise(60);
+  check('week 8 covers only about half the eventual rise (accumulation lag is real)',
+    _rise(8)/_full < 0.62, 'got '+(_rise(8)/_full).toFixed(2));
+  check('still climbing at week 26', _rise(26)/_full < 0.95,
+    'got '+(_rise(26)/_full).toFixed(2));
+
+  // Washout must be sized off the SLOWEST plausible half-life or the band's tail clips.
+  check('washout window covers the high half-life',
+    _S.totalDays >= Math.round(420 + 4.3*90) - 2, 'got '+_S.totalDays);
+
+  G._tcExtraCatalog = _prevExtra;
+}
+
 console.log('\n───────────────────────────────────────────────────────────');
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 if(failed>0)process.exit(1);
