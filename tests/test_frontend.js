@@ -2333,8 +2333,12 @@ console.log('\n── Edit Enhanced tab — stack editor regression ────
     // Edit view surfaces the Split AM / PM toggle row and honours the per-compound flag
     var enhEditOn=G._renderEditEnhanced({enabled:true,compounds:[{id:testId2,name:'Test',dose_am:'2',dose_pm:'1',unit:'IU/day',days:[1],amPm:true}]});
     check('_renderEditEnhanced: shows the split toggle', enhEditOn.includes('Split across AM / Pre-GYM / PM'));
-    check('_renderEditEnhanced amPm on: shows AM + Pre-GYM + PM Dose rows',
-      enhEditOn.includes('AM Dose')&&enhEditOn.includes('Pre-GYM Dose')&&enhEditOn.includes('PM Dose'));
+    // Dose rows now follow the selected schedule rather than always showing all three.
+    // This fixture has no `times`, so it infers AM+PM from its populated doses.
+    check('_renderEditEnhanced amPm on: rows follow the selected schedule',
+      enhEditOn.includes('AM Dose')&&enhEditOn.includes('PM Dose')&&!enhEditOn.includes('Pre-GYM Dose'));
+    check('_renderEditEnhanced amPm on: offers all three timing chips',
+      enhEditOn.includes('>AM</div>')&&enhEditOn.includes('>Pre-GYM</div>')&&enhEditOn.includes('>PM</div>'));
     var enhEditOff=G._renderEditEnhanced({enabled:true,compounds:[{id:testId2,name:'Test',dose:'250',unit:'mg/week',days:[1],amPm:false}]});
     check('_renderEditEnhanced amPm off: single Dose row, no per-slot rows',
       enhEditOff.includes('Split across AM / Pre-GYM / PM')&&!enhEditOff.includes('AM Dose')&&!enhEditOff.includes('Pre-GYM Dose'));
@@ -6389,6 +6393,77 @@ console.log('\n── Enhanced tier: fasted-window labels ───────�
     _tHtml.indexOf('(fasted)')<0);
 
   G.ENHANCEMENT_COMPOUNDS = _prevCat;
+}
+
+
+// ── Enhanced tier: schedule chips ─────────────────────────────────────────────
+// The enhanced tier used to express its schedule implicitly — all three dose rows
+// were always shown and you skipped a slot by leaving it blank. It now has the same
+// AM / Pre-GYM / PM chips as the peptide tier, backed by a `times` array.
+//
+// The delicate part is back-compat: stacks saved before `times` existed must keep the
+// schedule they already had. _enhTimes infers it from which slot doses are populated,
+// which is precisely what used to decide whether a slot generated an injection.
+console.log('\n── Enhanced tier: schedule chips ──────────────────────────');
+{
+  const _prev = G.ENHANCEMENT_COMPOUNDS;
+  G.ENHANCEMENT_COMPOUNDS = [{id:'hgh',name:'HGH (Somatropin)',group:'GH Axis',cls:'ghaxis',
+    dot:'#e8a020',defaultDose:2,unit:'IU/day',defaultDays:[1,2,3,4,5],
+    amPm:true,defaultDoseAm:2,defaultDosePm:0}];
+
+  // back-compat: no `times` field
+  check('legacy AM+PM stack keeps AM+PM',
+    G._enhTimes({id:'hgh',amPm:true,dose_am:'2',dose_pm:'2'}).join('+')==='AM+PM');
+  check('legacy AM-only stack keeps AM',
+    G._enhTimes({id:'hgh',amPm:true,dose_am:'2',dose_pm:'0'}).join('+')==='AM');
+  check('legacy stack with no doses falls back to AM+PM',
+    G._enhTimes({id:'hgh',amPm:true}).join('+')==='AM+PM');
+
+  // explicit times wins, and is normalised to chronological order
+  check('explicit times overrides inference',
+    G._enhTimes({id:'hgh',amPm:true,times:['AM','PM'],dose_am:'2',dose_mid:'9',dose_pm:'2'}).join('+')==='AM+PM');
+  check('times is returned in chronological order',
+    G._enhTimes({id:'hgh',amPm:true,times:['PM','AM','MID']}).join('+')==='AM+MID+PM');
+  check('a deselected slot does not inflate the daily total',
+    G._enhSplitTotal({id:'hgh',amPm:true,times:['AM','PM'],dose_am:'2',dose_mid:'9',dose_pm:'2'})===4);
+
+  // chip toggling, including the never-empty guard
+  G._editBuf={cycle_start:'2026-07-01',peptides:[],enhanced:{enabled:true,compounds:[
+    {id:'hgh',name:'HGH',amPm:true,dose_am:'2',dose_pm:'2',unit:'IU/day',days:[1]}]}};
+  var _cur=function(){return G._enhTimes(G._editBuf.enhanced.compounds[0]).join('+');};
+  G.editToggleEnhTime('hgh','MID');
+  check('selecting Pre-GYM adds it in order', _cur()==='AM+MID+PM');
+  G.editToggleEnhTime('hgh','PM');
+  check('deselecting PM removes it', _cur()==='AM+MID');
+  G.editToggleEnhTime('hgh','AM'); G.editToggleEnhTime('hgh','MID');
+  check('the last remaining slot cannot be deselected', _cur()==='MID');
+
+  // rendered rows follow the chips
+  G._editBuf.enhanced.compounds[0].times=['AM','PM'];
+  var _h2=G._renderEditEnhanced(G._editBuf.enhanced);
+  check('AM+PM selected renders no Pre-GYM row',
+    _h2.indexOf('AM Dose')>=0 && _h2.indexOf('PM Dose')>=0 && _h2.indexOf('Pre-GYM Dose')<0);
+  check('the unselected Pre-GYM chip is still offered', _h2.indexOf('>Pre-GYM</div>')>=0);
+  G._editBuf.enhanced.compounds[0].times=['AM','MID','PM'];
+  check('all three selected renders all three rows',
+    G._renderEditEnhanced(G._editBuf.enhanced).indexOf('Pre-GYM Dose')>=0);
+
+  // the split toggle itself is untouched — it still distinguishes a single untimed
+  // daily dose from per-slot dosing, and must not disappear now that chips exist
+  var _off=G._renderEditEnhanced({enabled:true,compounds:[
+    {id:'hgh',name:'HGH',amPm:false,dose:'6',unit:'IU/day',days:[1]}]});
+  check('split OFF still gives one untimed Dose row',
+    _off.indexOf('>Dose</div>')>=0 && _off.indexOf('AM Dose')<0);
+  check('the split toggle is still present when off',
+    _off.indexOf('Split across AM / Pre-GYM / PM')>=0);
+
+  // seeding a fresh entry from the catalogue
+  var _seed={};
+  G._enhSeedSlots(_seed,G.ENHANCEMENT_COMPOUNDS[0]);
+  check('a newly added HGH seeds an AM-only schedule (split stays opt-in)',
+    (_seed.times||[]).join('+')==='AM');
+
+  G.ENHANCEMENT_COMPOUNDS = _prev;
 }
 
 console.log('\n───────────────────────────────────────────────────────────');
