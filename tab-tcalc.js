@@ -1361,6 +1361,15 @@ function _tcFreeTSeries(sorted, hooks) {
   if (calFT && _mftNum > 0 && _anchorDay >= 0 && _anchorDay <= totalDays && total[_anchorDay] > 0) {
     calFT = _mftNum / total[_anchorDay];
   }
+  // Anchor the PK band the same way. Each series gets its OWN calibration so all three
+  // pass through the measured value at the anchor — what is known is the level at the
+  // blood draw; what is uncertain is where it goes from there. The band therefore
+  // pinches to nothing at the anchor and widens away from it, which is the honest shape.
+  var _calFTPkLo = calFT, _calFTPkHi = calFT;
+  if (hasPkBand && _mftNum > 0 && _anchorDay >= 0 && _anchorDay <= totalDays) {
+    if (totalLo[_anchorDay] > 0) _calFTPkLo = _mftNum / totalLo[_anchorDay];
+    if (totalHi[_anchorDay] > 0) _calFTPkHi = _mftNum / totalHi[_anchorDay];
+  }
   if (hooks.calFT) hooks.calFT(calFT);
 
   var scale     = calFT || 1;
@@ -1569,6 +1578,7 @@ function _tcFreeTSeries(sorted, hooks) {
   if (hooks.start) hooks.start(total[0] * (calFT_arr ? calFT_arr[0] : scale));
   return { firstDate: firstDate, totalDays: totalDays, total: total, calFT: calFT, scale: scale,
            totalLo: totalLo, totalHi: totalHi, hasPkBand: hasPkBand,
+           calFTPkLo: _calFTPkLo, calFTPkHi: _calFTPkHi,
            calFT_arr: calFT_arr, calFTlo: _calFTlo, calFThi: _calFThi, unitLabel: unitLabel,
            measuredFT: _mftNum, ghAnnot: _ghAnnot, betaAnnot: _betaAnnot, bfAnnot: _bfAnnot, tier: _tier, sorted: sorted };
 }
@@ -1582,6 +1592,8 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   var firstDate = _S.firstDate, totalDays = _S.totalDays, total = _S.total, calFT = _S.calFT, scale = _S.scale,
       calFT_arr = _S.calFT_arr, _calFTlo = _S.calFTlo, _calFThi = _S.calFThi, unitLabel = _S.unitLabel,
       _mftNum = _S.measuredFT, _ghAnnot = _S.ghAnnot, _betaAnnot = _S.betaAnnot, _bfAnnot = _S.bfAnnot, _tier = _S.tier;
+  var _pkLo = _S.totalLo, _pkHi = _S.totalHi, _hasPkBand = _S.hasPkBand,
+      _pkLoCal = _S.calFTPkLo, _pkHiCal = _S.calFTPkHi;
 
   var dpr  = window.devicePixelRatio || 1;
   var cssW = canvas.offsetWidth || 300;
@@ -1687,6 +1699,35 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
 
   // SHBG β-uncertainty band: shaded region between the β=0.15 and β=0.40 free-T curves.
   // Pinches to zero width at the bloodwork draw (calibrated) and widens away from it.
+  // ── PK uncertainty band ─────────────────────────────────────────────────────
+  // Drawn first, so the SHBG band and the curve itself sit on top of it. Only appears
+  // for compounds whose backend entry declares a half-life range; for a depot ester that
+  // range is the published inter-individual spread, and it is wide enough that a single
+  // line would misrepresent the evidence. See the backend's
+  // docs/enhanced-bodybuilding/11-testosterone-undecanoate-pk.md
+  if (calFT && _hasPkBand && _pkLo && _pkHi) {
+    var _pkTop = function(t){ return Math.max(_pkLo[t]*_pkLoCal, _pkHi[t]*_pkHiCal) || 0; };
+    var _pkBot = function(t){ return Math.min(_pkLo[t]*_pkLoCal, _pkHi[t]*_pkHiCal) || 0; };
+    ctx.beginPath();
+    ctx.moveTo(xOf(xStart), yOf(_pkTop(xStart)));
+    for (var _pt = xStart + 1; _pt <= xEnd; _pt++) ctx.lineTo(xOf(_pt), yOf(_pkTop(_pt)));
+    for (var _pb = xEnd; _pb >= xStart; _pb--) ctx.lineTo(xOf(_pb), yOf(_pkBot(_pb)));
+    ctx.closePath();
+    ctx.fillStyle = lineColor + '14';
+    ctx.fill();
+    ctx.strokeStyle = lineColor + '33';
+    ctx.setLineDash([3,3]); ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(xOf(xStart), yOf(_pkTop(xStart)));
+    for (var _pt2 = xStart + 1; _pt2 <= xEnd; _pt2++) ctx.lineTo(xOf(_pt2), yOf(_pkTop(_pt2)));
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(xOf(xStart), yOf(_pkBot(xStart)));
+    for (var _pb2 = xStart + 1; _pb2 <= xEnd; _pb2++) ctx.lineTo(xOf(_pb2), yOf(_pkBot(_pb2)));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   if (calFT_arr && _calFTlo && _calFThi) {
     var _bandTop = function(t){ return Math.max(total[t]*_calFTlo[t], total[t]*_calFThi[t]) || 0; };
     var _bandBot = function(t){ return Math.min(total[t]*_calFTlo[t], total[t]*_calFThi[t]) || 0; };
