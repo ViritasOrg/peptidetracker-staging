@@ -709,6 +709,69 @@ function _slotFirstUnit(p){
   for(var i=0;i<TIME_SLOTS.length;i++){var v=p['unit_'+_slotKey(TIME_SLOTS[i])];if(v)return v;}
   return '';
 }
+// ── Enhanced-tier cadence ─────────────────────────────────────────────────────
+// Weekly dose and injection schedule are independent. A compound is scheduled either by
+// weekday ("Mon + Thu") or by interval ("every 2 days", "every 12 weeks") — the ester
+// decides which is meaningful, and the range must span daily through multi-week for
+// every compound. Nothing is special-cased by id: a long-ester depot can be micro-dosed
+// daily and a short ester can be run on fixed weekdays, and the app must express both.
+//
+// Back-compat: entries saved before this existed have no `cadence`, so they default to
+// 'days' and behave exactly as before.
+function _enhCadence(c){ return c&&c.cadence==='interval' ? 'interval' : 'days'; }
+function _enhFreqDays(c){
+  var n=parseInt(c&&c.freqVal,10); if(!(n>0))n=1;
+  return (c&&c.freqUnit==='weeks') ? n*7 : n;
+}
+// Does this compound inject on date d? cycleStart anchors interval counting.
+function _enhHitsDay(c,d,cycleStart){
+  if(_enhCadence(c)==='interval'){
+    var step=_enhFreqDays(c);
+    if(!(step>0)||!cycleStart)return false;
+    var since=Math.floor((d-cycleStart)/86400000);
+    return since>=0 && since%step===0;
+  }
+  return !(c.days&&c.days.length) || c.days.includes(d.getDay());
+}
+// Renders the schedule control: mode chips, then either weekday chips or an interval
+// input. `pfx` is 'edit' or 'wiz' so the same markup drives both the stack editor and
+// the wizard — they had duplicate day-chip blocks before this.
+function _renderEnhCadence(c,selData,pfx){
+  var mode=_enhCadence(selData);
+  var h='<div class="cfg-row"><div class="cfg-lbl">Schedule</div><div class="time-chips">'
+    +[['days','Weekly days'],['interval','Every…']].map(function(m){
+        return '<div class="time-chip'+(mode===m[0]?' sel':'')+'" onclick="'+pfx+'SetEnhCadence(\''+c.id+'\',\''+m[0]+'\')">'+m[1]+'</div>';
+      }).join('')
+    +'</div></div>';
+  if(mode==='interval'){
+    var n=parseInt(selData.freqVal,10); if(!(n>0))n=1;
+    var u=(selData.freqUnit==='weeks')?'weeks':'days';
+    h+='<div class="cfg-row"><div class="cfg-lbl">Inject every</div><div class="dose-row">'
+      +'<input class="dose-in" type="number" min="1" inputmode="numeric" value="'+n+'" oninput="'+pfx+'SetEnhFreqVal(\''+c.id+'\',this.value)" style="max-width:70px;">'
+      +'<select class="unit-sel" onchange="'+pfx+'SetEnhFreqUnit(\''+c.id+'\',this.value)">'
+      +['days','weeks'].map(function(x){return '<option'+(x===u?' selected':'')+'>'+x+'</option>';}).join('')
+      +'</select></div></div>';
+  }else{
+    h+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'
+      +DAYS_ORDER.map(function(di){
+        return '<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="'+pfx+'SetEnhDays(\''+c.id+'\','+di+')">'+DAYS_SHORT[di]+'</div>';
+      }).join('')
+      +'</div></div>';
+  }
+  return h;
+}
+// Human-readable schedule, for summaries.
+function _enhCadenceLabel(c){
+  if(_enhCadence(c)==='interval'){
+    var n=parseInt(c.freqVal,10); if(!(n>0))n=1;
+    var u=(c.freqUnit==='weeks')?'week':'day';
+    return n===1 ? ('Every '+u) : ('Every '+n+' '+u+'s');
+  }
+  var ds=c.days||[];
+  if(!ds.length||ds.length===7)return 'Every day';
+  // Keep the existing weekday rendering ("M/Th") — only the interval mode is new.
+  return DAYS_ORDER.filter(function(di){return ds.includes(di);}).map(function(di){return DAYS_SHORT[di];}).join('/');
+}
 // Which intra-day slots a split enhanced compound is scheduled in, in chronological
 // order. `amPm` is the legacy field name for "this compound is split across intra-day
 // slots" — kept as-is so existing stored stacks keep working; it now covers three
@@ -1378,7 +1441,7 @@ function _getDynamicEnhancedDoses(d,withIds){
       if(st.cycle_length&&daysDiff>=st.cycle_length*7)return;
     }
     (st.enhanced.compounds||[]).forEach(function(c){
-      if(c.days&&c.days.length&&!c.days.includes(d.getDay()))return;
+      if(!_enhHitsDay(c,d,st.cycle_start?parseLocalDate(st.cycle_start):null))return;
       var key=c.id+'_'+si;
       if(seenIds[key])return;
       seenIds[key]=true;
@@ -1514,6 +1577,39 @@ function editSetEnhDoseSlot(id,slot,v){var c=((_editBuf.enhanced&&_editBuf.enhan
 // Toggle one intra-day slot for a split enhanced compound. Mirrors editToggleTime in
 // the peptide tier, including the guard that the last remaining slot cannot be removed.
 // A deselected slot keeps its dose value so re-selecting it restores what was typed.
+// Switching schedule mode keeps BOTH configurations intact — the weekday selection and
+// the interval survive a round-trip, so toggling to compare and back loses nothing.
+function editSetEnhCadence(id,mode){
+  var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(!c)return;
+  c.cadence=(mode==='interval')?'interval':'days';
+  if(c.cadence==='interval'&&!(parseInt(c.freqVal,10)>0)){c.freqVal=1;c.freqUnit=c.freqUnit||'days';}
+  _collectEditInputs();renderStackEditor();
+}
+function editSetEnhFreqVal(id,v){
+  var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(c)c.freqVal=Math.max(1,parseInt(v,10)||1);
+}
+function editSetEnhFreqUnit(id,v){
+  var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(!c)return;c.freqUnit=(v==='weeks')?'weeks':'days';_collectEditInputs();renderStackEditor();
+}
+function wizSetEnhCadence(id,mode){
+  var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(!c)return;
+  c.cadence=(mode==='interval')?'interval':'days';
+  if(c.cadence==='interval'&&!(parseInt(c.freqVal,10)>0)){c.freqVal=1;c.freqUnit=c.freqUnit||'days';}
+  wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+function wizSetEnhFreqVal(id,v){
+  var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(c)c.freqVal=Math.max(1,parseInt(v,10)||1);
+}
+function wizSetEnhFreqUnit(id,v){
+  var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
+  if(!c)return;c.freqUnit=(v==='weeks')?'weeks':'days';
+  wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
 function editToggleEnhTime(id,t){
   var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;});
   if(!c)return;
@@ -1565,10 +1661,10 @@ function _renderEditEnhanced(enh){
             html+='<div class="cfg-row"><div class="cfg-lbl">'+_slotLabel(t)+' Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData['dose_'+k]||'')+'" oninput="editSetEnhDoseSlot(\''+c.id+'\',\''+k+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_eUnit+'</span></div></div>';
           });
           html+=_renderSlotTimingHint(c.id,_eTimes);
-          html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
+          html+=_renderEnhCadence(c,selData,'edit');
         }else{
           html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="editSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="editSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
-          html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
+          html+=_renderEnhCadence(c,selData,'edit');
         }
         html+='<div id="enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,_amPm?_enhSplitTotal(selData):parseDec(selData.dose||0))+'</div>';
         html+='</div>';
@@ -1586,7 +1682,7 @@ function _renderEnhancedViewTab(st){
   }else{
     compounds.forEach(function(c){
       var dot=c.dot||'var(--accent2)';
-      var days=c.days&&c.days.length?c.days.map(function(d){return DAYS_SHORT[d];}).join('/'):null;
+      var days=_enhCadenceLabel(c)||null;
       html+='<div class="cfg-block" style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">';
       html+='<div style="width:8px;height:8px;border-radius:50%;background:'+dot+';flex-shrink:0;"></div>';
       html+='<div style="flex:1;font-size:13px;font-weight:600;color:var(--text);">'+_esc(c.name||c.id)+'</div>';
@@ -1973,10 +2069,10 @@ function wizStepEnhanced(body,footer){
             html+='<div class="cfg-row"><div class="cfg-lbl">'+_slotLabel(t)+' Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData['dose_'+k]||'')+'" oninput="wizSetEnhDoseSlot(\''+c.id+'\',\''+k+'\',this.value)" placeholder="0"><span style="font-size:13px;color:var(--muted2);padding:0 6px;white-space:nowrap;">'+_wUnit+'</span></div></div>';
           });
           html+=_renderSlotTimingHint(c.id,_wTimes);
-          html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
+          html+=_renderEnhCadence(c,selData,'wiz');
         }else{
           html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
-          html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetEnhDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';
+          html+=_renderEnhCadence(c,selData,'wiz');
         }
         html+='<div id="wiz-enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,c.amPm?_enhSplitTotal(selData):parseDec(selData.dose||0))+'</div>';
         html+='</div>';
@@ -2073,7 +2169,7 @@ function wizStepReview(body,footer){
     html+='<div class="wiz-section" style="margin-top:16px">Enhancement Compounds</div>';
     if(_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length){
       _wiz.enhanced.compounds.forEach(function(c){
-        var days=c.days&&c.days.length===7?'Every day':c.days&&c.days.length?c.days.length+'x/week':'';
+        var days=_enhCadenceLabel(c)||'';
         var doseLabel=(c.dose?c.dose+(c.unit||'mg'):'')+(days?' · '+days:'');
         html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(c.dot||'var(--accent2)')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(c.name||c.id)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc(doseLabel)+'</div></div>';
       });
@@ -2211,7 +2307,7 @@ function _genInjBatches(stack,cycleId,fromDate){
       var baseUnit=c.unit?(c.unit.split('/')[0]):'';
       var compEntries=[];
       for(var d=new Date(genStart);d<=cycleEnd;d=new Date(d.getTime()+86400000)){
-        if(c.days&&c.days.length&&!c.days.includes(d.getDay()))continue;
+        if(!_enhHitsDay(c,d,cycleStart))continue;
         var dk=dateKey(d);
         if(isAmPm){
           _enhTimes(c).forEach(function(t){var k=_slotKey(t);
