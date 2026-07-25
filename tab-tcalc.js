@@ -28,6 +28,8 @@ var _tcAgeMissing     = false; // true when user-settings returned but no user_a
 var _tcBwOpen         = false; // whether the bloodwork panel is expanded
 var _tcBwEntries      = null; // null = not loaded; [] = loaded & empty; [...] = loaded
 var _tcBwLoading      = false;
+var _tcDrawnFT        = null;  // {firstMs,unit,values:[per-day free-T]} cached from the last
+                              // CALIBRATED plasma draw — the only source T-History capture may use
 var _tcEditSeriesId = null;   // seriesId currently open in the Edit Series sheet
 var _tcChartZoom   = 'whole'; // active zoom level: 'today' | 'week' | 'month' | 'whole'
 var _tcChartPanOffset = 0;   // horizontal pan in days (float, only used in zoomed modes)
@@ -194,9 +196,9 @@ function _tcSaveProfile() {
     headers: Object.assign({'Content-Type':'application/json'}, h),
     body: JSON.stringify(_tcp)
   }).catch(function(){});
-  // The T-Calc manual log or calibration just changed — recompute & persist the
-  // free-T history so the (fetch-and-plot) T-History view stays in sync.
-  if (typeof _captureFreeTHistory === 'function') _captureFreeTHistory();
+  // NOTE: saving the profile/log does NOT touch stored T-History. History is written
+  // only by an explicit user action (tcUpdateSavedHistory, the "Update saved history"
+  // button) so it never changes on its own. See the HISTORY VIEWS rule in CLAUDE.md.
 }
 
 // Saturating Emax dose-response for SHBG suppression: effMaxSupp(dose) = emax·dose/(dose+ed50).
@@ -1583,6 +1585,42 @@ function _tcFreeTSeries(sorted, hooks) {
            measuredFT: _mftNum, ghAnnot: _ghAnnot, betaAnnot: _betaAnnot, bfAnnot: _bfAnnot, tier: _tier, sorted: sorted };
 }
 
+// ── Free-T history: the single, explicit writer ──────────────────────────────
+// Persists /plasma-history EXACTLY as the plasma curve is currently displayed
+// (from _tcDrawnFT). This is the ONLY thing in the app that writes free-T history,
+// and it runs ONLY on an explicit user action — the "Update saved history" button.
+// Nothing captures automatically: the history view fetches and plots, and stays put
+// until the user chooses to refresh it. Returns Promise<bool> (true = written).
+function tcSaveHistoryFromCurve() {
+  if (typeof AGENT_URL === 'undefined') return Promise.resolve(false);
+  var d = _tcDrawnFT;
+  if (!d || !d.values || !d.values.length) return Promise.resolve(false);
+  var maxV = 0;
+  var entries = d.values.map(function(v, k){
+    if (v > maxV) maxV = v;
+    var dt = new Date(d.firstMs + k * 86400000);
+    var ds = dt.getUTCFullYear() + '-' + String(dt.getUTCMonth()+1).padStart(2,'0') + '-' + String(dt.getUTCDate()).padStart(2,'0');
+    return { date: ds, marker: 'free_t', value: v, unit: d.unit };
+  });
+  // Never persist an absurdly-high curve — that means a mis-calibration slipped through.
+  if (d.unit === 'pmol/L' && maxV > 6000) return Promise.resolve(false);
+  var hdrs = authHeaders({ 'Content-Type': 'application/json' });
+  return fetch(AGENT_URL + '/plasma-history?marker=free_t', { method: 'DELETE', headers: hdrs })
+    .then(function(){ return fetch(AGENT_URL + '/plasma-history/batch', {
+        method: 'POST', headers: hdrs, body: JSON.stringify({ entries: entries }) }); })
+    .then(function(r){ return !!(r && r.ok); })
+    .catch(function(){ return false; });
+}
+// Button handler: capture once, with inline feedback on the button itself.
+function tcUpdateSavedHistory(btnId) {
+  var b = btnId && document.getElementById(btnId);
+  if (b) { b.disabled = true; b.textContent = 'Saving\u2026'; }
+  return tcSaveHistoryFromCurve().then(function(ok){
+    if (b) { b.disabled = false; b.textContent = ok ? '\u2713 Saved history' : 'Could not save \u2014 try again'; }
+    return ok;
+  });
+}
+
 function _tcDrawManualChart(canvasId, log, zoom3) {
   var canvas = document.getElementById(canvasId);
   if (!canvas || !log || log.length === 0) return;
@@ -1594,6 +1632,23 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
       _mftNum = _S.measuredFT, _ghAnnot = _S.ghAnnot, _betaAnnot = _S.betaAnnot, _bfAnnot = _S.bfAnnot, _tier = _S.tier;
   var _pkLo = _S.totalLo, _pkHi = _S.totalHi, _hasPkBand = _S.hasPkBand,
       _pkLoCal = _S.calFTPkLo, _pkHiCal = _S.calFTPkHi;
+  // Cache the per-day free-T EXACTLY as this chart displays it, so saving to T-History
+  // stores verbatim what the user sees — no separate re-derivation, no divergence, no
+  // calibration-context bug. Only when calibrated to a real measurement (calFT set); an
+  // uncalibrated estimate is never eligible to become history. Runs day 0 → last
+  // injection (matching the history view's "ends at the last injection" contract).
+  if (calFT && sorted.length) {
+    var _hLastInj = Math.round((new Date(sorted[sorted.length-1].date).getTime() - firstDate.getTime()) / 86400000);
+    var _hEnd = Math.max(0, Math.min(totalDays, _hLastInj));
+    var _hVals = [];
+    for (var _hk = 0; _hk <= _hEnd; _hk++) {
+      var _hv = total[_hk] * (calFT_arr ? calFT_arr[_hk] : scale);
+      _hVals.push((!isFinite(_hv) || _hv < 0) ? 0 : Math.round(_hv * 1000) / 1000);
+    }
+    _tcDrawnFT = { firstMs: firstDate.getTime(), unit: unitLabel || 'pmol/L', values: _hVals };
+  } else {
+    _tcDrawnFT = null;
+  }
 
   var dpr  = window.devicePixelRatio || 1;
   var cssW = canvas.offsetWidth || 300;
@@ -2492,6 +2547,10 @@ function buildTCalc() {
       '<span style="color:#5ad1b0">■</span> STEADY-STATE AVERAGE' +
       '</label>';
     html += '<canvas id="tc-main-chart" style="width:100%;display:block;"></canvas>';
+    if (mftNum > 0) {
+      html += '<button id="tc-hist-save" onclick="tcUpdateSavedHistory(\'tc-hist-save\')" style="width:100%;margin-top:10px;background:none;border:1px solid var(--border);border-radius:10px;color:var(--muted2);font-size:12px;font-weight:600;padding:9px;cursor:pointer">Update saved history</button>';
+      html += '<div style="font-size:10px;color:var(--muted2);opacity:0.75;line-height:1.5;margin-top:5px;text-align:center">Saves this exact curve to T-History. It won\'t change on its own — refresh it here whenever you want.</div>';
+    }
     html += '</div>';
   } else {
     html += '<div style="padding:28px 16px;text-align:center;color:var(--muted2);font-size:13px">';
