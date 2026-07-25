@@ -6724,6 +6724,41 @@ console.log('\n── Enhanced cadence: dose vs schedule ───────�
     G._enhCadenceLabel({id:'x',days:[0,1,2,3,4,5,6]})==='Every day');
 }
 
+
+// ── T-History reads and plots; it never calculates ────────────────────────────
+// The history view loads /plasma-history and draws it. Writing is owned by T-Calc,
+// which is where the PK model lives. buildTHist used to backfill when the store looked
+// empty or the tail looked stale — so opening the tab recomputed the whole series with
+// whatever the client model was and wrote it back OVER the stored values. A model bug
+// then silently rewrote saved history, and the view disagreed with its own source of
+// truth. These tests exist so that cannot come back.
+console.log('\n── T-History: read-only view ──────────────────────────────');
+{
+  const _th = fs.readFileSync(path.join(dir,'tab-thist.js'),'utf8');
+  const _fn = _th.slice(_th.indexOf('function buildTHist()'), _th.indexOf('function _thRender('));
+  check('buildTHist exists', _fn.length > 0);
+  check('buildTHist never captures/persists', _fn.indexOf('_captureFreeTHistory') < 0);
+  check('buildTHist never recomputes the series', _fn.indexOf('_thComputeFreeT') < 0);
+  check('buildTHist never re-derives via the PK model', _fn.indexOf('_tcFreeTSeries') < 0);
+  check('buildTHist has no staleness/backfill heuristic',
+    _fn.indexOf('stale') < 0 && _fn.indexOf('backfill') < 0);
+  check('buildTHist reads /plasma-history', _fn.indexOf('/plasma-history') >= 0);
+
+  // The render path must be equally pure.
+  const _rd = _th.slice(_th.indexOf('function _thRender('), _th.indexOf('function _thRender(')+4000);
+  check('_thRender never captures or recomputes',
+    _rd.indexOf('_captureFreeTHistory') < 0 && _rd.indexOf('_thComputeFreeT') < 0);
+
+  // Capture still exists — it is just not the view's job.
+  check('the capture path still exists for T-Calc to use',
+    typeof _th === 'string' && _th.indexOf('function _captureFreeTHistory') >= 0);
+  const _tc = fs.readFileSync(path.join(dir,'tab-tcalc.js'),'utf8');
+  check('T-Calc still owns the write path', _tc.indexOf('_captureFreeTHistory') >= 0);
+
+  check('the file states the read-only rule for the next reader',
+    _th.indexOf('THIS VIEW READS AND PLOTS. IT NEVER CALCULATES') >= 0);
+}
+
 console.log('\n───────────────────────────────────────────────────────────');
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 if(failed>0)process.exit(1);
