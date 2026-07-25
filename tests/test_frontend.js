@@ -6647,6 +6647,69 @@ console.log('\n── T-Calc x-axis label density ──────────
     _spacing(390,390,900) <= _spacing(390,390,300));
 }
 
+
+// ── Enhanced tier: dose and cadence are independent ───────────────────────────
+// Weekly dose and injection schedule are separate concerns. The enhanced tier could
+// only express weekdays, which is meaningless for a long-ester depot (every 10-14
+// weeks) and cannot express EOD either. Cadence is now weekday OR interval, and the
+// interval range spans daily through multi-week for EVERY compound — nothing is
+// special-cased by id, because a long-ester depot can legitimately be micro-dosed daily.
+console.log('\n── Enhanced cadence: dose vs schedule ─────────────────────');
+{
+  var _cs = new Date('2026-01-01');
+  var _hits = function(c, days){
+    var n = 0;
+    for (var i = 0; i < (days||84); i++) {
+      if (G._enhHitsDay(c, new Date(_cs.getTime() + i*86400000), _cs)) n++;
+    }
+    return n;
+  };
+
+  // back-compat: entries saved before cadence existed must behave exactly as before
+  check('legacy weekday entry is unchanged', _hits({id:'x',days:[1,4]})===24);
+  check('legacy entry with no days still means every day', _hits({id:'x'})===84);
+  check('legacy entry reports as weekday mode', G._enhCadence({id:'x',days:[1,4]})==='days');
+
+  // the full range Henrik asked for: daily through multi-week
+  check('every 1 day', _hits({id:'x',cadence:'interval',freqVal:1,freqUnit:'days'})===84);
+  check('every 2 days (EOD micro-dosing)', _hits({id:'x',cadence:'interval',freqVal:2,freqUnit:'days'})===42);
+  check('every 1 week', _hits({id:'x',cadence:'interval',freqVal:1,freqUnit:'weeks'})===12);
+  check('every 12 weeks (depot label interval)',
+    _hits({id:'x',cadence:'interval',freqVal:12,freqUnit:'weeks'})===1);
+
+  // no compound is special-cased — the same interval works whatever the id
+  check('interval is not gated on compound id',
+    _hits({id:'nebido',cadence:'interval',freqVal:2,freqUnit:'days'})
+      === _hits({id:'test_p',cadence:'interval',freqVal:2,freqUnit:'days'}));
+
+  // guards: a bad frequency must never divide by zero or schedule nothing
+  check('freqVal 0 / negative / non-numeric falls back to daily',
+    ['0',-3,'abc',null,undefined].every(function(v){
+      return _hits({id:'x',cadence:'interval',freqVal:v,freqUnit:'days'})===84;
+    }));
+  check('interval with no cycle start does not crash or fire',
+    G._enhHitsDay({id:'x',cadence:'interval',freqVal:2}, new Date(), null)===false);
+
+  // switching mode must not destroy the other configuration
+  G._editBuf={cycle_start:'2026-01-01',peptides:[],enhanced:{enabled:true,compounds:[
+    {id:'x',name:'X',days:[1,4],unit:'mg/week',dose:'250'}]}};
+  var _c0=function(){return G._editBuf.enhanced.compounds[0];};
+  G.editSetEnhCadence('x','interval');
+  G.editSetEnhFreqVal('x','2');
+  check('switching to interval keeps the weekday selection',
+    (_c0().days||[]).join(',')==='1,4');
+  G.editSetEnhCadence('x','days');
+  check('switching back restores weekday mode', G._enhCadence(_c0())==='days');
+  check('and remembers the interval for next time', parseInt(_c0().freqVal,10)===2);
+
+  // labels
+  check('interval label reads naturally',
+    G._enhCadenceLabel({id:'x',cadence:'interval',freqVal:2,freqUnit:'days'})==='Every 2 days' &&
+    G._enhCadenceLabel({id:'x',cadence:'interval',freqVal:1,freqUnit:'weeks'})==='Every week');
+  check('weekday label keeps its previous rendering',
+    G._enhCadenceLabel({id:'x',days:[0,1,2,3,4,5,6]})==='Every day');
+}
+
 console.log('\n───────────────────────────────────────────────────────────');
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 if(failed>0)process.exit(1);
