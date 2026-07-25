@@ -6535,21 +6535,22 @@ console.log('\n── Wizard: testosterone base step ─────────
 // T-Calc modelled testosterone undecanoate at ~34 d, parsed from the hardcoded
 // TRT_GUIDE string. That is the fitted SINGLE-DOSE terminal half-life for castor-oil
 // TU — real, but the wrong figure for projecting months of accumulation, which it
-// under-predicts by ~1.7x in steady-state level. The backend now serves 58 d central
-// with a 34-90 d band, derived from the primary SmPC's steady-state Cmax/Cmin
-// (37/16 nmol/L over a 70-day interval). See the backend's
+// under-predicts by ~1.65x in steady-state level. The backend now serves 56 d central —
+// the mean of the plateau-equivalents derived from BOTH primaries (CCDS 42/17 -> 53.6 d,
+// UK SmPC 37/16 -> 57.8 d) — with a 37-75 d band that is the published inter-individual
+// spread (CV 34% on trough), i.e. an individual prediction interval. See the backend's
 // docs/enhanced-bodybuilding/11-testosterone-undecanoate-pk.md). _tcCompInfo already
 // prefers /trt-catalog over the hardcoded fallback, so the correction flows through.
 console.log('\n── Depot-ester PK band ────────────────────────────────────');
 {
   const _prevExtra = G._tcExtraCatalog;
   G._tcExtraCatalog = [{id:'nebido',name:'Nebido (Testosterone Undecanoate)',dot:'#e8a020',
-    halfLife:'~58 days effective (34-90 d depot release)',
-    halfLifeDays:58, halfLifeDaysLow:34, halfLifeDaysHigh:90}];
+    halfLife:'~56 days plateau-equivalent (37-75 d individual range)',
+    halfLifeDays:56, halfLifeDaysLow:37, halfLifeDaysHigh:75}];
 
   var _ci = G._tcCompInfo('nebido');
-  check('backend PK override reaches T-Calc (58 d, not the hardcoded 34)', _ci.halfLifeDays===58);
-  check('half-life band is exposed', _ci.halfLifeDaysLow===34 && _ci.halfLifeDaysHigh===90);
+  check('backend PK override reaches T-Calc (56 d, not the hardcoded 34)', _ci.halfLifeDays===56);
+  check('half-life band is exposed', _ci.halfLifeDaysLow===37 && _ci.halfLifeDaysHigh===75);
 
   // A compound with no declared range must not produce a spurious band.
   G._tcExtraCatalog = [];
@@ -6558,7 +6559,7 @@ console.log('\n── Depot-ester PK band ────────────�
     _plain.halfLifeDaysLow===_plain.halfLifeDays && _plain.halfLifeDaysHigh===_plain.halfLifeDays);
 
   G._tcExtraCatalog = [{id:'nebido',name:'Nebido',dot:'#e8a020',
-    halfLifeDays:58, halfLifeDaysLow:34, halfLifeDaysHigh:90}];
+    halfLifeDays:56, halfLifeDaysLow:37, halfLifeDaysHigh:75}];
 
   // Frequent micro-dosing — the regimen the single-exponential model fits best, since
   // dosing far inside the half-life drives peak-to-trough toward 1.
@@ -6595,7 +6596,16 @@ console.log('\n── Depot-ester PK band ────────────�
 
   // Washout must be sized off the SLOWEST plausible half-life or the band's tail clips.
   check('washout window covers the high half-life',
-    _S.totalDays >= Math.round(420 + 4.3*90) - 2, 'got '+_S.totalDays);
+    _S.totalDays >= Math.round(420 + 4.3*75) - 2, 'got '+_S.totalDays);
+
+
+  // The band is anchored, not free-floating: all three series are calibrated to pass
+  // through the measured bloodwork value, so the band pinches at the anchor and widens
+  // away from it. What is known is the level at the draw; what is uncertain is the path.
+  check('per-series calibration factors are returned',
+    typeof _S.calFTPkLo === 'number' && typeof _S.calFTPkHi === 'number');
+  check('a slower half-life needs a smaller calibration factor',
+    !(_S.calFTPkLo > 0 && _S.calFTPkHi > 0) || _S.calFTPkHi <= _S.calFTPkLo);
 
   G._tcExtraCatalog = _prevExtra;
 }
