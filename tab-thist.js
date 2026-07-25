@@ -1,10 +1,26 @@
 /* ── T-HISTORICAL ──────────────────────────────────────────────────────────
- * Historical free-T view. The curve is NOT re-derived here — it is loaded
- * straight from the backend (`/plasma-history`, marker `free_t`) and plotted.
- * The per-day free-T value is computed once, elsewhere, by the exact T-Calc PK
- * model and persisted (`_captureFreeTHistory`), so this view carries zero
- * calibration logic. A date slider scrubs the as-of day; week / month / year /
- * all zoom levels frame the window; injection ticks annotate the shots.
+ * Historical free-T view.
+ *
+ * ⚠️ THIS VIEW READS AND PLOTS. IT NEVER CALCULATES. ⚠️
+ * The curve is loaded straight from the backend (`/plasma-history`, marker
+ * `free_t`) and drawn. It must never re-derive, recompute, backfill or
+ * re-capture the series on load — not "just once", not "only when the store
+ * looks empty or stale". If the backend has no data the view shows an empty
+ * state and says where the data comes from.
+ *
+ * Writing is owned by T-Calc, which is where the PK model lives: it computes
+ * the per-day value once and persists it via `_captureFreeTHistory`. The only
+ * other legitimate capture is immediately after a user WRITE (saving a past
+ * injection), because that changes the underlying data.
+ *
+ * Why the rule exists: buildTHist used to backfill when the store looked empty
+ * or the tail looked stale. Opening the History tab therefore recomputed the
+ * whole series with whatever the client model happened to be and wrote it back
+ * over the stored values — so a model bug silently rewrote saved history, and
+ * the view disagreed with the source of truth it was supposed to be showing.
+ *
+ * A date slider scrubs the as-of day; week / month / year / all zoom levels
+ * frame the window; injection ticks annotate the shots.
  *
  * This file also owns the "add a past injection" modal (reachable from the
  * Today view and T-Calc) that onboards a user already mid-cycle: it records a
@@ -180,6 +196,12 @@ function _thSeries() {
 // Fetch stored free-T history and injections, then render. If the store is empty
 // but the user has injections/history, capture once (backfill) and re-fetch —
 // this self-onboards an existing user's data without any manual step.
+// Fetch stored free-T history and injections, then render. READ ONLY — this view
+// loads what the backend has and plots it. It must never compute, re-derive, backfill
+// or re-capture the curve: writing is owned by T-Calc, which is where the PK model
+// lives. An earlier version backfilled from here when the store looked empty or stale,
+// which meant opening the History tab silently recomputed the whole series with the
+// current client model and wrote it back over the stored values.
 function buildTHist() {
   var host = document.getElementById('thist-body');
   if (!host) return;
@@ -193,25 +215,6 @@ function buildTHist() {
   ]).then(function(res){
     _thData       = Array.isArray(res[0]) ? res[0] : [];
     _thInjections = Array.isArray(res[1]) ? res[1] : [];
-    var mergedLog = _thMergedPastLog();
-    var haveInjections = mergedLog.length > 0;
-    // Stored data is stale if it was written by an older build (e.g. the curve
-    // extends past the last injection — the removed decay tail). Re-capture so the
-    // history matches the current model without any manual step.
-    var lastInjDate = haveInjections ? mergedLog[mergedLog.length-1].date : '';
-    var storedMax = '';
-    _thData.forEach(function(e){ if ((e.marker||'free_t') === _TH_MARKER && e.date > storedMax) storedMax = e.date; });
-    var staleTail = haveInjections && storedMax && storedMax > lastInjDate;
-    var haveHistory = _thData.length > 0 && !staleTail;
-    if (!haveHistory && haveInjections) {
-      _captureFreeTHistory().then(function(){
-        return fetch(AGENT_URL + '/plasma-history?marker=' + _TH_MARKER, { headers: hdrs }).then(function(r){ return r.ok ? r.json() : []; });
-      }).then(function(rows){
-        _thData = Array.isArray(rows) ? rows : [];
-        if (_currentTab === 'thist') { var h = document.getElementById('thist-body'); if (h) _thRender(h); }
-      }).catch(function(){ if (_currentTab === 'thist') { var h = document.getElementById('thist-body'); if (h) _thRender(h); } });
-      return;
-    }
     if (_currentTab === 'thist') { var h = document.getElementById('thist-body'); if (h) _thRender(h); }
   });
 }
