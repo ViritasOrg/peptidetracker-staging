@@ -6796,6 +6796,26 @@ console.log('\n── T-History: read-only view ──────────�
 
   check('the file states the read-only rule for the next reader',
     _th.indexOf('THIS VIEW READS AND PLOTS. IT NEVER CALCULATES') >= 0);
+
+  // The view never plots a future-dated point — history is the past. This also cleans up
+  // any future points an older build stored, without a re-capture or backend edit.
+  if (typeof G._thSeries === 'function') {
+    var _thSave = G._thData;
+    var _t = new Date();
+    var _mk = function(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+    var _past1 = new Date(_t.getTime()-10*86400000), _past2 = new Date(_t.getTime()-2*86400000);
+    var _future = new Date(_t.getTime()+200*86400000);
+    G._thData = [
+      {marker:'free_t', date:_mk(_past1), value:300, unit:'pmol/L'},
+      {marker:'free_t', date:_mk(_past2), value:480, unit:'pmol/L'},
+      {marker:'free_t', date:_mk(_future), value:1200, unit:'pmol/L'} ];
+    var _ser = G._thSeries();
+    check('the view drops future-dated stored points', !!_ser &&
+      (_ser.firstMs + _ser.lastDay*86400000) <= _t.getTime() + 86400000, 'lastDay maps past today');
+    check('the surviving series ends at the last PAST point (no Feb-2027 tail)',
+      !!_ser && _mk(new Date(_ser.firstMs + _ser.lastDay*86400000)) === _mk(_past2));
+    G._thData = _thSave;
+  }
 }
 
 console.log('\n───────────────────────────────────────────────────────────');

@@ -110,8 +110,14 @@ function _thWindow(zoom, focusDay, totalDays) {
 // Build the render series from the stored free-T values — no PK math. Returns
 // {firstMs,totalDays,lastDay,ft:[pmol/L per day],maxFt,injections[],calibrated,unit} or null.
 function _thSeries() {
+  // History is the PAST. A stored point dated after today is never valid history — drop
+  // it before plotting. This is a display-integrity guard, not a calculation: it renders
+  // fewer of the stored points, it never invents or recomputes any. (Belt-and-braces with
+  // the capture cap in T-Calc, which no longer WRITES future points; this also cleans up
+  // any future points an older build already stored, without touching the backend.)
+  var _thToday = _thTodayStr();
   var rows = (_thData || [])
-    .filter(function(e){ return (e.marker || 'free_t') === _TH_MARKER && e.date && isFinite(e.value); })
+    .filter(function(e){ return (e.marker || 'free_t') === _TH_MARKER && e.date && isFinite(e.value) && e.date <= _thToday; })
     .sort(function(a,b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
   if (!rows.length) return null;
   var firstMs = new Date(rows[0].date + 'T12:00:00').getTime();
