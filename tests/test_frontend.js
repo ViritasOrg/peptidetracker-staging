@@ -6147,45 +6147,64 @@ if(typeof G._thWindow==='function'){
 // Hard regression for the ~50× / 9,345 pmol/L explosions. The capture computes the
 // per-day free-T with the exact T-Calc model (no anchor override) — the value that
 // gets stored and plotted. It must stay physiological in every calibration state,
-// especially the pre-cycle baseline blood test case that used to explode.
-console.log('\n── Free-T capture reproduces T-Calc, bounded ──────────────');
-if(typeof G._thComputeFreeT==='function'){
-  var _coFT=G._tcp&&G._tcp.measuredFT, _coDose=G._tcp&&G._tcp.currentDoseMgWk, _coBw=G._tcBwEntries, _coBY=G._tcp&&G._tcp.birthYear, _coInj=G._thInjections, _coML=G._tcp&&G._tcp.manualLog;
-  G._tcp=G._tcp||{}; G._tcp.manualLog=[];
-  var _coRows=[]; for(var _ci=0;_ci<10;_ci++){ var _cd=new Date(new Date('2026-01-05').getTime()+_ci*3.5*86400000);
-    _coRows.push({compound_id:'enanthate',dose:'100',tier:'trt',logged:true,date:_cd.getFullYear()+'-'+String(_cd.getMonth()+1).padStart(2,'0')+'-'+String(_cd.getDate()).padStart(2,'0')}); }
-  G._tcp.measuredFT='217'; G._tcp.currentDoseMgWk=''; G._tcp.birthYear='1990'; G._thInjections=_coRows;
-  G._tcBwEntries=null;
-  var _coLastDate=_coRows[_coRows.length-1].date;
-  var _cNo=G._thComputeFreeT();
-  check('capture no-bloodwork: bounded, does not blow up (0 < max < 1500)', !!_cNo && _cNo.maxV>0 && _cNo.maxV<1500, _cNo?String(Math.round(_cNo.maxV)):'null');
-  check('capture: curve ends AT the last injection — nothing plotted past it', !!_cNo && _cNo.entries[_cNo.entries.length-1].date===_coLastDate, _cNo?(_cNo.entries[_cNo.entries.length-1].date+' vs '+_coLastDate):'null');
-  check('capture: entries carry marker=free_t and a date', !!_cNo && _cNo.entries[0].marker==='free_t' && /^\d{4}-\d{2}-\d{2}$/.test(_cNo.entries[0].date));
-  G._tcBwEntries=[{date:'2025-12-20', free_t:217}];   // pre-cycle baseline draw — the case that exploded
-  var _cBw=G._thComputeFreeT();
-  check('capture with pre-cycle bloodwork: bounded, does not blow up (0 < max < 1500)', !!_cBw && _cBw.maxV>0 && _cBw.maxV<1500, _cBw?String(Math.round(_cBw.maxV)):'null');
-  check('capture with pre-cycle bloodwork: rises above the 217 baseline (on-cycle > baseline)', !!_cBw && _cBw.maxV>217, _cBw?String(Math.round(_cBw.maxV)):'null');
-  G._tcp.manualLog=[]; G._thInjections=[]; G._tcBwEntries=[{date:'2025-12-20', free_t:217}];
-  check('capture: no injections → null (nothing to store)', G._thComputeFreeT()===null);
-  if(G._tcp){G._tcp.measuredFT=_coFT; G._tcp.currentDoseMgWk=_coDose; G._tcp.birthYear=_coBY; G._tcp.manualLog=_coML;} G._tcBwEntries=_coBw; G._thInjections=_coInj;
+// ── T-History capture: explicit, from the displayed curve, no blow-up ─────────
+// History is WRITTEN only by tcSaveHistoryFromCurve (the "Update saved history"
+// button), and only ever the plasma curve exactly as displayed (cached in _tcDrawnFT
+// during a calibrated draw). No re-derivation, no auto-capture. These tests pin: the
+// draw caches a bounded series (calibrated to bloodwork — the case that used to read
+// ~10x high), and the writer clears-then-writes, refuses garbage, and no-ops with
+// nothing to save.
+console.log('\n── T-History capture (explicit, bounded) ──────────────────');
+if (typeof G._tcDrawManualChart === 'function' && typeof G.tcSaveHistoryFromCurve === 'function') {
+  var _svFT=G._tcp.measuredFT, _svDose=G._tcp.currentDoseMgWk, _svBw=G._tcBwEntries, _svFetch=G.fetch;
+
+  // Calibrated draw: a real blood draw during the cycle → curve anchors to it.
+  G._tcp.measuredFT='497'; G._tcp.currentDoseMgWk='';
+  G._tcBwEntries=[{date:'2026-07-20', free_t:497}];
+  G._tcDrawnFT=null;
+  var _dl=[]; for(var _di=0;_di<12;_di++){ var _dd=new Date(new Date('2026-06-26').getTime()+_di*2*86400000);
+    _dl.push({compId:'testoviron',doseMg:'125',date:_dd.getFullYear()+'-'+String(_dd.getMonth()+1).padStart(2,'0')+'-'+String(_dd.getDate()).padStart(2,'0')}); }
+  try { G._tcDrawManualChart('tc-main-chart', _dl); } catch(e){}
+  check('a calibrated draw caches the displayed series', !!(G._tcDrawnFT && G._tcDrawnFT.values && G._tcDrawnFT.values.length));
+  var _mx = G._tcDrawnFT ? Math.max.apply(null, G._tcDrawnFT.values.concat([0])) : 0;
+  check('cached series is bounded — no 10x blow-up (anchored to bloodwork)', _mx>0 && _mx<1500, 'max '+Math.round(_mx));
+  check('cached series ends at the last injection (no future tail)',
+    !!G._tcDrawnFT && G._tcDrawnFT.values.length === Math.round((new Date(_dl[_dl.length-1].date)-new Date(_dl[0].date))/86400000)+1);
+  check('cached entries would carry the pmol/L unit', !!G._tcDrawnFT && G._tcDrawnFT.unit==='pmol/L');
+
+  // Writer guards — synchronous (fetch is only called when it actually writes):
+  var _calls; var _mockFetch=function(){ _calls=[]; return function(u,o){ _calls.push({url:u,method:(o&&o.method)||'GET',body:o&&o.body}); return Promise.resolve({ok:true,json:function(){return Promise.resolve({});}}); }; };
+
+  // no cached curve → writes nothing
+  G._tcDrawnFT=null; G.fetch=_mockFetch(); G.tcSaveHistoryFromCurve();
+  check('writer with no cached curve calls no endpoint', _calls.length===0);
+
+  // an absurd curve is refused before any write
+  G._tcDrawnFT={firstMs:Date.now(),unit:'pmol/L',values:[100,7000]}; G.fetch=_mockFetch(); G.tcSaveHistoryFromCurve();
+  check('writer refuses an absurdly-high curve (>6000) — no write', _calls.length===0);
+
+  // a normal curve clears the marker (DELETE) first, then writes
+  G._tcDrawnFT={firstMs:new Date('2026-06-26T00:00:00Z').getTime(),unit:'pmol/L',values:[210,240,300,420,497]};
+  G.fetch=_mockFetch(); G.tcSaveHistoryFromCurve();
+  check('writer clears the free_t marker (DELETE) before writing',
+    _calls.length>=1 && _calls[0].method==='DELETE' && /plasma-history/.test(_calls[0].url) && /marker=free_t/.test(_calls[0].url));
+
+  G._tcp.measuredFT=_svFT; G._tcp.currentDoseMgWk=_svDose; G._tcBwEntries=_svBw; G.fetch=_svFetch;
 }
 
-// Capture persists via DELETE(clear marker)+POST(batch) to /plasma-history.
-if(typeof G._captureFreeTHistory==='function'){
-  var _pcSaveInj=G._thInjections, _pcSaveFetch=G.fetch, _pcSaveBw=G._tcBwEntries, _pcSaveML=G._tcp&&G._tcp.manualLog;
-  G._tcp=G._tcp||{}; G._tcp.manualLog=[]; G._tcp.measuredFT='217'; G._tcp.birthYear='1990';
-  G._tcBwEntries=[{date:'2025-12-20', free_t:217}];
-  G._thInjections=[{compound_id:'enanthate',dose:'100',tier:'trt',logged:true,date:'2026-05-01'},
-                   {compound_id:'enanthate',dose:'100',tier:'trt',logged:true,date:'2026-05-08'}];
-  var _pcCalls=[];
-  G.fetch=async function(url,opt){ _pcCalls.push({url:url,method:(opt&&opt.method)||'GET',body:opt&&opt.body}); return {ok:true,json:async function(){return {ok:true};}}; };
-  G._captureFreeTHistory().then(function(){
-    var _del=_pcCalls.find(function(c){return c.method==='DELETE'&&/plasma-history/.test(c.url);});
-    var _post=_pcCalls.find(function(c){return c.method==='POST'&&/plasma-history\/batch/.test(c.url);});
-    check('capture persist: clears the free_t marker (DELETE) before writing', !!_del && /marker=free_t/.test(_del.url));
-    check('capture persist: POSTs a non-empty batch of free_t entries', !!_post && (function(){try{var b=JSON.parse(_post.body);return b.entries&&b.entries.length>0&&b.entries[0].marker==='free_t';}catch(e){return false;}})());
-    G._thInjections=_pcSaveInj; G.fetch=_pcSaveFetch; G._tcBwEntries=_pcSaveBw; if(G._tcp)G._tcp.manualLog=_pcSaveML;
+// No path in the app captures history automatically — the button is the only writer.
+{
+  var _files = ['tab-tcalc.js','tab-thist.js','tab-today.js'];
+  var _autoOk = _files.every(function(f){
+    var src = fs.readFileSync(path.join(dir,f),'utf8');
+    // The dead auto-capture helpers must be gone entirely (comments excepted).
+    var codeOnly = src.replace(/\/\/[^\n]*/g,'').replace(/\/\*[\s\S]*?\*\//g,'');
+    return codeOnly.indexOf('_captureFreeTHistory') < 0 && codeOnly.indexOf('_thComputeFreeT') < 0;
   });
+  check('no automatic history capture remains in any tab', _autoOk);
+  var _tcSrc = fs.readFileSync(path.join(dir,'tab-tcalc.js'),'utf8');
+  check('saving the T-Calc profile does not capture history',
+    _tcSrc.slice(_tcSrc.indexOf('function _tcSaveProfile'), _tcSrc.indexOf('function _tcSaveProfile')+900).indexOf('SaveHistoryFromCurve') < 0);
 }
 
 // Add-a-past-injection modal: catalogue wiring + validation surface.
@@ -6749,11 +6768,12 @@ console.log('\n── T-History: read-only view ──────────�
   check('_thRender never captures or recomputes',
     _rd.indexOf('_captureFreeTHistory') < 0 && _rd.indexOf('_thComputeFreeT') < 0);
 
-  // Capture still exists — it is just not the view's job.
-  check('the capture path still exists for T-Calc to use',
-    typeof _th === 'string' && _th.indexOf('function _captureFreeTHistory') >= 0);
+  // The view no longer contains ANY capture path — writing moved entirely to T-Calc.
+  check('the view file has no capture function at all',
+    _th.indexOf('function _captureFreeTHistory') < 0 && _th.indexOf('function _thComputeFreeT') < 0);
   const _tc = fs.readFileSync(path.join(dir,'tab-tcalc.js'),'utf8');
-  check('T-Calc still owns the write path', _tc.indexOf('_captureFreeTHistory') >= 0);
+  check('T-Calc owns the write path (tcSaveHistoryFromCurve)',
+    _tc.indexOf('function tcSaveHistoryFromCurve') >= 0);
 
   check('the file states the read-only rule for the next reader',
     _th.indexOf('THIS VIEW READS AND PLOTS. IT NEVER CALCULATES') >= 0);

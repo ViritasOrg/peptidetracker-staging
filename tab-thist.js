@@ -8,10 +8,12 @@
  * looks empty or stale". If the backend has no data the view shows an empty
  * state and says where the data comes from.
  *
- * Writing is owned by T-Calc, which is where the PK model lives: it computes
- * the per-day value once and persists it via `_captureFreeTHistory`. The only
- * other legitimate capture is immediately after a user WRITE (saving a past
- * injection), because that changes the underlying data.
+ * Writing is owned by T-Calc, which is where the PK model lives, and it happens
+ * ONLY on an explicit user action: the "Update saved history" button
+ * (`tcSaveHistoryFromCurve`) stores the plasma curve verbatim as displayed.
+ * Nothing captures automatically — not on load, not on profile save, not even
+ * when a past injection is logged. Stored history stays exactly as the user last
+ * saved it until they choose to refresh it.
  *
  * Why the rule exists: buildTHist used to backfill when the store looked empty
  * or the tail looked stale. Opening the History tab therefore recomputed the
@@ -74,60 +76,11 @@ function _thUtcDateStr(ms) {
   var d = new Date(ms); return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0') + '-' + String(d.getUTCDate()).padStart(2,'0');
 }
 
-// Pure computation: the per-day free-T series from the merged past log, using the
-// EXACT T-Calc model (no anchor override — identical math to the plasma chart).
-// Returns { entries:[{date,marker,value,unit}], maxV, unit } or null. No I/O, so
-// it is directly testable. `entries` runs from the first injection to the last —
-// nothing is emitted past the latest injection (no decay tail).
-function _thComputeFreeT() {
-  if (typeof _tcFreeTSeries !== 'function') return null;
-  // Make sure the calibration profile (measured FT, birth year) is hydrated even
-  // if the T-Calc tab was never opened this session.
-  if (typeof _tcp !== 'undefined' && _tcp && !(parseDec(_tcp.measuredFT) > 0)) {
-    try { var c = getData('tc-profile'); if (c) Object.assign(_tcp, JSON.parse(c)); } catch(e) {}
-  }
-  var sorted = _thMergedPastLog();
-  if (!sorted.length) return null;
-  var _S;
-  try { _S = _tcFreeTSeries(sorted, {}); } catch(e) { return null; }
-  if (!_S || !_S.total || !_S.firstDate) return null;
-  var firstMs    = _S.firstDate.getTime();
-  var lastMs     = new Date(sorted[sorted.length-1].date).getTime();
-  var lastInjDay = Math.round((lastMs - firstMs) / 86400000);
-  var horizon    = Math.max(0, Math.min(_S.totalDays, lastInjDay + _TH_TAIL_DAYS));
-  var unit       = _S.unitLabel || 'pmol/L';
-  var entries = [], maxV = 0;
-  for (var k = 0; k <= horizon; k++) {
-    var v = _S.total[k] * (_S.calFT_arr ? _S.calFT_arr[k] : _S.scale);
-    if (!isFinite(v) || v < 0) v = 0;
-    if (v > maxV) maxV = v;
-    entries.push({ date: _thUtcDateStr(firstMs + k*86400000), marker: _TH_MARKER,
-                   value: Math.round(v*1000)/1000, unit: unit });
-  }
-  return { entries: entries, maxV: maxV, unit: unit };
-}
-
-// Compute the free-T history (via _thComputeFreeT) and persist it to
-// /plasma-history so the history view can just load & plot. Idempotent: it clears
-// the free_t marker and re-writes the whole current series, so removing an
-// injection is reflected too. Never stores a mis-calibrated (absurd) curve.
-// Returns a Promise that always resolves.
-function _captureFreeTHistory() {
-  if (typeof AGENT_URL === 'undefined') return Promise.resolve();
-  var out = _thComputeFreeT();
-  if (!out || !out.entries.length) return Promise.resolve();
-  var entries = out.entries;
-  // Guard: a calibrated curve that peaks absurdly high means the model could not
-  // anchor (e.g. a completed cycle with no blood test). Don't persist garbage —
-  // the view then prompts the user to add a blood test to calibrate.
-  if (out.unit === 'pmol/L' && out.maxV > _TH_MAX_SANE) return Promise.resolve();
-  var hdrs = authHeaders({ 'Content-Type': 'application/json' });
-  return fetch(AGENT_URL + '/plasma-history?marker=' + _TH_MARKER, { method: 'DELETE', headers: hdrs })
-    .then(function(){ return fetch(AGENT_URL + '/plasma-history/batch', {
-        method: 'POST', headers: hdrs, body: JSON.stringify({ entries: entries }) }); })
-    .then(function(r){ if (r && !r.ok && typeof _logHttp === 'function') _logHttp('captureFT', r.status, '/plasma-history/batch'); })
-    .catch(function(e){ if (typeof _logErr === 'function') _logErr('captureFT', e); });
-}
+// Free-T history is WRITTEN elsewhere — by T-Calc (which owns the PK model), only on an
+// explicit user action (the "Update saved history" button → tcSaveHistoryFromCurve).
+// This file does not compute or persist the curve. It fetches and plots. Deliberately no
+// _thComputeFreeT / _captureFreeTHistory here — see the header and the HISTORY VIEWS rule
+// in CLAUDE.md for why re-deriving in the view is a bug.
 
 /* ── history view (fetch & plot) ────────────────────────────────────────── */
 
@@ -440,8 +393,11 @@ function savePastInjection() {
       if (typeof buildToday === 'function') buildToday();
       if (typeof buildWeekStrip === 'function') buildWeekStrip();
       if (typeof buildSchedule === 'function') buildSchedule();
-      // Recompute & persist the free-T history, then refresh the view if open.
-      _captureFreeTHistory().then(function(){ if (_currentTab === 'thist') buildTHist(); });
+      // Do NOT auto-write history here. Logging a past injection changes the underlying
+      // data, but stored history only updates when the user explicitly asks (the
+      // "Update saved history" button in T-Calc). Refresh the view so the new injection
+      // tick shows; the stored curve is left exactly as the user last saved it.
+      if (_currentTab === 'thist') buildTHist();
     })
     .catch(function(e){ if (typeof _logErr === 'function') _logErr('savePastInj', e); if (err) err.textContent = 'Network error — try again.'; });
 }
