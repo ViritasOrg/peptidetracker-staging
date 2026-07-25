@@ -6621,12 +6621,18 @@ console.log('\n── Depot-ester PK band ────────────�
 console.log('\n── T-Calc x-axis label density ────────────────────────────');
 {
   // Mirror of the in-chart calculation (the draw path needs a live canvas).
+  // Mirror of the in-chart calculation. Density is measured against the VISIBLE span,
+  // not the total series length — zoomed to a month the window is ~30 days even when the
+  // whole series runs past a year, and sizing off the total pushed the step beyond the
+  // window so only the leftmost label drew.
   var _spacing = function(winDays, xDays, cW){
-    var e = winDays <= 7 ? 1 : winDays <= 30 ? 5 : xDays <= 28 ? 7 : xDays <= 84 ? 14 : 28;
-    if (xDays > 84) {
+    var e = winDays <= 7 ? 1 : winDays <= 30 ? 5 : winDays <= 28 ? 7 : winDays <= 84 ? 14 : 28;
+    if (winDays > 84) {
       var maxL = Math.max(2, Math.floor(cW / 44));
-      while (Math.floor(xDays / e) + 1 > maxL) e *= 2;
+      while (Math.floor(winDays / e) + 1 > maxL) e *= 2;
     }
+    var cap = Math.max(1, Math.floor(winDays / 2));
+    if (e > cap) e = cap;
     return e;
   };
   var _count = function(xDays, e){ return Math.floor(xDays / e) + 1; };
@@ -6635,6 +6641,14 @@ console.log('\n── T-Calc x-axis label density ──────────
 
   check('short and medium spans keep their previous spacing',
     _spacing(7,7,_W)===1 && _spacing(30,30,_W)===5 && _spacing(84,84,_W)===14);
+  // The regression Henrik hit: zoomed to a month over a year-long series, the step was
+  // sized off the 390-day total and exceeded the 30-day window, so only "10 Jul" drew.
+  check('month zoom over a long series still labels the window',
+    _count(30, _spacing(30, 390, _W)) >= 4, 'got '+_count(30,_spacing(30,390,_W))+' labels');
+  check('zoomed spacing never exceeds half the visible window',
+    [4,7,30,84,146,390].every(function(w){ return _spacing(w,500,_W) <= Math.max(1,Math.floor(w/2)); }));
+  check('today and week zooms still label every day',
+    _spacing(4,390,_W)===1 && _spacing(7,390,_W)===1);
   check('a 146 d span still uses the ladder top (28 d)', _spacing(146,146,_W)===28);
   check('a year-long depot span widens past the ladder', _spacing(390,390,_W) > 28);
   check('labels fit at every span up to 500 d',

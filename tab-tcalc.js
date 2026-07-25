@@ -1870,12 +1870,19 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   // packs ~14 labels into room for ~8 and they overlap into an unreadable smear.
   // Widen only when they genuinely would not fit, so every span that already fitted
   // keeps its existing spacing exactly.
-  // Scoped to the >84 d regime the ladder pins at 28 — the shorter windows were never
-  // the problem and keep their spacing untouched.
-  if (xDays > 84) {
+  // Widen only when the labels genuinely would not fit. This must be measured against
+  // the VISIBLE span (winDays), not the total series length: zoomed in to a month the
+  // window is ~30 days even when the whole series runs past a year, and sizing off the
+  // total pushed the step beyond the window so only the leftmost label ever drew.
+  if (winDays > 84) {
     var _lblMinPx  = 44;   // "26 Sep" at 9px plus breathing room
     var _maxLabels = Math.max(2, Math.floor(cW / _lblMinPx));
-    while (Math.floor(xDays / labelEvery) + 1 > _maxLabels) labelEvery *= 2;
+    while (Math.floor(winDays / labelEvery) + 1 > _maxLabels) labelEvery *= 2;
+  }
+  // Whatever the ladder produced, never step past the visible window — that is what
+  // leaves an axis with a single lonely label.
+  if (labelEvery > Math.max(1, Math.floor(winDays / 2))) {
+    labelEvery = Math.max(1, Math.floor(winDays / 2));
   }
   for (var dl = xStart; dl <= xEnd; dl += labelEvery) {
     var lx = xOf(dl);
