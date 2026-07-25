@@ -6170,6 +6170,25 @@ if (typeof G._tcDrawManualChart === 'function' && typeof G.tcSaveHistoryFromCurv
   check('cached series is bounded — no 10x blow-up (anchored to bloodwork)', _mx>0 && _mx<1500, 'max '+Math.round(_mx));
   check('cached series ends at the last injection (no future tail)',
     !!G._tcDrawnFT && G._tcDrawnFT.values.length === Math.round((new Date(_dl[_dl.length-1].date)-new Date(_dl[0].date))/86400000)+1);
+
+  // A scheduled FUTURE dose must NOT extend history into the future — it ends at the
+  // last injection actually taken (date on or before today).
+  var _fToday = new Date();
+  var _fStart = new Date(_fToday.getTime() - 20*86400000);
+  var _fMid   = new Date(_fToday.getTime() -  4*86400000);   // last TAKEN shot
+  var _fFut   = new Date(_fToday.getTime() + 14*86400000);   // scheduled, not taken
+  var _fmt = function(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+  G._tcDrawnFT=null;
+  try { G._tcDrawManualChart('tc-main-chart', [
+    {compId:'testoviron',doseMg:'125',date:_fmt(_fStart)},
+    {compId:'testoviron',doseMg:'125',date:_fmt(_fMid)},
+    {compId:'testoviron',doseMg:'125',date:_fmt(_fFut)} ]); } catch(e){}
+  var _fLastDay = !!G._tcDrawnFT ? (G._tcDrawnFT.values.length - 1) : -1;
+  var _fExpect  = Math.round((_fMid - _fStart)/86400000);
+  check('history stops at the last TAKEN injection, not a scheduled future dose',
+    !!G._tcDrawnFT && _fLastDay === _fExpect, 'lastDay '+_fLastDay+' expected '+_fExpect);
+  check('no stored history point is dated in the future',
+    !!G._tcDrawnFT && (G._tcDrawnFT.firstMs + _fLastDay*86400000) <= Date.now());
   check('cached entries would carry the pmol/L unit', !!G._tcDrawnFT && G._tcDrawnFT.unit==='pmol/L');
 
   // Writer guards — synchronous (fetch is only called when it actually writes):

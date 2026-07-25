@@ -1637,15 +1637,26 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   // calibration-context bug. Only when calibrated to a real measurement (calFT set); an
   // uncalibrated estimate is never eligible to become history. Runs day 0 → last
   // injection (matching the history view's "ends at the last injection" contract).
+  // End at the last injection that has actually been TAKEN — its date on or before today.
+  // The plasma log includes scheduled/future doses (a series projects forward), and
+  // history must never run into the future: it stops where the last checked injection is.
   if (calFT && sorted.length) {
-    var _hLastInj = Math.round((new Date(sorted[sorted.length-1].date).getTime() - firstDate.getTime()) / 86400000);
-    var _hEnd = Math.max(0, Math.min(totalDays, _hLastInj));
-    var _hVals = [];
-    for (var _hk = 0; _hk <= _hEnd; _hk++) {
-      var _hv = total[_hk] * (calFT_arr ? calFT_arr[_hk] : scale);
-      _hVals.push((!isFinite(_hv) || _hv < 0) ? 0 : Math.round(_hv * 1000) / 1000);
+    var _hNowMs = Date.now(), _hLastPastMs = null;
+    for (var _hi = 0; _hi < sorted.length; _hi++) {
+      var _hms = new Date(sorted[_hi].date).getTime();
+      if (isFinite(_hms) && _hms <= _hNowMs) _hLastPastMs = _hms;   // sorted ascending → last one wins
     }
-    _tcDrawnFT = { firstMs: firstDate.getTime(), unit: unitLabel || 'pmol/L', values: _hVals };
+    if (_hLastPastMs === null) {
+      _tcDrawnFT = null;   // nothing taken yet — no history to store
+    } else {
+      var _hEnd = Math.max(0, Math.min(totalDays, Math.round((_hLastPastMs - firstDate.getTime()) / 86400000)));
+      var _hVals = [];
+      for (var _hk = 0; _hk <= _hEnd; _hk++) {
+        var _hv = total[_hk] * (calFT_arr ? calFT_arr[_hk] : scale);
+        _hVals.push((!isFinite(_hv) || _hv < 0) ? 0 : Math.round(_hv * 1000) / 1000);
+      }
+      _tcDrawnFT = { firstMs: firstDate.getTime(), unit: unitLabel || 'pmol/L', values: _hVals };
+    }
   } else {
     _tcDrawnFT = null;
   }
