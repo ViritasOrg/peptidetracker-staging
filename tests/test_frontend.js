@@ -2835,6 +2835,56 @@ console.log('\n── _renderDoseGuide: runtime HTML for all 22 compounds ──
   }
 }
 
+// ── Backend is the source of truth for ester PK ──────────────────────────────
+// /trt-catalog now serves PK for EVERY ester (not just ones missing from TRT_CAT),
+// so two things must hold: a backend entry must win over the hardcoded TRT_GUIDE
+// fallback for any id, and an id present in both must not be listed twice in the
+// inventory picker (_tcCategorizeComps concatenated TRT_CAT + backend blind).
+console.log('\n── Ester PK: backend is the source of truth ───────────────');
+{
+  if(typeof G._tcCompInfo==='function' && typeof G.TRT_CAT!=='undefined'){
+    var _svCat = G._tcExtraCatalog;
+    // Mock the backend serving every TRT_CAT ester with a distinctive half-life
+    G._tcExtraCatalog = G.TRT_CAT.map(function(c,i){
+      return {id:c.id, name:c.name, dot:c.dot, halfLifeDays: 100+i, halfLife:(100+i)+' days (test)'};
+    });
+
+    check('every TRT_CAT ester resolves its half-life from the backend entry',
+      G.TRT_CAT.every(function(c,i){ return G._tcCompInfo(c.id).halfLifeDays === 100+i; }),
+      G.TRT_CAT.map(function(c){ return c.id+'='+G._tcCompInfo(c.id).halfLifeDays; }).join(' '));
+
+    check('backend value overrides the hardcoded TRT_GUIDE fallback',
+      G._tcCompInfo('nebido').halfLifeDays === 100 &&
+      G._parseHalfLifeDays(G.TRT_GUIDE['nebido'].halfLife) !== 100);
+
+    if(typeof G._tcCategorizeComps==='function'){
+      var _cats = G._tcCategorizeComps();
+      var _all = _cats.reduce(function(a,c){ return a.concat(c.ids); }, []);
+      var _dupes = _all.filter(function(id,i){ return _all.indexOf(id) !== i; });
+      check('inventory picker lists no ester twice when the backend also serves it',
+        _dupes.length === 0, 'duplicated: '+_dupes.join(', '));
+      check('inventory picker still covers every TRT_CAT ester',
+        G.TRT_CAT.every(function(c){ return _all.indexOf(c.id) >= 0; }));
+    }
+
+    // A band served by the backend must reach the model; absent one, low==high==central
+    G._tcExtraCatalog = [{id:'nebido',name:'Nebido',dot:'#e05050',halfLifeDays:56,halfLifeDaysLow:37,halfLifeDaysHigh:75,halfLife:'~56 days'}];
+    var _nb = G._tcCompInfo('nebido');
+    check('backend half-life band reaches the model',
+      _nb.halfLifeDaysLow===37 && _nb.halfLifeDays===56 && _nb.halfLifeDaysHigh===75);
+    check('band is ordered low <= central <= high',
+      _nb.halfLifeDaysLow <= _nb.halfLifeDays && _nb.halfLifeDays <= _nb.halfLifeDaysHigh);
+    G._tcExtraCatalog = [{id:'cypionate',name:'Testosterone Cypionate',dot:'#e05050',halfLifeDays:8,halfLife:'~8 days'}];
+    var _cy = G._tcCompInfo('cypionate');
+    check('no band served → low == high == central (no false precision)',
+      _cy.halfLifeDaysLow===8 && _cy.halfLifeDaysHigh===8);
+
+    G._tcExtraCatalog = _svCat;
+  }else{
+    check('_tcCompInfo + TRT_CAT available', false);
+  }
+}
+
 // ── Nebido fallback PK must match the backend catalogue ──────────────────────
 // Regression: TRT_GUIDE.nebido said "~34 days", so whenever the unauthenticated
 // /trt-catalog fetch failed the whole app fell back to a 34 d half-life for
