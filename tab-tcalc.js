@@ -490,8 +490,14 @@ function _tcCategorizeComps() {
     {label:'LONG ESTERS',   borderColor:'#8866cc', ids:[]},
     {label:'DEPOT',         borderColor:'#44aa88', ids:[]}
   ];
-  var trtIds = ((typeof TRT_CAT !== 'undefined') ? TRT_CAT.map(function(c){ return c.id; }) : [])
-    .concat(_tcExtraCatalog.map(function(c){ return c.id; }));
+  // De-dupe: the backend catalogue now serves PK for esters that are ALSO in the
+  // frontend's TRT_CAT (it is the source of truth for their half-lives, not just a
+  // source of extra compounds). Concatenating blind listed those esters twice in
+  // the inventory picker. _tcAllCompIds already de-duped; this path did not.
+  var trtIds = [];
+  ((typeof TRT_CAT !== 'undefined') ? TRT_CAT.map(function(c){ return c.id; }) : [])
+    .concat(_tcExtraCatalog.map(function(c){ return c.id; }))
+    .forEach(function(id){ if (trtIds.indexOf(id) === -1) trtIds.push(id); });
   trtIds.forEach(function(id) {
     var hl = _tcCompInfo(id).halfLifeDays;
     if      (hl < 3)  cats[0].ids.push(id);
