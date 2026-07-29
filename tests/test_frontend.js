@@ -2835,6 +2835,33 @@ console.log('\n── _renderDoseGuide: runtime HTML for all 22 compounds ──
   }
 }
 
+// ── Nebido fallback PK must match the backend catalogue ──────────────────────
+// Regression: TRT_GUIDE.nebido said "~34 days", so whenever the unauthenticated
+// /trt-catalog fetch failed the whole app fell back to a 34 d half-life for
+// testosterone undecanoate — roughly half the backend's 56 d, making projected
+// levels and washout decay about twice as fast. The backend value is derived in
+// docs/enhanced-bodybuilding/11-testosterone-undecanoate-pk.md (Bayer CCDS + UK
+// SmPC): 56 d plateau-equivalent, 37-75 d individual band.
+console.log('\n── Nebido fallback PK vs backend ──────────────────────────');
+{
+  if(G.TRT_GUIDE && G.TRT_GUIDE['nebido'] && typeof G._parseHalfLifeDays==='function'){
+    var _nebHl = G.TRT_GUIDE['nebido'].halfLife;
+    check('TRT_GUIDE.nebido fallback parses to the backend 56 d central value',
+      G._parseHalfLifeDays(_nebHl) === 56, 'parsed '+G._parseHalfLifeDays(_nebHl)+' from "'+_nebHl+'"');
+    check('TRT_GUIDE.nebido no longer carries the stale 34 d single-dose figure',
+      !/\b34\s*days?\b/.test(_nebHl));
+    check('TRT_GUIDE.nebido states the 37-75 d individual band',
+      /37\s*-\s*75/.test(_nebHl));
+    // The ester name is parsed out of this same string by _injPkMeta (first
+    // parenthetical), so the parenthetical must stay the ester, not the band.
+    check('TRT_GUIDE.nebido still yields the undecanoate ester stamp',
+      typeof G._injPkMeta!=='function' || G._injPkMeta('trt','nebido').ester==='undecanoate',
+      JSON.stringify(typeof G._injPkMeta==='function'?G._injPkMeta('trt','nebido'):null));
+  }else{
+    check('TRT_GUIDE.nebido + _parseHalfLifeDays available', false);
+  }
+}
+
 // ── TRT_GUIDE: structural validation (all 6 TRT compounds) ───────────────────
 console.log('\n── TRT_GUIDE: structural validation ─────────────────────────');
 {
