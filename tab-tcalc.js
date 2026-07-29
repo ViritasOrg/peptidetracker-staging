@@ -446,11 +446,16 @@ function _tcKa(halfLifeDays) {
   // Absorption rate constant (1/day) for 1-compartment depot model.
   // Ka values calibrated to known Tmax per ester class:
   //   Nebido (hl≥20d) → tmax≈7d | Cypionate (hl≥9d) → tmax≈2d
-  //   Enanthate (hl≥3d) → tmax≈1d | Propionate (hl≥1d) → tmax≈0.4d | Gel → near-immediate
-  if (halfLifeDays >= 20) return 0.40;
-  if (halfLifeDays >= 9)  return 1.50;
-  if (halfLifeDays >= 3)  return 3.00;
-  if (halfLifeDays >= 1)  return 8.00;
+  //   Enanthate (hl≥3d) → tmax≈1d | Propionate (hl≥0.5d) → tmax≈0.4d | Gel → near-immediate
+  // The propionate boundary is 0.5 d, not 1 d: propionate's half-life was corrected to
+  // the published 0.8 d (2026-07-29), and at a 1 d boundary that would have dropped it
+  // into the near-immediate bucket — halving its tmax from ~9.8 h to ~4.8 h as a silent
+  // rider on the half-life change. At ka 8 it keeps tmax ≈ 7.5 h, closest to the ≈0.4 d
+  // this table is calibrated to. No other compound sits in [0.5, 1) d.
+  if (halfLifeDays >= 20)  return 0.40;
+  if (halfLifeDays >= 9)   return 1.50;
+  if (halfLifeDays >= 3)   return 3.00;
+  if (halfLifeDays >= 0.5) return 8.00;
   return 15.0;
 }
 
