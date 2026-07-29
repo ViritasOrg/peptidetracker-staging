@@ -2835,6 +2835,45 @@ console.log('\n── _renderDoseGuide: runtime HTML for all 22 compounds ──
   }
 }
 
+// ── Propionate half-life correction (2026-07-29) ─────────────────────────────
+// Propionate ran at 2 d with no source, against a published IM half-life of
+// 0.8 d (~20 h) — the shortest-acting ester. Corrected on an explicit decision.
+// A 2 d value understated both the peak and the depth of the EOD trough.
+console.log('\n── Propionate half-life correction ────────────────────────');
+{
+  if(G.TRT_GUIDE && G.TRT_GUIDE['propionate'] && typeof G._parseHalfLifeDays==='function'){
+    var _pHl = G.TRT_GUIDE['propionate'].halfLife;
+    check('propionate fallback parses to the published 0.8 d',
+      G._parseHalfLifeDays(_pHl) === 0.8, 'parsed '+G._parseHalfLifeDays(_pHl)+' from "'+_pHl+'"');
+    check('the legacy 2 d value is gone', !/~?2\s*days?/.test(_pHl));
+    check('propionate keeps its ester stamp',
+      typeof G._injPkMeta!=='function' || G._injPkMeta('trt','propionate').ester==='propionate');
+    // Shortest-acting ester: must stay shorter than every other TRT entry
+    if(typeof G.TRT_CAT!=='undefined'){
+      var _hls = G.TRT_CAT.filter(function(c){ return c.id!=='propionate'; })
+        .map(function(c){ return G._parseHalfLifeDays(G.TRT_GUIDE[c.id].halfLife); })
+        .filter(function(v){ return v>0; });
+      check('propionate is the shortest-acting ester in the fallback table',
+        _hls.every(function(v){ return v > 0.8; }), 'others: '+_hls.join(', '));
+    }
+  }else{
+    check('TRT_GUIDE.propionate available', false);
+  }
+  // The ka table buckets by half-life. 0.8 d must NOT fall into the near-immediate
+  // (gel) bucket — that would halve propionate's tmax as a rider on the half-life fix.
+  if(typeof G._tcKa==='function'){
+    check('_tcKa keeps propionate (0.8 d) in its calibrated bucket, not the gel bucket',
+      G._tcKa(0.8) === 8.00, 'got ka='+G._tcKa(0.8));
+    check('_tcKa: propionate tmax stays near the calibrated ~0.4 d', (function(){
+      var ka=G._tcKa(0.8), ke=Math.LN2/0.8, tmax=Math.log(ka/ke)/(ka-ke);
+      return tmax > 0.25 && tmax < 0.45;
+    })());
+    check('_tcKa: other buckets unchanged',
+      G._tcKa(56)===0.40 && G._tcKa(8)===3.00 && G._tcKa(4.5)===3.00 && G._tcKa(1.5)===8.00);
+    check('_tcKa: the near-immediate bucket still exists below 0.5 d', G._tcKa(0.2) === 15.0);
+  }
+}
+
 // ── Backend is the source of truth for ester PK ──────────────────────────────
 // /trt-catalog now serves PK for EVERY ester (not just ones missing from TRT_CAT),
 // so two things must hold: a backend entry must win over the hardcoded TRT_GUIDE
@@ -3402,8 +3441,11 @@ if (typeof G._tcPkConc === 'function') {
 }
 
 if (typeof G._tcKa === 'function') {
-  check('_tcKa: HL=0.5d → 15.0 (gel/short)',      G._tcKa(0.5) === 15.0, 'got '+G._tcKa(0.5));
-  check('_tcKa: HL=2d   →  8.0 (propionate)',      G._tcKa(2)   ===  8.0, 'got '+G._tcKa(2));
+  // Boundary moved 1d → 0.5d when propionate was corrected to 0.8 d (2026-07-29),
+  // so 0.8 keeps ka 8 instead of dropping into the near-immediate bucket.
+  check('_tcKa: HL=0.4d → 15.0 (gel/near-immediate)', G._tcKa(0.4) === 15.0, 'got '+G._tcKa(0.4));
+  check('_tcKa: HL=0.8d →  8.0 (propionate)',      G._tcKa(0.8) ===  8.0, 'got '+G._tcKa(0.8));
+  check('_tcKa: HL=2d   →  8.0 (same bucket)',     G._tcKa(2)   ===  8.0, 'got '+G._tcKa(2));
   check('_tcKa: HL=4.5d →  3.0 (enanthate/TE)',    G._tcKa(4.5) ===  3.0, 'got '+G._tcKa(4.5));
   check('_tcKa: HL=10d  →  1.5 (cypionate/TC)',    G._tcKa(10)  ===  1.5, 'got '+G._tcKa(10));
   check('_tcKa: HL=34d  →  0.4 (undecanoate/TU)',  G._tcKa(34)  ===  0.4, 'got '+G._tcKa(34));
