@@ -125,6 +125,14 @@ async function wizSave(){
   // did not configure testosterone inline in the classic step.
   var _wantsTrt = (_wiz.goals||[]).indexOf('trt')>=0;
   var _trtInline = !!(_savedStack && _savedStack.trt && _savedStack.trt.compounds && _savedStack.trt.compounds.length);
+  // The wizard's TRT step edits the T-Calc simple plan. Commit it here, so the
+  // schedule the user just built is the one T-Calc draws.
+  if(_wantsTrt && !_trtInline && typeof _wizTrtPlanComplete==='function' && _wizTrtPlanComplete() &&
+     typeof _tcp!=='undefined' && _tcp){
+    var _wp=_wiz.trtPlan;
+    _tcp.simplePlan={compId:_wp.compId,doseMg:String(_wp.doseMg),cadenceDays:parseDec(_wp.cadenceDays),startDate:_wp.startDate};
+    _tcp.plannerMode='simple';
+  }
   if(_wantsTrt && !_trtInline && typeof _tcp!=='undefined' && _tcp && _savedStack && _savedStack.id &&
      typeof buildTCalc==='function' && document.getElementById('tab-btn-tcalc')){
     _tcp.targetStackId=_savedStack.id;
@@ -1517,31 +1525,115 @@ function _renderTRTGuide(cId,weeklyDoseMg){
 }
 function _refreshTRTGuide(id,freqVal,freqUnit,dose){var el=document.getElementById('trt-guide-'+id);if(!el)return;var doseNum=parseDec(dose)||0;var freqDays=(freqUnit||'weeks')==='weeks'?(freqVal||1)*7:(freqVal||1);var weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;el.innerHTML=_renderTRTGuide(id,weeklyDoseMg);}
 // T-Calc is the single place a testosterone schedule is built, so the wizard's TRT
-// step hands off to it rather than being a second, parallel planner. The classic
-// in-wizard config is NOT removed — it is one tap away for anyone who wants a
-// multi-compound TRT block configured inline, and it is what the rest of the wizard
-// (validate, review) still reads.
+// step IS the T-Calc simple planner rather than a second, parallel one: pick the
+// ester, the dose and the cadence here, and the same plan drives the T-Calc curve.
+// The classic multi-compound config is NOT removed — it is one tap away for blends
+// and for anything the four-field planner cannot express.
 var _wizTrtClassic = false;
 function wizToggleTrtClassic(){ _wizTrtClassic = !_wizTrtClassic; wizRender(); }
 
+// Wizard-local copy of the plan. Seeded from the live T-Calc plan so re-opening the
+// wizard shows what is actually scheduled, then from a classic TRT compound if one
+// was configured that way, so neither is silently ignored.
+function _wizEnsureTrtPlan(){
+  if(_wiz.trtPlan) return _wiz.trtPlan;
+  var seed = {compId:'', doseMg:'', cadenceDays:0, startDate:''};
+  if(typeof _tcSimplePlan==='function'){
+    var sp=_tcSimplePlan();
+    if(sp.compId)      seed.compId=sp.compId;
+    if(sp.doseMg)      seed.doseMg=sp.doseMg;
+    if(sp.cadenceDays) seed.cadenceDays=sp.cadenceDays;
+    if(sp.startDate)   seed.startDate=sp.startDate;
+  }
+  var c=((_wiz.trt&&_wiz.trt.compounds)||[])[0];
+  if(c){
+    if(!seed.compId) seed.compId=c.id||'';
+    if(!seed.doseMg) seed.doseMg=c.dose||'';
+    if(!seed.cadenceDays && c.freqVal && c.freqUnit){
+      seed.cadenceDays = c.freqUnit==='weeks' ? c.freqVal*7 : c.freqVal;
+    }
+  }
+  if(!seed.startDate) seed.startDate = _wiz.cycle_start || (typeof dateKey==='function' ? dateKey(NOW) : '');
+  _wiz.trtPlan=seed;
+  return _wiz.trtPlan;
+}
+function wizSetTrtPlan(field,value){
+  _wizEnsureTrtPlan()[field]=value;
+  wizRender();
+}
+function _wizTrtPlanComplete(){
+  var p=_wizEnsureTrtPlan();
+  return !!(p.compId && parseDec(p.doseMg)>0 && parseDec(p.cadenceDays)>0 && p.startDate);
+}
+
 function wizStepTRTHandoff(body,footer){
   if(_wizTrtClassic) return wizStepTRT(body,footer);
-  var n=((_wiz.trt&&_wiz.trt.compounds)||[]).length;
-  var html='<div style="background:rgba(102,136,204,0.08);border:1px solid rgba(102,136,204,0.28);border-radius:12px;padding:16px;margin-bottom:14px">'
-    +'<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:6px">Testosterone is planned in T-Calc</div>'
-    +'<div style="font-size:12.5px;color:var(--muted2);line-height:1.65">There is one place to build a testosterone schedule, so the curve, the '
-    +'injection dates and the dose can never disagree. Finish this protocol and you will be taken straight to T-Calc, where you pick the ester, '
-    +'dose and cadence and see the plasma curve as you set it.</div>'
-    +'</div>';
-  if(n>0){
-    html+='<div style="background:rgba(232,160,32,0.08);border-left:3px solid #e8a020;border-radius:8px;padding:11px 13px;margin-bottom:14px;font-size:12px;color:var(--muted2);line-height:1.55">'
-      +'This protocol already has <strong style="color:var(--text)">'+n+' testosterone compound'+(n===1?'':'s')+'</strong> configured here. '
-      +'They are kept and will keep generating injections — open the classic config below to change or remove them.</div>';
-  }
-  html+='<div onclick="wizToggleTrtClassic()" style="text-align:center;font-size:12px;color:var(--muted2);text-decoration:underline;cursor:pointer;padding:8px">'
-    +'Configure testosterone here instead (classic)</div>';
-  body.innerHTML=html;
+  // The footer goes in FIRST and the body build is wrapped: this step reads helpers
+  // that live in tab-tcalc.js, which loads after this file. If any of them is missing
+  // or throws, the user must still get a usable step — a blank pane with nothing but
+  // a Next button gives no way to tell a broken step from an empty one.
   footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
+  try{
+    _wizRenderTrtPlanner(body);
+  }catch(err){
+    if(typeof _logErr==='function')_logErr('wizStepTRT',err);
+    body.innerHTML='<div style="font-size:13px;color:var(--muted2);padding:18px 0;line-height:1.65">'
+      +'Testosterone is planned in T-Calc. Continue through this protocol, then open T-Calc to set the ester, dose and cadence.'
+      +'</div><div onclick="wizToggleTrtClassic()" style="text-align:center;font-size:12px;color:var(--muted2);text-decoration:underline;cursor:pointer;padding:14px 8px 4px">Advanced: multi-compound config</div>';
+  }
+  if(!body.innerHTML||!body.innerHTML.trim()){
+    body.innerHTML='<div style="font-size:13px;color:var(--muted2);padding:18px 0;line-height:1.65">Testosterone is planned in T-Calc — continue, then set it there.</div>';
+  }
+}
+
+function _wizRenderTrtPlanner(body){
+  var p=_wizEnsureTrtPlan();
+  var iSty='background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:11px 13px;color:var(--text);font-size:16px;font-family:inherit;outline:none;width:100%;box-sizing:border-box';
+  var lSty='font-size:11px;font-weight:700;letter-spacing:0.8px;color:var(--muted);text-transform:uppercase;margin-bottom:8px;display:block';
+  var ids=(typeof _tcAllCompIds==='function')?_tcAllCompIds():((typeof TRT_CAT!=='undefined'?TRT_CAT:[]).map(function(c){return c.id;}));
+  var nameOf=function(id){
+    if(typeof _tcCompInfo==='function'){var cd=_tcCompInfo(id);if(cd&&cd.name)return cd.name;}
+    var t=(typeof TRT_CAT!=='undefined'?TRT_CAT:[]).find(function(c){return c.id===id;});
+    return t?t.name:id;
+  };
+
+  var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:14px;line-height:1.55">Your testosterone schedule. This is the same plan T-Calc uses — set it once here and the plasma curve follows it.</div>';
+
+  html+='<label style="'+lSty+'">1 · Ester</label>';
+  html+='<select onchange="wizSetTrtPlan(\'compId\',this.value)" style="'+iSty+';margin-bottom:14px">';
+  html+='<option value="">Select a testosterone ester…</option>';
+  ids.forEach(function(id){
+    html+='<option value="'+id+'"'+(p.compId===id?' selected':'')+'>'+nameOf(id)+'</option>';
+  });
+  html+='</select>';
+
+  html+='<label style="'+lSty+'">2 · Dose per injection (mg)</label>';
+  html+='<input type="number" inputmode="decimal" min="0" step="any" value="'+(p.doseMg||'')+'" placeholder="125" onchange="wizSetTrtPlan(\'doseMg\',this.value)" style="'+iSty+';margin-bottom:14px">';
+
+  html+='<label style="'+lSty+'">3 · Injection cadence</label>';
+  html+='<select onchange="wizSetTrtPlan(\'cadenceDays\',this.value)" style="'+iSty+';margin-bottom:14px">';
+  html+='<option value="0">How often?…</option>';
+  var freqs=(typeof _TC_FREQ_OPTS!=='undefined')?_TC_FREQ_OPTS:[{label:'Weekly',days:7}];
+  freqs.forEach(function(f){
+    html+='<option value="'+f.days+'"'+(Math.abs(f.days-parseDec(p.cadenceDays))<0.01?' selected':'')+'>'+f.label+'</option>';
+  });
+  html+='</select>';
+
+  html+='<label style="'+lSty+'">4 · First injection</label>';
+  html+='<input type="date" value="'+(p.startDate||'')+'" onchange="wizSetTrtPlan(\'startDate\',this.value)" style="'+iSty+'">';
+
+  if(_wizTrtPlanComplete()){
+    var wk=parseDec(p.doseMg)*7/parseDec(p.cadenceDays);
+    html+='<div style="margin-top:14px;background:rgba(90,209,176,0.08);border:1px solid rgba(90,209,176,0.25);border-radius:10px;padding:11px 13px">'
+      +'<div style="font-size:12.5px;color:#5ad1b0;font-weight:600">'+(Math.round(wk*10)/10)+' mg/week</div>'
+      +'<div style="font-size:11px;color:var(--muted2);margin-top:3px;line-height:1.5">Saved to T-Calc when you finish this protocol — the curve opens there.</div></div>';
+  }else{
+    html+='<div style="margin-top:14px;font-size:11.5px;color:var(--muted2);line-height:1.55">Fill in all four to schedule testosterone. You can also leave this empty and add it in T-Calc later.</div>';
+  }
+
+  html+='<div onclick="wizToggleTrtClassic()" style="text-align:center;font-size:12px;color:var(--muted2);text-decoration:underline;cursor:pointer;padding:14px 8px 4px">Advanced: multi-compound config</div>';
+
+  body.innerHTML=html;
 }
 
 function wizStepTRT(body,footer){
