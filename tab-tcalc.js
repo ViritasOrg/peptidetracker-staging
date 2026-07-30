@@ -18,6 +18,12 @@ var _tcp = {
   planCompId:          '',  // kept for backward-compat with saved profiles; ignored
   backboneStartDay:    0,   // days into cycle before first backbone injection (default 0)
   manualLog:           [],  // [{compId, doseMg, date}, ...] — manual injection history
+  // T-Calc is the single place a testosterone schedule is built. Two planners share
+  // that job: the SIMPLE one (ester + dose + cadence) and the ADVANCED manual log
+  // below it. Exactly one is live at a time; the other is greyed out but never
+  // deleted, and its data is left intact so switching back restores it untouched.
+  plannerMode:         '',  // '' = derive (see _tcPlannerMode), else 'simple' | 'advanced'
+  simplePlan:          {compId:'', doseMg:'', cadenceDays:0, startDate:''},
   targetStackId:       ''   // stack this T-Calc testosterone is assigned to ('' = unassigned/global)
 };
 
@@ -687,6 +693,167 @@ function _tcManualComps() {
   return ids;
 }
 
+// ── Simple planner ────────────────────────────────────────────────────────────
+// Ester + dose + cadence, and the curve renders. The advanced manual log is still
+// there underneath for multi-compound work, historical injections and what-ifs —
+// this is a second way in, not a replacement.
+
+// Which planner is live. An explicit choice always wins. Absent one, a profile that
+// already has a manual log stays on ADVANCED so nothing an existing user built
+// changes underneath them; a fresh profile starts SIMPLE.
+function _tcPlannerMode(){
+  var m = _tcp && _tcp.plannerMode;
+  if (m === 'simple' || m === 'advanced') return m;
+  return ((_tcp && _tcp.manualLog && _tcp.manualLog.length) ? 'advanced' : 'simple');
+}
+
+function _tcSetPlannerMode(mode){
+  if (mode !== 'simple' && mode !== 'advanced') return;
+  _tcp.plannerMode = mode;
+  _tcSaveProfile();
+  buildTCalc();
+}
+
+// Toggle handler for the advanced switch — turning it ON makes advanced live and
+// greys the simple planner; turning it OFF does the reverse. Neither discards data.
+function _tcToggleAdvancedPlanner(el){
+  _tcSetPlannerMode((el && el.checked) ? 'advanced' : 'simple');
+}
+
+function _tcSimplePlan(){
+  var p = (_tcp && _tcp.simplePlan) || {};
+  return {
+    compId:      p.compId || '',
+    doseMg:      p.doseMg || '',
+    cadenceDays: parseDec(p.cadenceDays) || 0,
+    startDate:   p.startDate || ''
+  };
+}
+
+function _tcSetSimplePlanField(field, value){
+  if (!_tcp.simplePlan) _tcp.simplePlan = {compId:'', doseMg:'', cadenceDays:0, startDate:''};
+  _tcp.simplePlan[field] = value;
+  _tcSaveProfile();
+  buildTCalc();
+}
+
+// A plan only produces a curve once every field it needs is set.
+function _tcSimplePlanComplete(){
+  var p = _tcSimplePlan();
+  return !!(p.compId && parseDec(p.doseMg) > 0 && p.cadenceDays > 0 && p.startDate);
+}
+
+// How far ahead a simple plan projects. Long enough to show a depot ester reaching
+// steady state (Nebido needs months), bounded so a daily cadence cannot generate an
+// unbounded list.
+var _TC_SIMPLE_HORIZON_DAYS = 365;
+var _TC_SIMPLE_MAX_INJ      = 800;
+
+// Expand the plan into the same {compId, doseMg, date} shape the log uses. Generated
+// on the fly — never written into manualLog, which stays the user's own data.
+function _tcSimplePlanInjections(){
+  if (!_tcSimplePlanComplete()) return [];
+  var p = _tcSimplePlan();
+  var start = parseLocalDate(p.startDate);
+  if (!start || isNaN(start.getTime())) return [];
+  var end = new Date(Math.max(NOW.getTime(), start.getTime()) + _TC_SIMPLE_HORIZON_DAYS * 86400000);
+  var out = [];
+  // Cadence can be fractional (3x/week = 7/3 d); step in ms and re-derive the date so
+  // rounding cannot drift over a long horizon.
+  var stepMs = p.cadenceDays * 86400000;
+  if (!(stepMs > 0)) return [];
+  for (var i = 0; i < _TC_SIMPLE_MAX_INJ; i++){
+    var t = new Date(start.getTime() + i * stepMs);
+    if (t > end) break;
+    out.push({ compId: p.compId, doseMg: String(parseDec(p.doseMg)), date: dateKey(t), source: 'simple' });
+  }
+  return out;
+}
+
+
+// The simple planner card: 1) ester 2) dose 3) cadence 4) start — then the curve at
+// the top of the page renders it. Greyed (and non-interactive) when the advanced
+// planner is the live one.
+function _tcSimplePlannerHtml(iSty, lSty){
+  var live = _tcPlannerMode() === 'simple';
+  var p    = _tcSimplePlan();
+  var ids  = (typeof _tcAllCompIds === 'function') ? _tcAllCompIds() : [];
+  var dim  = live ? '' : 'opacity:0.4;pointer-events:none;filter:grayscale(1)';
+
+  var h = '<div class="card">';
+  h += '<div class="card-header"><div class="card-title-wrap">';
+  h += '<div class="card-dot" style="background:' + (live ? '#5ad1b0' : 'var(--muted2)') + '"></div>';
+  h += '<div class="card-title">TESTOSTERONE PLAN</div></div>';
+  h += '<span style="font-size:10px;color:var(--muted2)">' + (live ? 'active' : 'off — advanced planner is on') + '</span>';
+  h += '</div>';
+  h += '<div style="padding:14px 16px;' + dim + '">';
+
+  // 1 — ester
+  h += '<label style="' + lSty + '">1 · Ester</label>';
+  h += '<select onchange="_tcSetSimplePlanField(\'compId\', this.value)" style="' + iSty + ';width:100%;margin-bottom:14px">';
+  h += '<option value="">Select a testosterone ester…</option>';
+  ids.forEach(function(id){
+    var cd = _tcCompInfo(id);
+    h += '<option value="' + id + '"' + (p.compId === id ? ' selected' : '') + '>' + cd.name +
+         (cd.halfLifeDays ? ' · ' + cd.halfLifeDays + ' d half-life' : '') + '</option>';
+  });
+  h += '</select>';
+
+  // 2 — dose
+  h += '<label style="' + lSty + '">2 · Dose per injection (mg)</label>';
+  h += '<input type="number" inputmode="decimal" min="0" step="any" value="' + (p.doseMg || '') + '" placeholder="125" ' +
+       'onchange="_tcSetSimplePlanField(\'doseMg\', this.value)" style="' + iSty + ';width:100%;margin-bottom:14px">';
+
+  // 3 — cadence
+  h += '<label style="' + lSty + '">3 · Injection cadence</label>';
+  h += '<select onchange="_tcSetSimplePlanField(\'cadenceDays\', this.value)" style="' + iSty + ';width:100%;margin-bottom:14px">';
+  h += '<option value="0">How often?…</option>';
+  _TC_FREQ_OPTS.forEach(function(f){
+    var sel = (Math.abs(f.days - p.cadenceDays) < 0.01) ? ' selected' : '';
+    h += '<option value="' + f.days + '"' + sel + '>' + f.label + '</option>';
+  });
+  h += '</select>';
+
+  // 4 — start date. Required: without it there is no timeline to place doses on.
+  h += '<label style="' + lSty + '">4 · First injection</label>';
+  h += '<input type="date" value="' + (p.startDate || '') + '" ' +
+       'onchange="_tcSetSimplePlanField(\'startDate\', this.value)" style="' + iSty + ';width:100%">';
+
+  if (live) {
+    if (_tcSimplePlanComplete()) {
+      var n = _tcSimplePlanInjections().length;
+      var wk = (parseDec(p.doseMg) * 7 / p.cadenceDays);
+      h += '<div style="margin-top:12px;background:rgba(90,209,176,0.08);border:1px solid rgba(90,209,176,0.25);border-radius:10px;padding:10px 12px">' +
+        '<div style="font-size:12px;color:#5ad1b0;font-weight:600">' + (Math.round(wk * 10) / 10) + ' mg/week · ' + n + ' injections projected</div>' +
+        '<div style="font-size:11px;color:var(--muted2);margin-top:3px">Shown in the plasma curve at the top of this page.</div>' +
+      '</div>';
+    } else {
+      h += '<div style="margin-top:12px;font-size:11px;color:var(--muted2);line-height:1.5">Fill in all four and the curve above will render this plan.</div>';
+    }
+  }
+  h += '</div></div>';
+  return h;
+}
+
+// The switch that decides which planner is live.
+function _tcPlannerSwitchHtml(){
+  var adv = _tcPlannerMode() === 'advanced';
+  return '<div class="card" style="margin-bottom:0">' +
+    '<div style="padding:12px 16px;display:flex;align-items:center;gap:12px">' +
+      '<label style="display:flex;align-items:center;gap:9px;cursor:pointer;flex:1">' +
+        '<input type="checkbox" ' + (adv ? 'checked' : '') + ' onchange="_tcToggleAdvancedPlanner(this)" ' +
+          'style="accent-color:#6688cc;width:17px;height:17px;cursor:pointer;flex-shrink:0">' +
+        '<span style="min-width:0">' +
+          '<span style="display:block;font-size:13px;font-weight:600;color:var(--text)">Advanced planner</span>' +
+          '<span style="display:block;font-size:11px;color:var(--muted2);line-height:1.45">' +
+            (adv ? 'Multi-compound log below is live. The simple plan above is off — its settings are kept.'
+                 : 'Off: the simple plan above drives the curve. Turn on for multi-compound schedules, blends and back-dated injections.') +
+          '</span>' +
+        '</span>' +
+      '</label>' +
+    '</div></div>';
+}
+
 // ── Planned TRT protocol → T-Calc ─────────────────────────────────────────────
 // A testosterone protocol configured in the Stack builder used to be invisible to
 // T-Calc: the two kept separate injection lists, so a user who planned TRT in
@@ -734,11 +901,19 @@ function _tcProtocolInjections(){
 // describe the same compound on the same date they are the same injection, and
 // counting both would double it.
 function _tcCurveLog(){
-  var manual = ((_tcp && _tcp.manualLog) || []).filter(function(e){
-    return e && e.date && e.doseMg && parseDec(e.doseMg) > 0;
-  }).map(function(e){
-    return (e.source === 'manual') ? e : Object.assign({}, e, { source: 'manual' });
-  });
+  // The greyed-out planner does not contribute. Its data is untouched and comes
+  // straight back when the switch is flipped, but a planner that is visibly
+  // disabled must not be silently driving the curve.
+  var manual;
+  if (_tcPlannerMode() === 'simple') {
+    manual = _tcSimplePlanInjections();
+  } else {
+    manual = ((_tcp && _tcp.manualLog) || []).filter(function(e){
+      return e && e.date && e.doseMg && parseDec(e.doseMg) > 0;
+    }).map(function(e){
+      return (e.source === 'manual') ? e : Object.assign({}, e, { source: 'manual' });
+    });
+  }
   var seen = {};
   manual.forEach(function(e){ seen[e.compId + '|' + e.date] = true; });
   var merged = manual.slice();
@@ -2707,7 +2882,16 @@ function buildTCalc() {
   }
   html += '</div>';
 
-  // ── 2. INJECTION SCHEDULE (main card — inline) ────────────────────────────────
+  // ── 2. TESTOSTERONE PLAN (simple planner) + planner switch ────────────────────
+  html += _tcSimplePlannerHtml(iSty, lSty);
+  html += _tcPlannerSwitchHtml();
+
+  // ── 3. INJECTION SCHEDULE (advanced planner — multi-compound manual log) ──────
+  // Kept in full. When the advanced switch is off it is dimmed and non-interactive
+  // rather than hidden: the entries are still the user's data, and hiding them would
+  // suggest they had been lost.
+  var _advLive = _tcPlannerMode() === 'advanced';
+  html += '<div style="' + (_advLive ? '' : 'opacity:0.4;pointer-events:none;filter:grayscale(1)') + '">';
   html += '<div class="card">';
   html += '<div class="card-header"><div class="card-title-wrap">';
   html += '<div class="card-dot" style="background:#6688cc"></div>';
@@ -2808,7 +2992,9 @@ function buildTCalc() {
   }
   html += '</div></div>';
 
-  // ── 3. BLOODWORK (collapsible list) ──────────────────────────────────────────
+  html += '</div>';   // /advanced planner wrapper
+
+  // ── 4. BLOODWORK (collapsible list) ──────────────────────────────────────────
   var _latestBw = (_tcBwEntries && _tcBwEntries.length) ? _tcBwEntries[0] : null;
   var bwSummary = _latestBw
     ? (_latestBw.free_t != null

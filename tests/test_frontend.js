@@ -2835,6 +2835,109 @@ console.log('\n── _renderDoseGuide: runtime HTML for all 22 compounds ──
   }
 }
 
+// ── T-Calc simple planner (ester → dose → cadence → curve) ───────────────────
+// T-Calc is now the single place a testosterone schedule is built. The simple
+// planner is the default way in; the advanced multi-compound log is kept and sits
+// below it, greyed out unless its switch is on. Exactly one drives the curve.
+console.log('\n── T-Calc simple planner ──────────────────────────────────');
+{
+  if(typeof G._tcPlannerMode==='function' && typeof G._tcSimplePlanInjections==='function'){
+    var _svTcp = G._tcp;
+    var _mk = function(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+    var _today = _mk(new Date());
+    var _set = function(o){ G._tcp = Object.assign({manualLog:[], simplePlan:{}, plannerMode:''}, o); };
+
+    // Mode derivation must never change what an existing user already had
+    _set({manualLog:[{compId:'enanthate',doseMg:'125',date:'2026-07-01'}]});
+    check('a profile with a manual log defaults to ADVANCED (nothing changes for them)',
+      G._tcPlannerMode() === 'advanced');
+    _set({manualLog:[]});
+    check('a fresh profile defaults to SIMPLE', G._tcPlannerMode() === 'simple');
+    _set({manualLog:[{compId:'x',doseMg:'1',date:'2026-07-01'}], plannerMode:'simple'});
+    check('an explicit choice overrides the derivation', G._tcPlannerMode() === 'simple');
+
+    // Generation: 4 inputs → a schedule
+    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:3.5,startDate:_today}});
+    var inj = G._tcSimplePlanInjections();
+    check('a complete plan generates injections', inj.length > 0);
+    check('  …every one carries the chosen ester and dose',
+      inj.every(function(e){ return e.compId==='enanthate' && parseFloat(e.doseMg)===125 && e.source==='simple'; }));
+    check('  …the first is on the chosen start date', inj[0].date === _today);
+    check('  …spaced by the chosen cadence', (function(){
+      var d0=new Date(inj[0].date), d1=new Date(inj[1].date);
+      return Math.round((d1-d0)/86400000) === 4 || Math.round((d1-d0)/86400000) === 3; // 3.5 d
+    })());
+    check('  …bounded, so a daily cadence cannot run away', inj.length <= 800);
+
+    // Incomplete plans produce nothing rather than a half-curve
+    [['compId',''],['doseMg',''],['cadenceDays',0],['startDate','']].forEach(function(f){
+      var plan = {compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today};
+      plan[f[0]] = f[1];
+      _set({plannerMode:'simple', simplePlan:plan});
+      check('an incomplete plan (no '+f[0]+') generates nothing', G._tcSimplePlanInjections().length === 0);
+    });
+    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'-5',cadenceDays:7,startDate:_today}});
+    check('a negative dose generates nothing', G._tcSimplePlanInjections().length === 0);
+
+    // Which planner drives the curve
+    if(typeof G._tcCurveLog==='function'){
+      var _svCache = G._injectionsCache; G._injectionsCache = {};
+      _set({plannerMode:'simple',
+            simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today},
+            manualLog:[{compId:'cypionate',doseMg:'200',date:'2026-01-01'}]});
+      var curve = G._tcCurveLog();
+      check('in SIMPLE mode the curve comes from the plan',
+        curve.length > 0 && curve.every(function(e){ return e.source === 'simple'; }));
+      check('  …and the greyed-out manual log does NOT contribute',
+        !curve.some(function(e){ return e.compId === 'cypionate'; }));
+
+      _set({plannerMode:'advanced',
+            simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today},
+            manualLog:[{compId:'cypionate',doseMg:'200',date:'2026-01-01'}]});
+      var curve2 = G._tcCurveLog();
+      check('in ADVANCED mode the curve comes from the manual log',
+        curve2.length === 1 && curve2[0].compId === 'cypionate');
+      check('  …and the greyed-out simple plan does NOT contribute',
+        !curve2.some(function(e){ return e.source === 'simple'; }));
+
+      // Switching modes must not destroy either side's data
+      _set({plannerMode:'advanced',
+            simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today},
+            manualLog:[{compId:'cypionate',doseMg:'200',date:'2026-01-01'}]});
+      G._tcCurveLog();
+      check('switching planners keeps BOTH sets of data intact',
+        G._tcp.simplePlan.compId === 'enanthate' && G._tcp.manualLog.length === 1);
+      G._injectionsCache = _svCache;
+    }
+    G._tcp = _svTcp;
+  }else{
+    check('_tcPlannerMode / _tcSimplePlanInjections available', false);
+  }
+
+  // The advanced planner is kept and dimmed, never deleted
+  var _tcSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
+  check('the advanced manual log UI is still present', /INJECTION SCHEDULE/.test(_tcSrc));
+  check('the advanced section is dimmed rather than hidden when off',
+    /_advLive \? '' : 'opacity:0\.4;pointer-events:none/.test(_tcSrc));
+  check('the simple planner dims the same way when advanced is on',
+    /var dim  = live \? '' : 'opacity:0\.4;pointer-events:none/.test(_tcSrc));
+  check('the planner choice is persisted to the backend profile',
+    /_tcp\.plannerMode = mode;\s*\n\s*_tcSaveProfile\(\)/.test(_tcSrc));
+  check('every simple-plan field change is persisted', /_tcp\.simplePlan\[field\] = value;\s*\n\s*_tcSaveProfile\(\)/.test(_tcSrc));
+  check('the simple planner never writes into the manual log',
+    !/_tcSimplePlanInjections[\s\S]{0,600}manualLog\.push/.test(_tcSrc));
+
+  // Wizard hand-off
+  var _stSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-stack.js'),'utf8');
+  check('the wizard TRT step hands off to T-Calc', /trt:wizStepTRTHandoff/.test(_stSrc));
+  check('the classic in-wizard TRT config is kept, one tap away',
+    /function wizStepTRT\(body,footer\)/.test(_stSrc) && /wizToggleTrtClassic/.test(_stSrc));
+  check('saving a TRT protocol routes to T-Calc and links the stack',
+    /_tcp\.targetStackId=_savedStack\.id/.test(_stSrc) && /switchTab\('tcalc'/.test(_stSrc));
+  check('a protocol with inline TRT compounds still lands on Protocols',
+    /_trtInline/.test(_stSrc));
+}
+
 // ── T-Calc is populated by the planned TRT protocol ──────────────────────────
 // A TRT protocol built in Protocols used to be invisible to T-Calc: two separate
 // injection lists, so the curve was empty until everything was re-entered by hand.
