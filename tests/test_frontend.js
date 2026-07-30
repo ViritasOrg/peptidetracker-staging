@@ -2835,6 +2835,84 @@ console.log('\n── _renderDoseGuide: runtime HTML for all 22 compounds ──
   }
 }
 
+// ── Wizard TRT step IS the planner, and can never render blank ───────────────
+// Reported: after the peptide steps, Next landed on an empty BUILD TRT screen with
+// only a Next button, and the saved protocol contained peptides only. The step now
+// renders the same four-field planner T-Calc uses, and is structurally unable to
+// render nothing: the footer is written first, the body build is wrapped, and an
+// empty result is backfilled.
+console.log('\n── Wizard TRT step ────────────────────────────────────────');
+{
+  var _mkEl = function(){
+    var o={style:{},classList:{add:function(){},remove:function(){},contains:function(){return false;}},scrollTop:0};
+    Object.defineProperty(o,'innerHTML',{get:function(){return o._h||'';},set:function(v){o._h=String(v);}});
+    return o;
+  };
+  if(typeof G.wizStepTRTHandoff==='function'){
+    var _svWiz=G._wiz;
+    G._wiz={step:0,goals:['trt'],peptides:[],trt:{enabled:true,compounds:[]},enhanced:{},editMode:false,stackIndex:-1,stackName:'t',cycle_length:12};
+    var b=_mkEl(), f=_mkEl();
+    G.wizStepTRTHandoff(b,f);
+
+    check('the TRT step renders content (was a blank screen)', b.innerHTML.length > 200,
+      'rendered '+b.innerHTML.length+' chars');
+    check('  …the ester field is there',   /1 · Ester/.test(b.innerHTML));
+    check('  …the dose field is there',    /2 · Dose per injection/.test(b.innerHTML));
+    check('  …the cadence field is there', /3 · Injection cadence/.test(b.innerHTML));
+    check('  …the start-date field is there', /4 · First injection/.test(b.innerHTML));
+    check('the footer always carries Next', /wizNext\(\)/.test(f.innerHTML));
+    check('the advanced multi-compound config is still reachable', /wizToggleTrtClassic/.test(b.innerHTML));
+
+    // Fail-safe: if a helper this step depends on blows up, the user still gets a step
+    var _svIds=G._tcAllCompIds;
+    G._tcAllCompIds=function(){ throw new Error('tab-tcalc.js unavailable'); };
+    var b2=_mkEl(), f2=_mkEl();
+    G.wizStepTRTHandoff(b2,f2);
+    check('a throw inside the step still renders something usable', b2.innerHTML.length > 40,
+      'rendered '+b2.innerHTML.length+' chars');
+    check('  …and the footer still lets the user continue', /wizNext\(\)/.test(f2.innerHTML));
+    G._tcAllCompIds=_svIds;
+
+    // The plan seeds from the live T-Calc plan so re-opening shows what is scheduled
+    if(typeof G._wizEnsureTrtPlan==='function'){
+      var _svTcp=G._tcp;
+      G._tcp=Object.assign({},_svTcp||{},{simplePlan:{compId:'cypionate',doseMg:'150',cadenceDays:7,startDate:'2026-07-01'}});
+      G._wiz.trtPlan=null;
+      var seeded=G._wizEnsureTrtPlan();
+      check('the step seeds from the existing T-Calc plan',
+        seeded.compId==='cypionate' && String(seeded.doseMg)==='150' && Number(seeded.cadenceDays)===7);
+
+      // …and from a classic TRT compound when there is no T-Calc plan yet
+      G._tcp=Object.assign({},_svTcp||{},{simplePlan:{}});
+      G._wiz.trtPlan=null;
+      G._wiz.trt={enabled:true,compounds:[{id:'enanthate',dose:'125',freqVal:1,freqUnit:'weeks'}]};
+      var seeded2=G._wizEnsureTrtPlan();
+      check('…or from a classic TRT compound, converted to days',
+        seeded2.compId==='enanthate' && String(seeded2.doseMg)==='125' && Number(seeded2.cadenceDays)===7);
+      G._tcp=_svTcp;
+    }
+
+    // Completeness gate
+    if(typeof G._wizTrtPlanComplete==='function'){
+      G._wiz.trtPlan={compId:'enanthate',doseMg:'125',cadenceDays:3.5,startDate:'2026-07-01'};
+      check('a full plan counts as complete', G._wizTrtPlanComplete() === true);
+      G._wiz.trtPlan={compId:'enanthate',doseMg:'',cadenceDays:3.5,startDate:'2026-07-01'};
+      check('a plan missing the dose is not complete', G._wizTrtPlanComplete() === false);
+    }
+    G._wiz=_svWiz;
+  }else{
+    check('wizStepTRTHandoff available', false);
+  }
+
+  var _stSrc2=fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-stack.js'),'utf8');
+  check('the footer is written before the body build (so a throw cannot strand the user)',
+    /footer\.innerHTML=[\s\S]{0,200}try\{/.test(_stSrc2));
+  check('an empty body is backfilled rather than shown blank',
+    /if\(!body\.innerHTML\|\|!body\.innerHTML\.trim\(\)\)/.test(_stSrc2));
+  check('saving commits the wizard plan into the T-Calc simple plan',
+    /_tcp\.simplePlan=\{compId:_wp\.compId/.test(_stSrc2) && /_tcp\.plannerMode='simple'/.test(_stSrc2));
+}
+
 // ── T-Calc simple planner (ester → dose → cadence → curve) ───────────────────
 // T-Calc is now the single place a testosterone schedule is built. The simple
 // planner is the default way in; the advanced multi-compound log is kept and sits
