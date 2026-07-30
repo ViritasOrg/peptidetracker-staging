@@ -2835,6 +2835,86 @@ console.log('\n── _renderDoseGuide: runtime HTML for all 22 compounds ──
   }
 }
 
+// ── Supplements are never due before they were added ─────────────────────────
+// A daily supplement returned true before the start-date check, so adding one made
+// it retroactively due on every past day — none of which could have been ticked —
+// and Today's adherence % plus the week strip counted those as missed doses.
+console.log('\n── Supplements: no retroactive back-fill ──────────────────');
+{
+  if(typeof G._suppActiveOn==='function'){
+    var _mk=function(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
+    var today=new Date(); today.setHours(0,0,0,0);
+    var yesterday=new Date(today.getTime()-86400000);
+    var lastWeek=new Date(today.getTime()-7*86400000);
+    var tomorrow=new Date(today.getTime()+86400000);
+    var daily={supp_id:'d3',freq:'daily',start_date:_mk(today)};
+
+    check('daily supplement is NOT due the day before it was added',
+      G._suppActiveOn(daily, yesterday) === false);
+    check('daily supplement is NOT due a week before it was added',
+      G._suppActiveOn(daily, lastWeek) === false);
+    check('daily supplement IS due on the day it was added',
+      G._suppActiveOn(daily, today) === true);
+    check('daily supplement IS due tomorrow',
+      G._suppActiveOn(daily, tomorrow) === true);
+
+    // The other frequencies kept their existing behaviour
+    var eod={supp_id:'x',freq:'eod',start_date:_mk(today)};
+    check('eod: not due before start', G._suppActiveOn(eod, yesterday) === false);
+    check('eod: due on start day',     G._suppActiveOn(eod, today) === true);
+    check('eod: due 2 days after',     G._suppActiveOn(eod, new Date(today.getTime()+2*86400000)) === true);
+    check('eod: not due 1 day after',  G._suppActiveOn(eod, tomorrow) === false);
+    var weekly={supp_id:'w',freq:'weekly',start_date:_mk(today)};
+    check('weekly: not due before start', G._suppActiveOn(weekly, lastWeek) === false);
+    check('weekly: due on the same weekday', G._suppActiveOn(weekly, new Date(today.getTime()+7*86400000)) === true);
+
+    // Legacy rows saved before start_date was stamped must not change behaviour —
+    // guessing a start date would hide doses the user really did take.
+    check('legacy entry with no start_date stays always-active',
+      G._suppActiveOn({supp_id:'legacy',freq:'daily'}, lastWeek) === true);
+
+    // The count Today actually renders
+    if(typeof G._supplementsForDay==='function'){
+      var _sv=G._supplements;
+      G._supplements=[daily];
+      check('_supplementsForDay excludes it on a past day', G._supplementsForDay(yesterday).length === 0);
+      check('_supplementsForDay includes it today',        G._supplementsForDay(today).length === 1);
+      G._supplements=_sv;
+    }
+    // New supplements must still be stamped on save, or the guard has nothing to read
+    var _suppSrc=fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-supplements.js'),'utf8');
+    check('a saved supplement is stamped with start_date', /start_date:\s*\(existing/.test(_suppSrc));
+  }else{
+    check('_suppActiveOn available', false);
+  }
+}
+
+// ── Macros phase is remembered ───────────────────────────────────────────────
+// It was a plain var defaulting to 'recomp' on every load, so the user's choice was
+// lost on reload. Now persisted and pushed to the backend like any other setting.
+console.log('\n── Macros phase persistence ───────────────────────────────');
+{
+  var _macSrc=fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-macros.js'),'utf8');
+  check('setMacrosPhase exists as the single write path', typeof G.setMacrosPhase === 'function');
+  check('the choice is written to localStorage', /setData\('macros-phase'/.test(_macSrc));
+  check('the choice is pushed to the backend (cache is never the source of truth)',
+    /pushPepSettingsToAgent\(\{'macros-phase'/.test(_macSrc));
+  check('syncPepSettingsFromAgent rehydrates it', /s\['macros-phase'\]/.test(rawScript));
+  if(typeof G.setMacrosPhase === 'function'){
+    var _svPhase=G._macrosPhase;
+    G.setMacrosPhase('cut');
+    check('setting the phase updates the live value', G._macrosPhase === 'cut');
+    check('the choice survives a re-read of storage', G.getData('macros-phase','') === 'cut');
+    G.setMacrosPhase('bogus');
+    check('an unknown phase is rejected, not stored', G._macrosPhase === 'cut');
+    G.setMacrosPhase('reset');
+    check('every valid phase is accepted', G._macrosPhase === 'reset');
+    G.setMacrosPhase(_svPhase || 'recomp');
+  }
+  check('the wizard step writes through the same path', /wizSetMacroPhase\(p\)\{if\(typeof setMacrosPhase/.test(
+    fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-stack.js'),'utf8')));
+}
+
 // ── Absorption constant is solved from documented tmax ───────────────────────
 // The ka table used to bucket by half-life, which put enanthate's peak at ~1.0 d
 // against a documented 1.5-3 d (Testoviron SmPC) and Nebido's at ~9.0 d against a

@@ -1,12 +1,31 @@
 /* ── MACROS ── */
-var _macrosPhase='recomp';
+// Nutrition phase. PERSISTED: it is a user choice, not a per-session default, and
+// future features are expected to read it. Written through to the backend on every
+// change (localStorage alone is only a cache — see CLAUDE.md), and rehydrated by
+// syncPepSettingsFromAgent so it survives a cache wipe or a new device.
+var _MACROS_PHASES=['reset','cut','recomp'];
+var _macrosPhase=(function(){
+  try{
+    var v=(typeof getData==='function') ? getData('macros-phase','') : '';
+    return (_MACROS_PHASES.indexOf(v)>=0) ? v : 'recomp';
+  }catch(e){ return 'recomp'; }
+})();
+// Single write path for the choice, so the macros tab and the wizard step cannot
+// diverge on how it is stored.
+function setMacrosPhase(p){
+  if(_MACROS_PHASES.indexOf(p)<0) return _macrosPhase;
+  _macrosPhase=p;
+  if(typeof setData==='function') setData('macros-phase',p);
+  if(typeof pushPepSettingsToAgent==='function') pushPepSettingsToAgent({'macros-phase':p});
+  return _macrosPhase;
+}
 var _macrosTrainKcal=0;   // measured training burn, kcal/day averaged over the last 14 days (from /training-energy)
 function loadMacros(){
   var bw=parseDec(localStorage.getItem('user_weight'))||0;
   renderMacros(bw,_macrosOnAndrogens());
   syncMacrosTrainEnergy(function(){ if(_currentTab==='macros'){ var bw2=parseDec(localStorage.getItem('user_weight'))||0; renderMacros(bw2,_macrosOnAndrogens()); } });
 }
-function switchMacrosPhase(p){_macrosPhase=p;loadMacros();}
+function switchMacrosPhase(p){setMacrosPhase(p);loadMacros();}
 // Pull the user's measured training burn from the shared backend (their OWN workout
 // logs, user-scoped server-side). Shown SEPARATELY for awareness — deliberately NOT
 // added to the calorie target. The 14-day per-calendar-day average is the steady figure.

@@ -279,15 +279,24 @@ async function deleteSupplementFromAgent(id){
 // ── day-active computation ───────────────────────────────────────────────────
 function _suppActiveOn(s, date){
   if(!s) return false;
-  var freq = s.freq || 'daily';
-  if(freq==='daily') return true;
+  var freq  = s.freq || 'daily';
   var start = s.start_date ? parseLocalDate(s.start_date) : null;
-  if(!start) return true;
   var d0 = new Date(date); d0.setHours(0,0,0,0);
-  var s0 = new Date(start); s0.setHours(0,0,0,0);
-  if(d0 < s0) return false;
-  if(freq==='eod'){ var days = Math.round((d0 - s0)/86400000); return days % 2 === 0; }
-  if(freq==='weekly'){ return d0.getDay() === s0.getDay(); }
+  if(start){
+    var s0 = new Date(start); s0.setHours(0,0,0,0);
+    // A supplement is never due before the day it was started — for EVERY frequency.
+    // 'daily' used to return true above this check, so adding a daily supplement made
+    // it retroactively due on every past day, none of which could have been ticked:
+    // Today's adherence % and the week strip both counted those as missed doses.
+    // New entries are stamped with start_date = today on save, so this is the whole fix.
+    if(d0 < s0) return false;
+    if(freq==='eod'){ var days = Math.round((d0 - s0)/86400000); return days % 2 === 0; }
+    if(freq==='weekly'){ return d0.getDay() === s0.getDay(); }
+    return true;
+  }
+  // Legacy entries saved before start_date was stamped: unchanged (always active).
+  // We cannot know when they began, and guessing a date would rewrite history the
+  // other way — hiding doses the user did take.
   return true;
 }
 
