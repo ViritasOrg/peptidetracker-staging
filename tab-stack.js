@@ -71,7 +71,7 @@ function _wizFlow(){
   return steps;
 }
 var _WIZ_STEP_LABELS={base:'TEST BASE',advise:'GUIDANCE',nutrition:'MACROS'};
-var _WIZ_RENDERERS={cycle:function(b,f){wizStep1(b,f);},goals:wizStepGoals,base:function(b,f){wizStepBase(b,f);},peptides:wizStepPeptides,check:wizStepCheck,configure:wizStepConfig,trt:wizStepTRT,advise:wizStepAdvise,enhanced:wizStepEnhanced,validate:wizStepValidate,nutrition:wizStepNutrition,review:wizStepReview};
+var _WIZ_RENDERERS={cycle:function(b,f){wizStep1(b,f);},goals:wizStepGoals,base:function(b,f){wizStepBase(b,f);},peptides:wizStepPeptides,check:wizStepCheck,configure:wizStepConfig,trt:wizStepTRTHandoff,advise:wizStepAdvise,enhanced:wizStepEnhanced,validate:wizStepValidate,nutrition:wizStepNutrition,review:wizStepReview};
 function wizRender(){
   var flow=_wizFlow();
   var idx=Math.min(_wiz.step,flow.length-1);
@@ -119,7 +119,20 @@ async function wizSave(){
   buildSchedule();
   buildStackStore();
   closeWizard();
-  switchTab('stacks',document.getElementById('tab-btn-stacks'));
+  // Hand off to T-Calc when this protocol involves testosterone: it is where the
+  // schedule is built, and the stack is assigned as the T-Calc target so the plan
+  // and the protocol stay linked. Only for a TRT protocol, and only when the user
+  // did not configure testosterone inline in the classic step.
+  var _wantsTrt = (_wiz.goals||[]).indexOf('trt')>=0;
+  var _trtInline = !!(_savedStack && _savedStack.trt && _savedStack.trt.compounds && _savedStack.trt.compounds.length);
+  if(_wantsTrt && !_trtInline && typeof _tcp!=='undefined' && _tcp && _savedStack && _savedStack.id &&
+     typeof buildTCalc==='function' && document.getElementById('tab-btn-tcalc')){
+    _tcp.targetStackId=_savedStack.id;
+    if(typeof _tcSaveProfile==='function')_tcSaveProfile();
+    switchTab('tcalc',document.getElementById('tab-btn-tcalc'));
+  } else {
+    switchTab('stacks',document.getElementById('tab-btn-stacks'));
+  }
   if(res.synced===false){
     // Data saved locally; backend sync failed — show a brief banner
     var nb=document.createElement('div');
@@ -1503,6 +1516,34 @@ function _renderTRTGuide(cId,weeklyDoseMg){
     +supraHtml+cadHtml+tiersHtml+modHtml+'</div>'+_renderSafetyNote('trt');
 }
 function _refreshTRTGuide(id,freqVal,freqUnit,dose){var el=document.getElementById('trt-guide-'+id);if(!el)return;var doseNum=parseDec(dose)||0;var freqDays=(freqUnit||'weeks')==='weeks'?(freqVal||1)*7:(freqVal||1);var weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;el.innerHTML=_renderTRTGuide(id,weeklyDoseMg);}
+// T-Calc is the single place a testosterone schedule is built, so the wizard's TRT
+// step hands off to it rather than being a second, parallel planner. The classic
+// in-wizard config is NOT removed — it is one tap away for anyone who wants a
+// multi-compound TRT block configured inline, and it is what the rest of the wizard
+// (validate, review) still reads.
+var _wizTrtClassic = false;
+function wizToggleTrtClassic(){ _wizTrtClassic = !_wizTrtClassic; wizRender(); }
+
+function wizStepTRTHandoff(body,footer){
+  if(_wizTrtClassic) return wizStepTRT(body,footer);
+  var n=((_wiz.trt&&_wiz.trt.compounds)||[]).length;
+  var html='<div style="background:rgba(102,136,204,0.08);border:1px solid rgba(102,136,204,0.28);border-radius:12px;padding:16px;margin-bottom:14px">'
+    +'<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:6px">Testosterone is planned in T-Calc</div>'
+    +'<div style="font-size:12.5px;color:var(--muted2);line-height:1.65">There is one place to build a testosterone schedule, so the curve, the '
+    +'injection dates and the dose can never disagree. Finish this protocol and you will be taken straight to T-Calc, where you pick the ester, '
+    +'dose and cadence and see the plasma curve as you set it.</div>'
+    +'</div>';
+  if(n>0){
+    html+='<div style="background:rgba(232,160,32,0.08);border-left:3px solid #e8a020;border-radius:8px;padding:11px 13px;margin-bottom:14px;font-size:12px;color:var(--muted2);line-height:1.55">'
+      +'This protocol already has <strong style="color:var(--text)">'+n+' testosterone compound'+(n===1?'':'s')+'</strong> configured here. '
+      +'They are kept and will keep generating injections — open the classic config below to change or remove them.</div>';
+  }
+  html+='<div onclick="wizToggleTrtClassic()" style="text-align:center;font-size:12px;color:var(--muted2);text-decoration:underline;cursor:pointer;padding:8px">'
+    +'Configure testosterone here instead (classic)</div>';
+  body.innerHTML=html;
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
+}
+
 function wizStepTRT(body,footer){
   var trt=_wiz.trt;
   if(!trt.compounds)trt.compounds=[];
