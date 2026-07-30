@@ -336,6 +336,18 @@ function _tcSuppFirstTaken(suppId) {
 
 // ── Compound helpers ──────────────────────────────────────────────────────────
 
+// Every ester the planners can pick from: the frontend's TRT_CAT plus whatever the
+// backend catalogue serves, de-duped. The backend is the source of truth for the PK of
+// esters present in both, so an id that appears in both must still be listed once.
+// HCG is deliberately excluded — this list feeds testosterone planning only.
+function _tcAllCompIds() {
+  var ids = [];
+  ((typeof TRT_CAT !== 'undefined') ? TRT_CAT.map(function(c){ return c.id; }) : [])
+    .concat(_tcExtraCatalog.map(function(c){ return c.id; }))
+    .forEach(function(id){ if (id && ids.indexOf(id) === -1) ids.push(id); });
+  return ids;
+}
+
 function _tcCompInfo(compId) {
   if (compId === 'hcg') {
     return {id:'hcg', name:'HCG', dot:'#44cc88', halfLifeDays:2.5, halfLifeStr:'~60 hours'};
