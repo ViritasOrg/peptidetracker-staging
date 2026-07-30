@@ -687,6 +687,76 @@ function _tcManualComps() {
   return ids;
 }
 
+// ── Planned TRT protocol → T-Calc ─────────────────────────────────────────────
+// A testosterone protocol configured in the Stack builder used to be invisible to
+// T-Calc: the two kept separate injection lists, so a user who planned TRT in
+// Protocols saw an empty curve here and had to re-enter everything by hand.
+//
+// The stack already pushes fully-specified entries to /injections (compound_id,
+// date, dose, unit, tier), so no new data is needed — T-Calc just has to read them.
+//
+// ⚠️ The one trap, and the reason this is filtered rather than merged wholesale:
+// T-Calc's own "push log to schedule" writes ITS entries back into the same store
+// under cycle_id 'tcalc' / 'tcalc:<stackId>'. Those are copies of manualLog. Pulling
+// them back in would count every T-Calc injection twice and double the curve.
+function _tcIsTcalcOwned(cycleId){
+  var c = String(cycleId || '');
+  return c === 'tcalc' || c.indexOf('tcalc:') === 0;
+}
+
+// TRT injections that came from a stack's own protocol config. Excludes T-Calc's own
+// round-tripped entries, inactive entries, and any dose whose unit is not mg — a
+// silent unit mix-up here would corrupt the curve, so unknown units are dropped
+// rather than assumed.
+function _tcProtocolInjections(){
+  if (typeof _injectionsCache === 'undefined' || !_injectionsCache) return [];
+  var out = [];
+  Object.keys(_injectionsCache).forEach(function(dateKeyStr){
+    (_injectionsCache[dateKeyStr] || []).forEach(function(e){
+      if (!e || e.tier !== 'trt') return;
+      if (e.active === false) return;
+      if (_tcIsTcalcOwned(e.cycle_id)) return;
+      var unit = (e.unit || 'mg').toLowerCase();
+      if (unit !== 'mg') return;
+      var mg = parseDec(e.dose);
+      if (!(mg > 0)) return;
+      out.push({ compId: e.compound_id, doseMg: String(mg), date: e.date, source: 'protocol' });
+    });
+  });
+  return out;
+}
+
+// The injection list the CURVE is built from: the manual log plus any planned
+// protocol TRT injections, de-duplicated by (compound, date).
+//
+// MANUAL WINS on conflict. A manual entry is a recorded event — the user typed a
+// dose they actually took; a protocol entry is a plan for that day. Where both
+// describe the same compound on the same date they are the same injection, and
+// counting both would double it.
+function _tcCurveLog(){
+  var manual = ((_tcp && _tcp.manualLog) || []).filter(function(e){
+    return e && e.date && e.doseMg && parseDec(e.doseMg) > 0;
+  }).map(function(e){
+    return (e.source === 'manual') ? e : Object.assign({}, e, { source: 'manual' });
+  });
+  var seen = {};
+  manual.forEach(function(e){ seen[e.compId + '|' + e.date] = true; });
+  var merged = manual.slice();
+  _tcProtocolInjections().forEach(function(e){
+    var k = e.compId + '|' + e.date;
+    if (seen[k]) return;              // manual wins
+    seen[k] = true;
+    merged.push(e);
+  });
+  merged.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
+  return merged;
+}
+
+// How many entries in the curve came from a planned protocol rather than the log.
+function _tcProtocolCount(){
+  return _tcCurveLog().filter(function(e){ return e.source === 'protocol'; }).length;
+}
+
 function _tcOpenManualLog() {
   var log   = _tcp.manualLog || [];
   var comps = _tcManualComps();
@@ -734,9 +804,21 @@ function _tcOpenManualLog() {
     html += '<div style="text-align:center;padding:32px 0;color:#444;font-size:13px">No injections logged yet.<br><span style="font-size:12px;color:#2a2a2a">Tap + ADD INJECTION to start.</span></div>';
   }
 
+  // Injections the curve is using that came from a planned TRT protocol rather than
+  // this log. They are NOT listed as editable rows — the protocol owns them, and
+  // editing them here would fork the two. Surfaced so the curve never contains
+  // doses the user cannot account for.
+  var _protoN = _tcProtocolCount();
+  if (_protoN > 0) {
+    html += '<div style="background:rgba(102,136,204,0.08);border:1px solid rgba(102,136,204,0.25);border-radius:10px;padding:11px 13px;margin-bottom:12px">' +
+      '<div style="font-size:12px;color:#6688cc;font-weight:600">+ ' + _protoN + ' injection' + (_protoN === 1 ? '' : 's') + ' from your TRT protocol</div>' +
+      '<div style="font-size:11px;color:var(--muted2);margin-top:3px;line-height:1.45">Included in the curve below. Edit them in Protocols — a dose you log here for the same compound and day overrides the plan.</div>' +
+    '</div>';
+  }
+
   html += '<button onclick="_tcAddManualEntry()" style="width:100%;background:#0d0d0d;border:1px dashed #2a2a2a;border-radius:10px;color:#555;font-size:13px;font-weight:700;padding:13px;cursor:pointer;font-family:inherit;letter-spacing:0.5px;margin-bottom:20px">+ ADD INJECTION</button>';
 
-  var validLog = log.filter(function(e){ return e.date && e.doseMg && parseDec(e.doseMg) > 0; });
+  var validLog = _tcCurveLog();
   if (validLog.length > 0) {
     html += '<div style="background:#0a0a0a;border:1px solid #1e1e1e;border-radius:14px;padding:14px">' +
       '<div style="font-size:10px;color:#444;letter-spacing:1.8px;font-weight:700;margin-bottom:10px">PLASMA CURVE</div>' +
@@ -998,7 +1080,7 @@ function _tcShowSeriesDetail(sid) {
 function _tcSetChartZoom(z) {
   _tcChartZoom = z;
   _tcChartPanOffset = 0;
-  var validLog = (_tcp && _tcp.manualLog) ? _tcp.manualLog.filter(function(e){ return e.date && e.doseMg && parseDec(e.doseMg) > 0; }) : [];
+  var validLog = _tcCurveLog();
   _tcDrawManualChart('tc-main-chart', validLog, z);
   _tcAttachPanListeners(document.getElementById('tc-main-chart'));
   ['today','week','month','whole'].forEach(function(zz) {
@@ -1020,7 +1102,7 @@ function _tcToggleAvgLine(el) {
   var v = el ? !!el.checked : !_tcShowAvg();
   setData('tc-avg-line', v);
   if (typeof pushPepSettingsToAgent === 'function') pushPepSettingsToAgent({ 'tc-avg-line': v });
-  var validLog = (_tcp && _tcp.manualLog) ? _tcp.manualLog.filter(function(e){ return e.date && e.doseMg && parseDec(e.doseMg) > 0; }) : [];
+  var validLog = _tcCurveLog();
   _tcDrawManualChart('tc-main-chart', validLog, _tcChartZoom);
 }
 
@@ -1119,7 +1201,7 @@ function _tcSetManualField(idx, field, val) {
     buildTCalc();
     _tcSyncLogToBackend();
   } else {
-    var validLog = _tcp.manualLog.filter(function(e){ return e.date && e.doseMg && parseDec(e.doseMg) > 0; });
+    var validLog = _tcCurveLog();
     if (validLog.length > 0 && document.getElementById('tc-main-chart')) {
       _tcDrawManualChart('tc-main-chart', validLog, _tcChartZoom);
     } else {

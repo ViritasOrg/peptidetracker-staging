@@ -2835,6 +2835,95 @@ console.log('\n── _renderDoseGuide: runtime HTML for all 22 compounds ──
   }
 }
 
+// ── T-Calc is populated by the planned TRT protocol ──────────────────────────
+// A TRT protocol built in Protocols used to be invisible to T-Calc: two separate
+// injection lists, so the curve was empty until everything was re-entered by hand.
+// The curve now merges the manual log with the stack's planned TRT injections.
+// MANUAL WINS on conflict — a logged dose is a recorded event, a protocol entry is
+// a plan for that day; counting both would double the injection.
+console.log('\n── T-Calc ← planned TRT protocol ──────────────────────────');
+{
+  if(typeof G._tcCurveLog==='function' && typeof G._tcProtocolInjections==='function'){
+    var _svCache = G._injectionsCache, _svTcp = G._tcp;
+    var _setup = function(cache, manual){
+      G._injectionsCache = cache;
+      G._tcp = Object.assign({}, _svTcp || {}, {manualLog: manual});
+    };
+    var P = function(o){ return Object.assign({tier:'trt',active:true,unit:'mg',cycle_id:'stack1'}, o); };
+
+    _setup({'2026-07-01':[P({compound_id:'enanthate',date:'2026-07-01',dose:'125'})]}, []);
+    check('a planned TRT injection reaches the curve', G._tcCurveLog().length === 1);
+    check('  …carrying compound, dose and date', (function(){
+      var e=G._tcCurveLog()[0];
+      return e.compId==='enanthate' && parseFloat(e.doseMg)===125 && e.date==='2026-07-01' && e.source==='protocol';
+    })());
+
+    // Manual wins where both describe the same compound on the same day
+    _setup({'2026-07-01':[P({compound_id:'enanthate',date:'2026-07-01',dose:'125'})]},
+           [{compId:'enanthate',doseMg:'150',date:'2026-07-01'}]);
+    var merged = G._tcCurveLog();
+    check('same compound + day is NOT double-counted', merged.length === 1);
+    check('the manually logged dose wins over the plan',
+      parseFloat(merged[0].doseMg) === 150 && merged[0].source === 'manual');
+
+    // Different day → both kept
+    _setup({'2026-07-08':[P({compound_id:'enanthate',date:'2026-07-08',dose:'125'})]},
+           [{compId:'enanthate',doseMg:'150',date:'2026-07-01'}]);
+    check('a plan on a different day is added alongside the log', G._tcCurveLog().length === 2);
+    check('the merged log is sorted by date', (function(){
+      var l=G._tcCurveLog(); return l[0].date <= l[1].date;
+    })());
+
+    // THE DOUBLE-COUNT TRAP: T-Calc pushes its own log into /injections under
+    // cycle_id 'tcalc' / 'tcalc:<stackId>'. Reading those back would count every
+    // T-Calc injection twice.
+    _setup({'2026-07-01':[P({compound_id:'enanthate',date:'2026-07-01',dose:'125',cycle_id:'tcalc'})]},
+           [{compId:'enanthate',doseMg:'125',date:'2026-07-01'}]);
+    check('T-Calc\'s own pushed entries are not read back (no self-double-count)',
+      G._tcCurveLog().length === 1 && G._tcProtocolInjections().length === 0);
+    _setup({'2026-07-02':[P({compound_id:'enanthate',date:'2026-07-02',dose:'125',cycle_id:'tcalc:stack9'})]}, []);
+    check('the tcalc:<stackId> namespace is excluded too', G._tcProtocolInjections().length === 0);
+
+    // Only TRT, only active, only mg — an unknown unit must be dropped, not assumed
+    _setup({'2026-07-01':[
+      P({compound_id:'bpc157',date:'2026-07-01',dose:'250',tier:'peptide'}),
+      P({compound_id:'deca',date:'2026-07-01',dose:'200',tier:'enhanced'}),
+      P({compound_id:'enanthate',date:'2026-07-01',dose:'125',active:false}),
+      P({compound_id:'cypionate',date:'2026-07-01',dose:'1',unit:'ml'}),
+      P({compound_id:'testoviron',date:'2026-07-01',dose:'0'})
+    ]}, []);
+    check('non-TRT tiers, inactive entries, non-mg units and zero doses are all excluded',
+      G._tcProtocolInjections().length === 0, JSON.stringify(G._tcProtocolInjections()));
+
+    // Future-dated plan entries are kept — that is the point of a projection
+    var _future = new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+    var _fc = {}; _fc[_future] = [P({compound_id:'enanthate',date:_future,dose:'125'})];
+    _setup(_fc, []);
+    check('future planned injections are included so the curve projects forward',
+      G._tcCurveLog().length === 1);
+
+    // The manual log itself must not be mutated by any of this
+    var _manual = [{compId:'enanthate',doseMg:'150',date:'2026-07-01'}];
+    _setup({'2026-07-08':[P({compound_id:'enanthate',date:'2026-07-08',dose:'125'})]}, _manual);
+    G._tcCurveLog();
+    check('the manual log is never written to by the merge',
+      G._tcp.manualLog.length === 1 && G._tcp.manualLog[0].doseMg === '150');
+
+    check('_tcProtocolCount reports what the banner shows',
+      G._tcProtocolCount() === 1);
+
+    // Empty / missing cache must not throw
+    _setup({}, []);
+    check('no protocol and no log → empty curve, no throw', G._tcCurveLog().length === 0);
+    G._injectionsCache = undefined;
+    check('a missing injections cache is handled', G._tcProtocolInjections().length === 0);
+
+    G._injectionsCache = _svCache; G._tcp = _svTcp;
+  }else{
+    check('_tcCurveLog / _tcProtocolInjections available', false);
+  }
+}
+
 // ── Supplements are never due before they were added ─────────────────────────
 // A daily supplement returned true before the start-date check, so adding one made
 // it retroactively due on every past day — none of which could have been ticked —
