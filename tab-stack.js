@@ -2155,7 +2155,7 @@ function wizStepNutrition(body,footer){
   if(typeof syncMacrosTrainEnergy==='function'){ var _pt=(typeof _macrosTrainKcal!=='undefined'?_macrosTrainKcal:0); syncMacrosTrainEnergy(function(){ if(_macrosTrainKcal!==_pt && _wiz && _wizFlow()[_wiz.step]==='nutrition') wizRender(); }); }
   footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
 }
-function wizSetMacroPhase(p){_macrosPhase=p;wizRender();}
+function wizSetMacroPhase(p){if(typeof setMacrosPhase==='function')setMacrosPhase(p);else _macrosPhase=p;wizRender();}
 function wizStepReview(body,footer){
   var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
   var hasErrors=checkStack(pepObjs).some(function(i){return i.level==='err';});
