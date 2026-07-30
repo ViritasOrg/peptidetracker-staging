@@ -2835,6 +2835,67 @@ console.log('\n── _renderDoseGuide: runtime HTML for all 22 compounds ──
   }
 }
 
+// ── Absorption constant is solved from documented tmax ───────────────────────
+// The ka table used to bucket by half-life, which put enanthate's peak at ~1.0 d
+// against a documented 1.5-3 d (Testoviron SmPC) and Nebido's at ~9.0 d against a
+// documented median of 7 d (AVEED §12.3). Where the backend serves a documented
+// tmax, ka is now solved so the modelled peak lands where the document says.
+console.log('\n── ka solved from documented tmax ─────────────────────────');
+{
+  if(typeof G._tcKa==='function' && typeof G._tcKaFromTmax==='function' && typeof G._tcPkConc==='function'){
+    var _peakDay = function(ka, ke){
+      var best=0, bv=-1;
+      for(var t=0;t<=120;t+=0.01){ var v=G._tcPkConc(100,ka,ke,t); if(v>bv){bv=v;best=t;} }
+      return best;
+    };
+    // [label, halfLife, documented tmax, observed window]
+    [['enanthate',4.5,2.25,[1.5,3.0]],
+     ['nebido',56,7.0,[4,42]],
+     ['sustanon',8.5,1.5,[1,2]]].forEach(function(c){
+      var name=c[0], hl=c[1], tm=c[2], win=c[3];
+      var ke=Math.LN2/hl, ka=G._tcKa(hl,tm), peak=_peakDay(ka,ke);
+      check('ka solved for '+name+' peaks at its documented tmax ('+tm+' d)',
+        Math.abs(peak-tm) < 0.05, 'peaks at '+peak.toFixed(2)+' d');
+      check('ka solved for '+name+' peaks inside the observed window',
+        peak >= win[0]-0.05 && peak <= win[1]+0.05, 'peak '+peak.toFixed(2)+' vs '+win.join('-'));
+    });
+
+    // The specific regression: enanthate used to peak a day early
+    check('enanthate no longer peaks ~1 d early (was ka 3.0 → 1.04 d)',
+      _peakDay(G._tcKa(4.5,2.25), Math.LN2/4.5) > 1.4);
+    check('nebido no longer peaks ~2 d late (was ka 0.40 → 8.97 d)',
+      _peakDay(G._tcKa(56,7.0), Math.LN2/56) < 8.0);
+
+    // Compounds whose labels state NO tmax must be untouched by this change
+    check('cypionate (no documented tmax) keeps its bucket ka', G._tcKa(8) === 3.00 && G._tcKa(8,0) === 3.00);
+    check('propionate (no documented tmax) keeps its bucket ka', G._tcKa(0.8) === 8.00 && G._tcKa(0.8,0) === 8.00);
+    check('gel (no documented tmax) keeps its bucket ka',        G._tcKa(1.5,0) === 8.00);
+
+    // Guards: bad or impossible input must fall back, never fit something else
+    check('tmax beyond the model maximum (1/ke) is rejected', G._tcKaFromTmax(4.5, 99) === null);
+    check('impossible tmax falls back to the bucket',         G._tcKa(4.5, 99) === 3.00);
+    check('zero / negative / NaN tmax falls back',
+      G._tcKa(4.5,0)===3.00 && G._tcKa(4.5,-1)===3.00 && G._tcKa(4.5,NaN)===3.00);
+    check('solved ka always exceeds ke (absorption faster than elimination)',
+      G._tcKaFromTmax(4.5,2.25) > Math.LN2/4.5 && G._tcKaFromTmax(56,7) > Math.LN2/56);
+    check('_tcTmax round-trips a solved ka',
+      Math.abs(G._tcTmax(G._tcKaFromTmax(8.5,1.5), Math.LN2/8.5) - 1.5) < 1e-6);
+
+    // The backend entry's tmax must actually reach the model
+    var _sv = G._tcExtraCatalog;
+    G._tcExtraCatalog = [{id:'enanthate',name:'Testosterone Enanthate',dot:'#e05050',
+                          halfLifeDays:4.5,halfLife:'~4.5 days',tmaxDays:2.25}];
+    check('backend tmaxDays reaches _tcCompInfo', G._tcCompInfo('enanthate').tmaxDays === 2.25);
+    G._tcExtraCatalog = [{id:'enanthate',name:'Testosterone Enanthate',dot:'#e05050',
+                          halfLifeDays:4.5,halfLife:'~4.5 days'}];
+    check('absent tmaxDays is 0, not undefined (falls back cleanly)',
+      G._tcCompInfo('enanthate').tmaxDays === 0);
+    G._tcExtraCatalog = _sv;
+  }else{
+    check('_tcKa / _tcKaFromTmax / _tcPkConc available', false);
+  }
+}
+
 // ── Propionate half-life correction (2026-07-29) ─────────────────────────────
 // Propionate ran at 2 d with no source, against a published IM half-life of
 // 0.8 d (~20 h) — the shortest-acting ester. Corrected on an explicit decision.
