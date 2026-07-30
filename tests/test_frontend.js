@@ -3005,6 +3005,71 @@ console.log('\n── T-Calc simple planner ────────────
   check('the simple planner never writes into the manual log',
     !/_tcSimplePlanInjections[\s\S]{0,600}manualLog\.push/.test(_tcSrc));
 
+  // Regression (2026-07-30): the ester dropdown rendered with only its placeholder.
+  // _tcAllCompIds() was referenced by three call sites but never actually defined —
+  // it existed only in a comment. Every call site guards with typeof===>'function',
+  // so the missing function degraded silently to an empty list instead of throwing.
+  check('_tcAllCompIds is actually defined', typeof G._tcAllCompIds === 'function');
+  if (typeof G._tcAllCompIds === 'function') {
+    var _allIds = G._tcAllCompIds();
+    check('  …and returns the ester catalogue, not an empty list', _allIds.length > 0,
+      'got ' + _allIds.length + ' ids');
+    check('  …including the frontend TRT_CAT esters',
+      (G.TRT_CAT || []).every(function(c){ return _allIds.indexOf(c.id) !== -1; }));
+    check('  …with no id listed twice',
+      _allIds.length === _allIds.filter(function(id, i){ return _allIds.indexOf(id) === i; }).length);
+    check('  …and no HCG (this list is testosterone planning only)',
+      _allIds.indexOf('hcg') === -1);
+
+    // An ester the backend serves but TRT_CAT does not must still be offered, and an
+    // ester served by both must appear exactly once.
+    var _svExtra = G._tcExtraCatalog;
+    var _dupId = (G.TRT_CAT && G.TRT_CAT[0]) ? G.TRT_CAT[0].id : 'enanthate';
+    G._tcExtraCatalog = [{id:_dupId, name:'Dup', halfLifeDays:5},
+                         {id:'__backend_only__', name:'Backend Only', halfLifeDays:9}];
+    var _mixed = G._tcAllCompIds();
+    check('  …a backend-only ester is offered', _mixed.indexOf('__backend_only__') !== -1);
+    check('  …an ester in both catalogues is listed once',
+      _mixed.filter(function(id){ return id === _dupId; }).length === 1);
+    G._tcExtraCatalog = _svExtra;
+  }
+
+  // The user-visible symptom: real <option> rows in the ester select, not just the
+  // "Select a testosterone ester…" placeholder.
+  if (typeof G._tcSimplePlannerHtml === 'function') {
+    var _svTcp2 = G._tcp;
+    G._tcp = {manualLog:[], simplePlan:{}, plannerMode:'simple'};
+    var _plannerHtml = G._tcSimplePlannerHtml('', '');
+    // Scope to the ester <select> only — the cadence select below it also has options,
+    // so matching the whole card would pass even with an empty ester list.
+    var _esterBlock = _plannerHtml.slice(_plannerHtml.indexOf('1 · Ester'),
+                                         _plannerHtml.indexOf('2 · Dose per injection'));
+    var _opts = (_esterBlock.match(/<option value="(?!")[^"]+"/g) || []);
+    check('the ester dropdown renders real options (was placeholder-only)',
+      _opts.length > 0, 'rendered ' + _opts.length + ' esters');
+    check('  …each names its compound', /<option value="[^"]+"[^>]*>[^<]+</.test(_esterBlock));
+    G._tcp = _svTcp2;
+  }
+
+  // Catch-all for the bug class: a `typeof X === 'function'` guard around a helper
+  // that does not exist anywhere fails open and silently renders nothing.
+  {
+    var _dir = path.dirname(path.resolve(htmlPath));
+    var _allSrc = ['tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js','tab-schedule.js',
+                   'tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js',
+                   'tab-thist.js','tab-labs.js','tab-supplements.js']
+      .map(function(f){ try { return fs.readFileSync(path.join(_dir,f),'utf8'); } catch(e){ return ''; } })
+      .join('\n') + '\n' + html;
+    var _guarded = [], _m, _re = /typeof\s+(_tc[A-Za-z0-9_]*|_wiz[A-Za-z0-9_]*)\s*===?\s*'function'/g;
+    while ((_m = _re.exec(_allSrc))) { if (_guarded.indexOf(_m[1]) === -1) _guarded.push(_m[1]); }
+    var _undef = _guarded.filter(function(n){
+      return !new RegExp('function\\s+' + n + '\\s*\\(').test(_allSrc) &&
+             !new RegExp('(var|let|const)\\s+' + n + '\\s*=\\s*function').test(_allSrc);
+    });
+    check('every typeof-guarded T-Calc/wizard helper actually exists',
+      _undef.length === 0, _undef.length ? 'missing: ' + _undef.join(', ') : 'checked ' + _guarded.length);
+  }
+
   // Wizard hand-off
   var _stSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-stack.js'),'utf8');
   check('the wizard TRT step hands off to T-Calc', /trt:wizStepTRTHandoff/.test(_stSrc));
