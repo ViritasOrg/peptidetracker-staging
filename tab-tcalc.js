@@ -352,7 +352,11 @@ function _tcCompInfo(compId) {
       halfLifeStr:     extra.halfLife || '',
       bioavailability: extra.bioavailability || 1,
       maxDailyDoseMg:  extra.maxDailyDoseMg || null,
-      usageNote:       extra.usageNote || ''
+      usageNote:       extra.usageNote || '',
+      // Documented time-to-peak, where the compound's label/SmPC states one. Drives the
+      // absorption constant via _tcKa — see that function. Absent for compounds whose
+      // labels state no tmax (cypionate, propionate, gel), which keep the bucket default.
+      tmaxDays:        extra.tmaxDays || 0
     };
   }
   var cat   = (typeof TRT_CAT   !== 'undefined') ? TRT_CAT.find(function(x){ return x.id === compId; })   : null;
@@ -442,9 +446,49 @@ function _tcNudgeLabelY(y, used, gap, lo, hi) {
 
 // ── PK helpers ────────────────────────────────────────────────────────────────
 
-function _tcKa(halfLifeDays) {
-  // Absorption rate constant (1/day) for 1-compartment depot model.
-  // Ka values calibrated to known Tmax per ester class:
+// Time to peak for a 1-compartment depot: tmax = ln(ka/ke)/(ka-ke). Exported for tests.
+function _tcTmax(ka, ke) {
+  if (!(ka > 0) || !(ke > 0) || Math.abs(ka - ke) < 1e-12) return 1 / ke;
+  return Math.log(ka / ke) / (ka - ke);
+}
+
+// Solve the absorption constant that reproduces an OBSERVED tmax, given the half-life.
+// Returns null when no ka > ke can produce that tmax — tmax is bounded above by 1/ke
+// (= halfLife/ln2), so a documented tmax beyond it is inconsistent with this model and
+// must fall back rather than silently fit something else.
+function _tcKaFromTmax(halfLifeDays, tmaxDays) {
+  if (!(halfLifeDays > 0) || !(tmaxDays > 0)) return null;
+  var ke = Math.LN2 / halfLifeDays;
+  if (tmaxDays >= 1 / ke) return null;
+  // tmax decreases monotonically in ka for ka > ke, so bisect on that branch.
+  var lo = ke * 1.0000001, hi = 500;
+  if (_tcTmax(hi, ke) > tmaxDays) return null;      // even a huge ka peaks too late
+  for (var i = 0; i < 80; i++) {
+    var mid = (lo + hi) / 2;
+    if (_tcTmax(mid, ke) > tmaxDays) lo = mid; else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+function _tcKa(halfLifeDays, tmaxDays) {
+  // Absorption rate constant (1/day) for the 1-compartment depot model.
+  //
+  // PREFERRED PATH: when the backend serves a documented tmax for the compound
+  // (tmaxDays, sourced from its label/SmPC), ka is SOLVED so the modelled peak lands
+  // where the document says it does. That makes the curve's shape evidence-based in the
+  // same way halfLifeDays makes its decay evidence-based, instead of inheriting whichever
+  // bucket the half-life happened to fall in.
+  //
+  // Documented tmax values (all primary-verified, see the backend catalogue):
+  //   enanthate/testoviron 1.5-3 d (Testoviron SmPC) · nebido median 7 d (AVEED §12.3)
+  //   sustanon 24-48 h (Sustanon SmPC)
+  // The old buckets put enanthate's peak at ~1.0 d against a documented 1.5-3 d, and
+  // nebido's at ~9.0 d against a documented median of 7 d.
+  var solved = _tcKaFromTmax(halfLifeDays, tmaxDays);
+  if (solved !== null) return solved;
+
+  // FALLBACK, for compounds with no documented tmax (cypionate, propionate, gel — their
+  // labels state none). Bucketed by half-life, as before.
   //   Nebido (hl≥20d) → tmax≈7d | Cypionate (hl≥9d) → tmax≈2d
   //   Enanthate (hl≥3d) → tmax≈1d | Propionate (hl≥0.5d) → tmax≈0.4d | Gel → near-immediate
   // The propionate boundary is 0.5 d, not 1 d: propionate's half-life was corrected to
@@ -1176,7 +1220,7 @@ function _tcFreeTSeries(sorted, hooks) {
     for (var si = 0; si < series.length; si++) {
       var _hl = series[si][0], arr = series[si][1];
       var ke  = Math.LN2 / _hl;
-      var ka  = _tcKa(_hl);
+      var ka  = _tcKa(_hl, cd.tmaxDays);
       for (var t = injectDay; t <= totalDays; t++) {
         arr[t] += _tcPkConc(absorbed, ka, ke, t - injectDay);
       }
@@ -1276,7 +1320,7 @@ function _tcFreeTSeries(sorted, hooks) {
           var wsHl    = wsCd.halfLifeDays || 1;
           var wsBioav = wsCd.bioavailability || 1;
           var wsKe    = Math.LN2 / wsHl;
-          var wsKa    = _tcKa(wsHl);
+          var wsKa    = _tcKa(wsHl, wsCd.tmaxDays);
           var wsIv    = wsHl >= 20 ? 84 : wsHl >= 9 ? 14 : wsHl >= 3 ? 3.5 : 1;
           var wsCompFrac   = _wsGroups[wsId] / _wsTotalAbsMg;
           var wsCompWk     = _curDose * wsCompFrac;
@@ -1336,7 +1380,7 @@ function _tcFreeTSeries(sorted, hooks) {
             if (e.date !== _bwDateStr2) return;
             var _bwcd = _tcCompInfo(e.compId);
             var _bwke = Math.LN2 / (_bwcd.halfLifeDays || 1);
-            var _bwka = _tcKa(_bwcd.halfLifeDays || 1);
+            var _bwka = _tcKa(_bwcd.halfLifeDays || 1, _bwcd.tmaxDays);
             var _bwabs = parseDec(e.doseMg) * (_bwcd.bioavailability || 1);
             for (var _bwt = 0; _bwt <= totalDays; _bwt++) {
               _bwDayArr[_bwt] += _tcPkConc(_bwabs, _bwka, _bwke, _bwt);
@@ -2164,7 +2208,7 @@ function _tcBuildSchedule(plan) {
       dose:         Math.round(dose * bioav * 10) / 10,  // bioavailable dose drives PK curve
       compId:       cp.compId,
       halfLifeDays: hl,
-      ka:           _tcKa(hl),
+      ka:           _tcKa(hl, cp.cd.tmaxDays),
       dot:          cp.cd.dot,
       name:         cp.cd.name,
       dosePerInj:   cp.dosePerInj                        // applied dose shown in schedule
