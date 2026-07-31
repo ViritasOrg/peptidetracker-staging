@@ -80,7 +80,7 @@
         </div>
         <div>
           <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Height (cm)</div>
-          <div style="display:flex;gap:6px"><input id="bc-height-in" type="number" step="1" placeholder="180" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:14px;flex:1;font-family:inherit;outline:none;width:0"><button onclick="saveBodyMeasurement('height')" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-weight:700;cursor:pointer;font-size:12px;font-family:inherit">Save</button></div>
+          <div style="display:flex;gap:6px"><input id="bc-height-in" type="number" inputmode="numeric" step="1" placeholder="180" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:14px;flex:1;font-family:inherit;outline:none;width:0"><button onclick="saveBodyMeasurement('height')" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-weight:700;cursor:pointer;font-size:12px;font-family:inherit">Save</button></div>
         </div>
       </div>
       <div>
@@ -89,7 +89,7 @@
       </div>
       <div style="margin-top:10px;max-width:calc(50% - 5px)">
         <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Age</div>
-        <div style="display:flex;gap:6px"><input id="bc-age-in" type="number" min="18" max="100" placeholder="e.g. 35" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:14px;flex:1;font-family:inherit;outline:none;width:0"><button onclick="saveBodyMeasurement('age')" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-weight:700;cursor:pointer;font-size:12px;font-family:inherit">Save</button></div>
+        <div style="display:flex;gap:6px"><input id="bc-age-in" type="number" inputmode="numeric" min="18" max="100" placeholder="e.g. 35" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:14px;flex:1;font-family:inherit;outline:none;width:0"><button onclick="saveBodyMeasurement('age')" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-weight:700;cursor:pointer;font-size:12px;font-family:inherit">Save</button></div>
       </div>
     </div>
     <div class="card">
@@ -1272,7 +1272,7 @@ function _renderCartModal(){
   h+='<div style="padding:16px 20px 20px">';
   h+='<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:14px">'+_esc(st.name||'Protocol '+(_cartStackIdx+1))+'</div>';
   h+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;font-size:12px;color:var(--muted2)">';
-  h+='Cycle length: <input type="number" min="1" max="52" value="'+weeks+'" oninput="_cartWeeks=Math.max(1,parseInt(this.value)||12);_renderCartModal()" style="'+ins+';width:64px;text-align:center"> weeks';
+  h+='Cycle length: <input type="number" inputmode="numeric" min="1" max="52" value="'+weeks+'" oninput="_cartWeeks=Math.max(1,parseInt(this.value)||12);_renderCartModal()" style="'+ins+';width:64px;text-align:center"> weeks';
   h+='</div>';
   var peptides=(st.peptides||[]).filter(function(p){return p.active!==false&&(p.dose_am||p.dose_pm);});
   var hasItems=false;
@@ -1489,11 +1489,11 @@ function _obHtml2(){
     +'<button class="ob-gender-btn'+(g==='female'?' ob-sel':'')+'" onclick="obSetSex(\'female\')">♀ Female</button>'
     +'</div></div>'
     +'<div class="ob-field"><label>Height (cm)</label>'
-    +'<input type="number" placeholder="180" min="100" max="250" value="'+(_obData.height||'')+'" oninput="_obData.height=this.value"></div>'
+    +'<input type="number" inputmode="numeric" placeholder="180" min="100" max="250" value="'+(_obData.height||'')+'" oninput="_obData.height=this.value"></div>'
     +'<div class="ob-field"><label>Body Weight (kg)</label>'
     +'<input type="text" inputmode="decimal" placeholder="85" value="'+(_obData.weight||'')+'" oninput="_obData.weight=this.value"></div>'
     +'<div class="ob-field"><label>Age</label>'
-    +'<input type="number" placeholder="35" min="16" max="99" value="'+(_obData.age||'')+'" oninput="_obData.age=this.value"></div>'
+    +'<input type="number" inputmode="numeric" placeholder="35" min="16" max="99" value="'+(_obData.age||'')+'" oninput="_obData.age=this.value"></div>'
     +'<div style="font-size:12px;color:var(--muted);margin-top:-6px;line-height:1.5">All fields optional — skip if you prefer.</div>';
 }
 function obSelectTheme(id){_obData.theme=id;applyTheme(id);obRender();}

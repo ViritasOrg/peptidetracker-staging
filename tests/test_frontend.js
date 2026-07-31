@@ -6994,6 +6994,54 @@ console.log('\n── Dose inputs: numeric keypad ──────────
   G.ENHANCEMENT_COMPOUNDS = _prevEnhCat;
 }
 
+// ── Every numeric field raises a numeric keypad, app-wide ─────────────────────
+// Reported 2026-07-31: the onboarding Age field opened iOS's numbers-and-
+// punctuation keyboard (digits plus - / : ; ( ) £ & @ " and an ABC key) rather
+// than a plain keypad. That layout is what bare type="number" gets on iOS —
+// inputmode is what actually selects the keypad, and 14 number inputs had none.
+// Decimal-capable fields use inputmode="decimal"; integer fields (age, height,
+// week counts, injection counts/intervals, frequencies) use inputmode="numeric".
+console.log('\n── Numeric keypad on every number field ───────────────────');
+{
+  var _numFiles = ['index.html'].concat(fs.readdirSync(dir).filter(function(f){
+    return /^tab-.*\.js$/.test(f); }).sort());
+  var _bare = [];
+  _numFiles.forEach(function(f){
+    var s = fs.readFileSync(path.join(dir,f),'utf8');
+    var re = /type=(\\?")number\1/g, m;
+    while ((m = re.exec(s))) {
+      var st = s.lastIndexOf('<input', m.index), en = s.indexOf('>', m.index);
+      if (st === -1 || en === -1) continue;
+      if (s.slice(st, en + 1).indexOf('inputmode') === -1)
+        _bare.push(f + ':' + (s.slice(0, m.index).split('\n').length));
+    }
+  });
+  check('no type="number" input is left without an inputmode', _bare.length === 0,
+    _bare.length ? _bare.join(', ') : 'all number inputs declare one');
+
+  // Behavioural, not just source-scanning: the two fields from the report.
+  if (typeof G._obHtml2 === 'function') {
+    var _svOb = G._obData;
+    G._obData = {sex:'male'};
+    var _ob = G._obHtml2();
+    var _obNum = (_ob.match(/<input[^>]*>/g) || []).filter(function(t){
+      return /type="(number|text)"/.test(t); });
+    check('the onboarding stats step renders its inputs', _obNum.length === 3,
+      'got ' + _obNum.length);
+    check('  …every one declares an inputmode',
+      _obNum.every(function(t){ return t.indexOf('inputmode=') !== -1; }));
+    check('  …Age asks for a plain numeric keypad',
+      /Age<\/label>[\s\S]{0,80}inputmode="numeric"/.test(_ob));
+    check('  …Height asks for a plain numeric keypad',
+      /Height \(cm\)<\/label>[\s\S]{0,80}inputmode="numeric"/.test(_ob));
+    check('  …Body Weight still allows a decimal point',
+      /Body Weight \(kg\)<\/label>[\s\S]{0,80}inputmode="decimal"/.test(_ob));
+    G._obData = _svOb;
+  } else {
+    check('_obHtml2 available for the onboarding keypad check', false);
+  }
+}
+
 
 // ── Fasted-window labels reach the Enhanced tier ──────────────────────────────
 // HGH is reachable from BOTH the peptide catalogue and the backend enhanced
