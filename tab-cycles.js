@@ -289,7 +289,7 @@ function _cwizStep2(){
   h+='</div>';
   h+='<div style="display:grid;gap:6px;margin-bottom:20px">';
   h+='<label style="font-size:12px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:0.5px">Cycle Length (weeks)</label>';
-  h+='<input id="cwiz-weeks" type="number" min="8" max="52" value="'+_cwiz.weeks+'" oninput="_cwiz.weeks=parseInt(this.value)||20" style="'+ins+'">';
+  h+='<input id="cwiz-weeks" type="number" inputmode="numeric" min="8" max="52" value="'+_cwiz.weeks+'" oninput="_cwiz.weeks=parseInt(this.value)||20" style="'+ins+'">';
   h+='<div style="font-size:11px;color:var(--muted2)">Bloodwork checkpoints auto-generated based on length</div>';
   h+='</div>';
   h+='<div style="font-size:12px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">Compounds</div>';

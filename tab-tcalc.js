@@ -1086,9 +1086,9 @@ function _tcShowAddSheet() {
     '<div id="tc-as-series-opts" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px">' +
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
     '<div><label style="'+lSty+'">INJECTIONS</label>' +
-    '<input id="tc-as-count" type="number" min="2" max="365" step="1" value="10" style="'+iSty+'"></div>' +
+    '<input id="tc-as-count" type="number" inputmode="numeric" min="2" max="365" step="1" value="10" style="'+iSty+'"></div>' +
     '<div><label style="'+lSty+'">EVERY (DAYS)</label>' +
-    '<input id="tc-as-interval" type="number" min="1" max="90" step="1" value="2" style="'+iSty+'"></div>' +
+    '<input id="tc-as-interval" type="number" inputmode="numeric" min="1" max="90" step="1" value="2" style="'+iSty+'"></div>' +
     '</div></div>' +
     '<button onclick="_tcConfirmAddSheet()" style="width:100%;background:linear-gradient(135deg,#6688cc,#4466aa);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:800;letter-spacing:0.5px;padding:14px;cursor:pointer;font-family:inherit">ADD</button>' +
     '</div>';
@@ -1223,9 +1223,9 @@ function _tcOpenEditSeriesSheet(sid) {
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px">' +
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
     '<div><label style="'+lSty+'">INJECTIONS</label>' +
-    '<input id="tc-es-count" type="number" min="2" max="365" step="1" value="'+_esc(String(count))+'" style="'+iSty+'"></div>' +
+    '<input id="tc-es-count" type="number" inputmode="numeric" min="2" max="365" step="1" value="'+_esc(String(count))+'" style="'+iSty+'"></div>' +
     '<div><label style="'+lSty+'">EVERY (DAYS)</label>' +
-    '<input id="tc-es-interval" type="number" min="1" max="90" step="1" value="'+_esc(String(interval))+'" style="'+iSty+'"></div>' +
+    '<input id="tc-es-interval" type="number" inputmode="numeric" min="1" max="90" step="1" value="'+_esc(String(interval))+'" style="'+iSty+'"></div>' +
     '</div></div>' +
     '<button onclick="_tcSaveEditSeries()" style="width:100%;background:linear-gradient(135deg,#6688cc,#4466aa);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:800;letter-spacing:0.5px;padding:14px;cursor:pointer;font-family:inherit">SAVE</button>' +
     '</div>';
@@ -3081,7 +3081,7 @@ function buildTCalc() {
     // Target free T — user preference, stays editable
     html += '<div style="border-top:1px solid var(--border);padding-top:12px">';
     html += '<div><label style="' + lSty + '">Target free T (pmol/L)</label>';
-    html += '<input type="number" min="0" max="10000" step="10" value="' + _esc(_tcp.targetFT) + '" placeholder="225–675 optimal · 600–1000 high-normal TRT" oninput="_tcp.targetFT=this.value;_tcSaveProfile()" onchange="buildTCalc()" style="' + iSty + '"></div>';
+    html += '<input type="number" inputmode="numeric" min="0" max="10000" step="10" value="' + _esc(_tcp.targetFT) + '" placeholder="225–675 optimal · 600–1000 high-normal TRT" oninput="_tcp.targetFT=this.value;_tcSaveProfile()" onchange="buildTCalc()" style="' + iSty + '"></div>';
     html += '</div>';
 
     // Calculated outputs from latest entry
