@@ -201,8 +201,9 @@ async function useTemplate(tid){
   if(typeof _ensureStackId==='function')_ensureStackId(proto);
   _userStacks.push(proto);_userStacks=_userStacks.slice(0,4);
   var _idx=_userStacks.length-1;
-  if(!Array.isArray(_activeStackIndices))_activeStackIndices=[];
-  if(_activeStackIndices.indexOf(_idx)<0)_activeStackIndices.push(_idx);
+  // Only one protocol may be active — starting one from a template makes it THE
+  // active one rather than adding it alongside whatever was already running.
+  _activeStackIndices=[_idx];
   _closeTemplatePicker();
   await saveStacksToBackend();
   if(typeof updateWEEKLY==='function')updateWEEKLY();
