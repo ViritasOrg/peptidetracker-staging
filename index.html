@@ -289,6 +289,16 @@ var _READINESS_FALLBACK={body_fat:{title:'Lean out before you start',body:'Body 
 var _readinessNotes=getData('proto-readiness-notes',null); // from backend /safety-notes → readiness
 var _safetyDismissed={}; // session-only dismiss set (safety re-surfaces on a fresh load)
 function _isActiveStack(i){return _activeStackIndices.indexOf(i)>=0;}
+// Exactly one protocol may be active at a time. _activeStackIndices stays an array
+// (the backend payload, the cache and every reader still use that shape) but is
+// clamped to at most one valid index. Stored data from before this rule can carry
+// several — the first still-valid one wins, the rest are dropped on load.
+function _normalizeActiveStack(){
+  if(!Array.isArray(_activeStackIndices))_activeStackIndices=[];
+  var keep=_activeStackIndices.filter(function(i){return typeof i==='number'&&i>=0&&i<_userStacks.length;});
+  _activeStackIndices=keep.length?[keep[0]]:[];
+  return _activeStackIndices;
+}
 let _stackViewTab='peptides';let _editInnerTab='peptides';
 let _reconStackIdx=0;let _reconStackPicked=false;let _reconState={};
 const TAB_LABELS=Object.assign({today:'Today',stacks:'Protocols',blood:'Levels',tcalc:'T-Calc',thist:'T-History',labs:'Labs',supplements:'Supplements',recon:'Recon',schedule:'Schedule',macros:'Macros',timeline:'Timeline',body:'Body Comp'},IS_STAGING?{storage:'Storage'}:{});
@@ -677,6 +687,7 @@ async function loadUserStacks(){
     _userStacks[0].name='My Stack';
     _activeStackIndices=[0];
   }
+  _normalizeActiveStack();
   var _needIdSave=_userStacks.some(function(s){return s&&!s.id;});
   _userStacks.forEach(function(stack){
     _ensureStackId(stack);
@@ -982,12 +993,15 @@ function _scanAndShowStartupConflicts(){
     }
   }
 }
-// ── Toggle a stack in/out of the active set ──────────────────────────────────
+// ── Toggle a stack active/inactive ───────────────────────────────────────────
+// Only one protocol may be active. Switching one on switches every other one off,
+// so this is a radio, not a set of checkboxes; switching the active one off leaves
+// nothing active (a valid state — Today then shows no scheduled doses).
 async function toggleStack(idx){
   if(idx<0||idx>=_userStacks.length)return;
   var pos=_activeStackIndices.indexOf(idx);
   if(pos===-1){
-    _activeStackIndices.push(idx);
+    _activeStackIndices=[idx];
     if(_activeStackIndices.length>1){
       var det=_detectStackConflicts(idx);
       if(det.conflicts.length>0){
@@ -997,7 +1011,7 @@ async function toggleStack(idx){
       }
     }
   } else {
-    _activeStackIndices.splice(pos,1);
+    _activeStackIndices=[];
   }
   updateWEEKLY();
   await saveStacksToBackend();

@@ -1614,6 +1614,92 @@ console.log('\n── dose dedup migration ────────────�
     !rawScript.includes("if(!_activeStackIndices.length)_activeStackIndices=[0];"));
 }
 
+// ── Only one protocol may be active ──────────────────────────────────────────
+// Reported 2026-08-01: three protocols showed "Active" at once, including two
+// overlapping TRT protocols, so Today merged doses from all of them. Activation
+// is a radio, not a set of checkboxes — switching one on switches the rest off.
+// _activeStackIndices keeps its array shape (the backend payload, the cache and
+// every reader still expect it) but never holds more than one index.
+{
+  console.log('\n── Only one active protocol ───────────────────────────────');
+  const _svStacks = G._userStacks, _svAct = G._activeStackIndices;
+  const _mkS = n => ({name:n, peptides:[{id:'retatrutide',name:'Reta',dot:'#e8ff3c',
+    days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'3',unit_am:'mg',active:true}]});
+  G._userStacks = [_mkS('A'), _mkS('B'), _mkS('C')];
+
+  check('_normalizeActiveStack is defined', typeof G._normalizeActiveStack === 'function');
+  if (typeof G._normalizeActiveStack === 'function') {
+    G._activeStackIndices = [0,1,2];
+    check('stored data with several active is clamped to one',
+      JSON.stringify(G._normalizeActiveStack()) === '[0]', JSON.stringify(G._activeStackIndices));
+    G._activeStackIndices = [2,0];
+    check('  …the first listed one wins',
+      JSON.stringify(G._normalizeActiveStack()) === '[2]', JSON.stringify(G._activeStackIndices));
+    G._activeStackIndices = [];
+    check('  …none active stays none active (on-break is valid)',
+      JSON.stringify(G._normalizeActiveStack()) === '[]');
+    G._activeStackIndices = [7,1];
+    check('  …an index past the end of the list is dropped',
+      JSON.stringify(G._normalizeActiveStack()) === '[1]', JSON.stringify(G._activeStackIndices));
+    G._activeStackIndices = null;
+    check('  …a non-array survives without throwing',
+      JSON.stringify(G._normalizeActiveStack()) === '[]');
+  }
+
+  // The load path must apply it, or the user keeps seeing their old multi-active set
+  check('loadUserStacks normalizes before building anything',
+    /_normalizeActiveStack\(\);\s*\n\s*var _needIdSave/.test(rawScript));
+
+  // toggleStack behaves as a radio
+  check('activating a protocol replaces the active one rather than adding to it',
+    /pos===-1\)\{\s*\n\s*_activeStackIndices=\[idx\];/.test(rawScript));
+  check('  …no code path pushes a second index onto the active set',
+    !/_activeStackIndices\.push\(/.test(rawScript), 'a push( survives in index.html');
+  check('deactivating the active protocol clears it, leaving none active',
+    /\}\s*else\s*\{\s*\n\s*_activeStackIndices=\[\];\s*\n\s*\}/.test(rawScript));
+
+  // Starting a protocol from a template makes it THE active one
+  {
+    const _tsSrc = fs.readFileSync(path.join(dir,'tab-stack.js'),'utf8');
+    check('starting a template activates it exclusively',
+      /_activeStackIndices=\[_idx\];/.test(_tsSrc));
+    check('  …tab-stack.js never pushes onto the active set either',
+      !/_activeStackIndices\.push\(/.test(_tsSrc));
+  }
+
+  // Through the real toggle. toggleStack is async, but it mutates the active set
+  // synchronously before its first await, so the assertion needs no await.
+  if (typeof G.toggleStack === 'function') {
+    const _sv = {save:G.saveStacksToBackend, ref:G.refreshInjectionsCache, ws:G.buildWeekStrip,
+                 t:G.buildToday, s:G.buildSchedule, ss:G.buildStackStore};
+    G.saveStacksToBackend = async () => {}; G.refreshInjectionsCache = async () => {};
+    G.buildWeekStrip = () => {}; G.buildToday = () => {};
+    G.buildSchedule = () => {}; G.buildStackStore = () => {};
+    const _quiet = p => { if (p && p.catch) p.catch(() => {}); };
+
+    G._activeStackIndices = [0];
+    _quiet(G.toggleStack(1));
+    check('turning on B turns A off', JSON.stringify(G._activeStackIndices) === '[1]',
+      JSON.stringify(G._activeStackIndices));
+    _quiet(G.toggleStack(2));
+    check('turning on C turns B off', JSON.stringify(G._activeStackIndices) === '[2]',
+      JSON.stringify(G._activeStackIndices));
+    _quiet(G.toggleStack(2));
+    check('turning the active one off leaves none active',
+      JSON.stringify(G._activeStackIndices) === '[]', JSON.stringify(G._activeStackIndices));
+    G.updateWEEKLY();
+    check('  …and WEEKLY empties out with it', G.WEEKLY.length === 0);
+    _quiet(G.toggleStack(9));
+    check('an out-of-range index is ignored', JSON.stringify(G._activeStackIndices) === '[]');
+
+    G.saveStacksToBackend = _sv.save; G.refreshInjectionsCache = _sv.ref;
+    G.buildWeekStrip = _sv.ws; G.buildToday = _sv.t;
+    G.buildSchedule = _sv.s; G.buildStackStore = _sv.ss;
+  }
+  G._userStacks = _svStacks; G._activeStackIndices = _svAct;
+  G.updateWEEKLY();
+}
+
 // ── getDosesForDate + _findWeeklyItemInfo (date-range scheduling) ──────────────
 {
   console.log('\n── getDosesForDate ─────────────────────────────────────────');
