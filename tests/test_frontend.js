@@ -3170,6 +3170,60 @@ console.log('\n── T-Calc simple planner ────────────
       G._injectionsCache = _svCache;
     }
 
+    // ── The plan owns the curve from its start date ────────────────────────────
+    // Reported 2026-08-01: "changing testo dose in the planner doesn't update the
+    // rendered curve". _tcCurveLog merged the plan with the stack's own TRT protocol
+    // and de-duplicated only on an exact (compound, date) hit — so a plan for a
+    // different ester, or on a different cadence, collided with nothing and was ADDED
+    // on top of the protocol. The curve was dominated by the protocol underneath and
+    // barely moved when the plan's dose changed.
+    if(typeof G._tcCurveLog==='function'){
+      var _svCache2 = G._injectionsCache;
+      var _mkInj = function(date,mg,comp){ return {tier:'trt',active:true,cycle_id:'stack_x',
+        unit:'mg',dose:String(mg),compound_id:comp||'cypionate',date:date}; };
+      // Protocol dosing runs from before the plan starts to well after it
+      G._injectionsCache = {'2026-07-20':[_mkInj('2026-07-20',250)],
+                            '2026-07-27':[_mkInj('2026-07-27',250)],
+                            '2026-08-03':[_mkInj('2026-08-03',250)],
+                            '2026-08-10':[_mkInj('2026-08-10',250)]};
+      _set({plannerMode:'simple',
+            simplePlan:{compId:'enanthate',doseMg:'10',cadenceN:2,cadenceUnit:'day',cadenceDays:2,startDate:'2026-08-01'}});
+      var _cl = G._tcCurveLog();
+      var _proto = _cl.filter(function(e){ return e.source==='protocol'; });
+      check('protocol dosing before the plan starts is kept as history',
+        _proto.length===2 && _proto.every(function(e){ return e.date < '2026-08-01'; }),
+        JSON.stringify(_proto.map(function(e){return e.date;})));
+      check('  …and protocol dosing from the plan start on is dropped, not added on top',
+        !_cl.some(function(e){ return e.source==='protocol' && e.date>='2026-08-01'; }),
+        JSON.stringify(_cl.filter(function(e){return e.source==='protocol';}).map(function(e){return e.date;})));
+      check('  …so the plan is what drives the curve forward',
+        _cl.filter(function(e){ return e.source==='simple' && e.date>='2026-08-01'; }).length>0);
+
+      // The actual complaint: changing the dose must change the curve's total
+      var _totalAt = function(mg){
+        _set({plannerMode:'simple',
+              simplePlan:{compId:'enanthate',doseMg:String(mg),cadenceN:2,cadenceUnit:'day',cadenceDays:2,startDate:'2026-08-01'}});
+        return G._tcCurveLog().filter(function(e){ return e.date>='2026-08-01'; })
+                              .reduce(function(a,e){ return a+parseFloat(e.doseMg); },0);
+      };
+      var _t10=_totalAt(10), _t20=_totalAt(20);
+      check('doubling the plan dose doubles the dose the curve sees',
+        _t20>0 && Math.abs(_t20-2*_t10)<1e-6, _t10+' -> '+_t20);
+
+      // An unfinished plan must not silently delete the protocol curve
+      _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'',cadenceN:0,cadenceUnit:'week',cadenceDays:0,startDate:''}});
+      check('an unfinished plan leaves the protocol curve intact',
+        G._tcCurveLog().filter(function(e){ return e.source==='protocol'; }).length===4);
+
+      // In advanced mode the plan is greyed out and owns nothing
+      _set({plannerMode:'advanced', manualLog:[],
+            simplePlan:{compId:'enanthate',doseMg:'10',cadenceN:2,cadenceUnit:'day',cadenceDays:2,startDate:'2026-08-01'}});
+      check('in ADVANCED mode the greyed-out plan does not claim any days',
+        G._tcCurveLog().filter(function(e){ return e.source==='protocol'; }).length===4);
+
+      G._injectionsCache = _svCache2;
+    }
+
   // ── Cadence: a number plus a unit, not a preset list ────────────────────────
   // Reported 2026-08-01: "can't choose every 2nd day or third etc". The dropdown
   // offered a fixed set (Daily, EOD, 3x/week, weekly, every 2/3/6/8/10/12 weeks), so

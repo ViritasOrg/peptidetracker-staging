@@ -1002,7 +1002,22 @@ function _tcCurveLog(){
   var seen = {};
   manual.forEach(function(e){ seen[e.compId + '|' + e.date] = true; });
   var merged = manual.slice();
+  // From the day the simple plan starts, the plan IS the testosterone schedule —
+  // T-Calc is the single place one is built, so a stack's own TRT protocol covering
+  // the same days is the same injections described twice. De-duplicating only on an
+  // exact (compound, date) hit is not enough: a plan for a different ester, or on a
+  // different cadence, collides with nothing and gets ADDED to the protocol instead
+  // of replacing it. Reported 2026-08-01 — editing the plan's dose barely moved a
+  // curve that was dominated by the protocol underneath it.
+  // Dates BEFORE the plan starts are left alone: those are real past dosing, and the
+  // plan says nothing about them.
+  var planFrom = '';
+  if (_tcPlannerMode() === 'simple') {
+    var _sp = _tcSimplePlan();
+    if (_tcSimplePlanComplete()) planFrom = _sp.startDate || '';
+  }
   _tcProtocolInjections().forEach(function(e){
+    if (planFrom && e.date >= planFrom) return;   // the plan owns this day
     var k = e.compId + '|' + e.date;
     if (seen[k]) return;              // manual wins
     seen[k] = true;
