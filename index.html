@@ -845,133 +845,96 @@ function _getStackCompounds(st){
     var ecat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});
     return(ecat&&ecat.cg)||[];
   }
-  (st.peptides||[]).forEach(function(p){if(p.id)out.push({id:p.id,name:p.name||p.id,cg:_cgFor(p.id)});});
-  if(st.trt&&st.trt.compounds)(st.trt.compounds||[]).forEach(function(c){if(c.id)out.push({id:c.id,name:c.name||c.id,cg:_cgFor(c.id)});});
-  if(st.enhanced&&st.enhanced.compounds)(st.enhanced.compounds||[]).forEach(function(c){if(c.id)out.push({id:c.id,name:c.name||c.id,cg:_cgFor(c.id)});});
+  (st.peptides||[]).forEach(function(p){if(p.id)out.push({id:p.id,name:p.name||p.id,cg:_cgFor(p.id),tier:'Peptides'});});
+  if(st.trt&&st.trt.compounds)(st.trt.compounds||[]).forEach(function(c){if(c.id)out.push({id:c.id,name:c.name||c.id,cg:_cgFor(c.id),tier:'TRT'});});
+  if(st.enhanced&&st.enhanced.compounds)(st.enhanced.compounds||[]).forEach(function(c){if(c.id)out.push({id:c.id,name:c.name||c.id,cg:_cgFor(c.id),tier:'Enhanced'});});
   return out;
 }
-function _detectStackConflicts(newIdx){
-  var newSt=_userStacks[newIdx];
-  if(!newSt)return{conflicts:[],conflictingIdxs:[]};
-  var newCompounds=_getStackCompounds(newSt);
-  var newIds={};var newClusters={};
-  newCompounds.forEach(function(c){
-    newIds[c.id]=c.name;
-    (c.cg||[]).forEach(function(tag){var cl=CROSS_STACK_CLUSTERS[tag];if(cl){if(!newClusters[cl])newClusters[cl]=[];newClusters[cl].push(c);}});
-  });
-  var conflicts=[];var conflictingSet={};
-  _activeStackIndices.forEach(function(si){
-    if(si===newIdx)return;
-    var st=_userStacks[si];if(!st)return;
-    _getStackCompounds(st).forEach(function(c){
-      if(newIds[c.id]){
-        conflictingSet[si]=st.name||('Protocol '+(si+1));
-        conflicts.push({compoundId:c.id,compoundName:c.name||c.id,existingId:c.id,existingName:c.name||c.id,stackIdx:si,stackName:st.name||('Protocol '+(si+1)),reason:'duplicate'});
-      } else {
-        (c.cg||[]).forEach(function(tag){
-          var cl=CROSS_STACK_CLUSTERS[tag];
-          if(cl&&newClusters[cl]){
-            newClusters[cl].forEach(function(nc){
-              conflictingSet[si]=st.name||('Protocol '+(si+1));
-              conflicts.push({compoundId:nc.id,compoundName:nc.name,existingId:c.id,existingName:c.name||c.id,stackIdx:si,stackName:st.name||('Protocol '+(si+1)),reason:'axis',axisLabel:cl});
-            });
-          }
-        });
-      }
-    });
+// Conflicts are checked WITHIN one protocol, across all of its tiers at once —
+// Peptides + TRT + Enhanced. Only one protocol is ever active (see
+// _normalizeActiveStack), so the old protocol-vs-protocol comparison had nothing
+// left to compare; the way a compound can still be dosed twice is by appearing in
+// two tiers of the same protocol, e.g. testosterone configured under both TRT and
+// Enhanced. That is always a bug, never a choice, so it is what this detects.
+//
+// Two DIFFERENT compounds sharing an axis (CROSS_STACK_CLUSTERS: gh-axis,
+// glp1-axis) is deliberately NOT a conflict here. Across two protocols it meant
+// "you forgot you were already dosing this axis"; inside one protocol it is a
+// normal, intentional combination — CJC-1295 + Ipamorelin is the standard GH-axis
+// pairing, and blocking it would fire on ordinary protocols.
+function _detectStackConflicts(idx){
+  var st=_userStacks[idx];
+  if(!st)return{conflicts:[]};
+  var comps=_getStackCompounds(st);
+  var firstSeen={};var conflicts=[];
+  comps.forEach(function(c){
+    var prev=firstSeen[c.id];
+    if(!prev){firstSeen[c.id]=c;return;}
+    conflicts.push({compoundId:c.id,compoundName:c.name||c.id,tier:c.tier,
+                    existingId:prev.id,existingName:prev.name||prev.id,existingTier:prev.tier,
+                    reason:'duplicate'});
   });
   var seen={};
-  conflicts=conflicts.filter(function(c){var key=c.stackIdx+'|'+c.existingId+'|'+c.compoundId;if(seen[key])return false;seen[key]=true;return true;});
-  return{conflicts:conflicts,conflictingIdxs:Object.keys(conflictingSet).map(Number)};
+  conflicts=conflicts.filter(function(c){var k=c.existingTier+'|'+c.tier+'|'+c.compoundId;if(seen[k])return false;seen[k]=true;return true;});
+  return{conflicts:conflicts};
 }
-function _calcLatestActiveEnd(excludeIdx){
-  var latest=null;
-  _activeStackIndices.forEach(function(si){
-    if(si===excludeIdx)return;
-    var st=_userStacks[si];if(!st)return;
-    var end=null;
-    if(st.end_date){end=parseLocalDate(st.end_date);}
-    else if(st.cycle_start&&st.cycle_length&&st.cycle_length>0){var s=parseLocalDate(st.cycle_start);end=new Date(s.getTime()+st.cycle_length*7*86400000);}
-    if(end&&(!latest||end>latest))latest=end;
-  });
-  return latest;
-}
-function _showConflictModal(newIdx,conflicts,conflictingIdxs){
-  var newSt=_userStacks[newIdx];
-  var newName=newSt?newSt.name||('Protocol '+(newIdx+1)):'New protocol';
+function _showConflictModal(idx,conflicts){
+  var st=_userStacks[idx];
+  var stName=st?st.name||('Protocol '+(idx+1)):'This protocol';
   var seenKeys={};
-  var uniqConflicts=conflicts.filter(function(c){var key=c.compoundId+'|'+(c.existingId||'');if(seenKeys[key])return false;seenKeys[key]=true;return true;});
-  var cStackNames={};conflicts.forEach(function(c){cStackNames[c.stackIdx]=c.stackName;});
-  var cStackList=Object.values(cStackNames).join(', ');
-  var latestEnd=_calcLatestActiveEnd(newIdx);
-  var schedDate=latestEnd?new Date(latestEnd.getTime()+86400000):null;
-  var schedStr=schedDate?dateKey(schedDate):null;
-  var schedLabel=schedDate?schedDate.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}):null;
-  var conflictsHtml=uniqConflicts.map(function(c){
-    var detail=c.reason==='axis'
-      ?'<div style="font-size:11px;color:var(--muted2)">conflicts with '+c.existingName+' in '+c.stackName+' ('+c.axisLabel.replace(/-/g,' ')+')</div>'
-      :'<div style="font-size:11px;color:var(--muted2)">also active in '+c.stackName+'</div>';
+  var uniq=conflicts.filter(function(c){var k=c.compoundId+'|'+c.existingTier+'|'+c.tier;if(seenKeys[k])return false;seenKeys[k]=true;return true;});
+  var conflictsHtml=uniq.map(function(c){
+    var where=(c.existingTier===c.tier)
+      ?'listed twice under '+c.tier
+      :'in both '+c.existingTier+' and '+c.tier;
     return'<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);">'
-      +'<span style="font-size:16px">⚠️</span>'
+      +'<span style="font-size:16px">&#9888;&#65039;</span>'
       +'<div><div style="font-size:13px;font-weight:700;color:var(--text)">'+c.compoundName+'</div>'
-      +detail+'</div></div>';
+      +'<div style="font-size:11px;color:var(--muted2)">'+where+' &mdash; it would be dosed twice</div></div></div>';
   }).join('');
   var btn='display:block;width:100%;padding:13px 14px;border-radius:10px;border:none;font-size:13px;font-weight:700;text-align:left;cursor:pointer;margin-bottom:10px;';
-  var schedBtn=schedStr
-    ?'<button onclick="_resolveConflict(\'schedule\',\''+schedStr+'\')" style="'+btn+'background:var(--surface2);color:var(--text);border:1px solid var(--border);">'
-      +'📅 Schedule <em>'+newName+'</em> to start '+schedLabel
-      +'<div style="font-size:11px;font-weight:400;color:var(--muted2);margin-top:3px">Pushes start date to after active cycles finish</div>'
-      +'</button>':'';
   var overlay=document.createElement('div');
   overlay.id='stack-conflict-modal';
   overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.93);z-index:9999;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:20px 16px 40px;';
   overlay.innerHTML='<div style="max-width:480px;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;margin-top:20px;">'
     +'<div style="background:#7f1d1d;padding:16px 18px;">'
-    +'<div style="font-size:17px;font-weight:800;color:#fca5a5;">⛔ Dose Conflict Detected</div>'
-    +'<div style="font-size:12px;color:#fca5a5;margin-top:4px;">Activating <strong>'+newName+'</strong> creates duplicate dosing — resolve before continuing</div>'
+    +'<div style="font-size:17px;font-weight:800;color:#fca5a5;">&#9940; Duplicate Dosing Detected</div>'
+    +'<div style="font-size:12px;color:#fca5a5;margin-top:4px;"><strong>'+stName+'</strong> doses the same compound from more than one tier</div>'
     +'</div>'
     +'<div style="padding:16px 18px;">'
-    +'<div style="font-size:12px;color:var(--muted2);margin-bottom:8px">These compounds would be dosed from multiple protocols simultaneously:</div>'
+    +'<div style="font-size:12px;color:var(--muted2);margin-bottom:8px">These compounds appear more than once in this protocol:</div>'
     +conflictsHtml
     +'<div style="font-size:12px;color:var(--muted2);margin-top:14px;margin-bottom:10px;font-weight:700;">Choose a resolution:</div>'
-    +'<button onclick="_resolveConflict(\'deactivate\',null)" style="'+btn+'background:#7f1d1d;color:#fca5a5;">'
-    +'🔴 Deactivate '+cStackList
-    +'<div style="font-size:11px;font-weight:400;opacity:0.8;margin-top:3px">Keep <em>'+newName+'</em> active, deactivate the conflicting protocol(s)</div>'
+    +'<button onclick="_resolveConflict(\'remove\',null)" style="'+btn+'background:#7f1d1d;color:#fca5a5;">'
+    +'&#9986;&#65039; Keep the first entry only'
+    +'<div style="font-size:11px;font-weight:400;opacity:0.8;margin-top:3px">Drops the duplicate '+uniq.map(function(c){return c.compoundName+' ('+c.tier+')';}).join(', ')+'</div>'
     +'</button>'
-    +'<button onclick="_resolveConflict(\'remove\',null)" style="'+btn+'background:var(--surface2);color:var(--text);border:1px solid var(--border);">'
-    +'✂️ Remove duplicates from <em>'+newName+'</em>'
-    +'<div style="font-size:11px;font-weight:400;color:var(--muted2);margin-top:3px">Removes '+uniqConflicts.map(function(c){return c.compoundName;}).join(', ')+' from <em>'+newName+'</em></div>'
+    +'<button onclick="_resolveConflict(\'keep\',null)" style="'+btn+'background:var(--surface2);color:var(--text);border:1px solid var(--border);">'
+    +'&#10003; Keep both &mdash; this is intentional'
+    +'<div style="font-size:11px;font-weight:400;color:var(--muted2);margin-top:3px">Leaves the protocol exactly as it is</div>'
     +'</button>'
-    +schedBtn
     +'</div></div>';
   document.body.appendChild(overlay);
 }
-async function _resolveConflict(action,schedDate){
+async function _resolveConflict(action){
   var data=_pendingConflictData;_pendingConflictData=null;
   var overlay=document.getElementById('stack-conflict-modal');
   if(overlay)overlay.remove();
   if(!data)return;
-  var newIdx=data.newIdx;var conflicts=data.conflicts;var conflictingIdxs=data.conflictingIdxs;
-  if(action==='deactivate'){
-    conflictingIdxs.forEach(function(si){var pos=_activeStackIndices.indexOf(si);if(pos!==-1)_activeStackIndices.splice(pos,1);});
-  } else if(action==='remove'){
-    var newSt=_userStacks[newIdx];
-    if(newSt){
-      var toRemove={};conflicts.forEach(function(c){toRemove[c.compoundId]=true;});
-      if(newSt.peptides)newSt.peptides=newSt.peptides.filter(function(p){return!toRemove[p.id];});
-      if(newSt.trt&&newSt.trt.compounds)newSt.trt.compounds=newSt.trt.compounds.filter(function(c){return!toRemove[c.id];});
-      if(newSt.enhanced&&newSt.enhanced.compounds)newSt.enhanced.compounds=newSt.enhanced.compounds.filter(function(c){return!toRemove[c.id];});
-    }
-  } else if(action==='schedule'&&schedDate){
-    var newSt=_userStacks[newIdx];
-    if(newSt){
-      newSt.cycle_start=schedDate;
-      if(newSt.cycle_length&&newSt.cycle_length>0){
-        var s=parseLocalDate(schedDate);
-        newSt.end_date=dateKey(new Date(s.getTime()+newSt.cycle_length*7*86400000));
-      }
+  if(action==='remove'){
+    // Keep the FIRST occurrence of each compound and drop the later ones. Tiers are
+    // walked in the order _getStackCompounds reads them (peptides, TRT, enhanced) so
+    // "first" here means the same entry the modal named as the one being kept.
+    var st=_userStacks[data.newIdx];
+    if(st){
+      var seen={};
+      var keep=function(id){if(!id)return true;if(seen[id])return false;seen[id]=true;return true;};
+      if(st.peptides)st.peptides=st.peptides.filter(function(p){return keep(p.id);});
+      if(st.trt&&st.trt.compounds)st.trt.compounds=st.trt.compounds.filter(function(c){return keep(c.id);});
+      if(st.enhanced&&st.enhanced.compounds)st.enhanced.compounds=st.enhanced.compounds.filter(function(c){return keep(c.id);});
     }
   }
+  // 'keep' changes nothing — the user has acknowledged the duplicate deliberately.
   updateWEEKLY();
   await saveStacksToBackend();
   buildWeekStrip();
@@ -979,18 +942,16 @@ async function _resolveConflict(action,schedDate){
   buildSchedule();
   buildStackStore();
 }
-// Scan all currently-active stacks for conflicts — runs on startup to catch
-// stacks that were already active before the conflict gate was deployed.
+// Check the active protocol for duplicate dosing on startup, so a protocol that
+// was already saved with the same compound in two tiers surfaces without waiting
+// for the user to toggle it off and on again.
 function _scanAndShowStartupConflicts(){
-  if(_activeStackIndices.length<=1)return;
-  for(var i=0;i<_activeStackIndices.length;i++){
-    var idx=_activeStackIndices[i];
-    var det=_detectStackConflicts(idx);
-    if(det.conflicts.length>0){
-      _pendingConflictData={newIdx:idx,conflicts:det.conflicts,conflictingIdxs:det.conflictingIdxs};
-      _showConflictModal(idx,det.conflicts,det.conflictingIdxs);
-      return;
-    }
+  var idx=_activeStackIndices.length?_activeStackIndices[0]:null;
+  if(idx==null)return;
+  var det=_detectStackConflicts(idx);
+  if(det.conflicts.length>0){
+    _pendingConflictData={newIdx:idx,conflicts:det.conflicts};
+    _showConflictModal(idx,det.conflicts);
   }
 }
 // ── Toggle a stack active/inactive ───────────────────────────────────────────
@@ -1002,13 +963,11 @@ async function toggleStack(idx){
   var pos=_activeStackIndices.indexOf(idx);
   if(pos===-1){
     _activeStackIndices=[idx];
-    if(_activeStackIndices.length>1){
-      var det=_detectStackConflicts(idx);
-      if(det.conflicts.length>0){
-        _pendingConflictData={newIdx:idx,conflicts:det.conflicts,conflictingIdxs:det.conflictingIdxs};
-        _showConflictModal(idx,det.conflicts,det.conflictingIdxs);
-        return;
-      }
+    var det=_detectStackConflicts(idx);
+    if(det.conflicts.length>0){
+      _pendingConflictData={newIdx:idx,conflicts:det.conflicts};
+      _showConflictModal(idx,det.conflicts);
+      return;
     }
   } else {
     _activeStackIndices=[];
