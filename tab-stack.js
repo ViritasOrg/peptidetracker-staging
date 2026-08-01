@@ -130,7 +130,7 @@ async function wizSave(){
   if(_wantsTrt && !_trtInline && typeof _wizTrtPlanComplete==='function' && _wizTrtPlanComplete() &&
      typeof _tcp!=='undefined' && _tcp){
     var _wp=_wiz.trtPlan;
-    _tcp.simplePlan={compId:_wp.compId,doseMg:String(_wp.doseMg),cadenceDays:parseDec(_wp.cadenceDays),startDate:_wp.startDate};
+    _tcp.simplePlan={compId:_wp.compId,doseMg:String(_wp.doseMg),cadenceN:parseInt(_wp.cadenceN,10)||0,cadenceUnit:_wp.cadenceUnit||'week',cadenceDays:parseDec(_wp.cadenceDays),startDate:_wp.startDate};
     _tcp.plannerMode='simple';
   }
   if(_wantsTrt && !_trtInline && typeof _tcp!=='undefined' && _tcp && _savedStack && _savedStack.id &&
@@ -1538,20 +1538,25 @@ function wizToggleTrtClassic(){ _wizTrtClassic = !_wizTrtClassic; wizRender(); }
 // was configured that way, so neither is silently ignored.
 function _wizEnsureTrtPlan(){
   if(_wiz.trtPlan) return _wiz.trtPlan;
-  var seed = {compId:'', doseMg:'', cadenceDays:0, startDate:''};
+  var seed = {compId:'', doseMg:'', cadenceN:0, cadenceUnit:'week', cadenceDays:0, startDate:''};
   if(typeof _tcSimplePlan==='function'){
     var sp=_tcSimplePlan();
     if(sp.compId)      seed.compId=sp.compId;
     if(sp.doseMg)      seed.doseMg=sp.doseMg;
-    if(sp.cadenceDays) seed.cadenceDays=sp.cadenceDays;
+    if(sp.cadenceDays){seed.cadenceDays=sp.cadenceDays;seed.cadenceN=sp.cadenceN;seed.cadenceUnit=sp.cadenceUnit;}
     if(sp.startDate)   seed.startDate=sp.startDate;
   }
   var c=((_wiz.trt&&_wiz.trt.compounds)||[])[0];
   if(c){
     if(!seed.compId) seed.compId=c.id||'';
     if(!seed.doseMg) seed.doseMg=c.dose||'';
+    // A classic TRT compound already carries the same shape: a count plus days/weeks.
     if(!seed.cadenceDays && c.freqVal && c.freqUnit){
-      seed.cadenceDays = c.freqUnit==='weeks' ? c.freqVal*7 : c.freqVal;
+      seed.cadenceN    = parseInt(c.freqVal,10)||0;
+      seed.cadenceUnit = c.freqUnit==='weeks' ? 'week' : 'day';
+      seed.cadenceDays = (typeof _tcCadenceToDays==='function')
+        ? _tcCadenceToDays(seed.cadenceN,seed.cadenceUnit)
+        : (c.freqUnit==='weeks' ? c.freqVal*7 : c.freqVal);
     }
   }
   if(!seed.startDate) seed.startDate = _wiz.cycle_start || (typeof dateKey==='function' ? dateKey(NOW) : '');
@@ -1560,6 +1565,19 @@ function _wizEnsureTrtPlan(){
 }
 function wizSetTrtPlan(field,value){
   _wizEnsureTrtPlan()[field]=value;
+  wizRender();
+}
+// Cadence is two fields but one stored interval — mirrors _tcSetSimplePlanCadence.
+function wizSetTrtCadence(field,value){
+  var p=_wizEnsureTrtPlan();
+  var maxN=(typeof _TC_CADENCE_MAX_N!=='undefined')?_TC_CADENCE_MAX_N:20;
+  var n    = field==='cadenceN'    ? (parseInt(value,10)||0) : (parseInt(p.cadenceN,10)||0);
+  var unit = field==='cadenceUnit' ? value                   : p.cadenceUnit;
+  if(!(typeof _TC_CADENCE_UNITS!=='undefined'&&_TC_CADENCE_UNITS[unit])) unit='week';
+  n=Math.max(0,Math.min(maxN,n));
+  p.cadenceN=n; p.cadenceUnit=unit;
+  p.cadenceDays=(typeof _tcCadenceToDays==='function')?_tcCadenceToDays(n,unit)
+               :n*(unit==='month'?30:unit==='week'?7:1);
   wizRender();
 }
 function _wizTrtPlanComplete(){
@@ -1612,13 +1630,21 @@ function _wizRenderTrtPlanner(body){
   html+='<input type="number" inputmode="decimal" min="0" step="any" value="'+(p.doseMg||'')+'" placeholder="125" onchange="wizSetTrtPlan(\'doseMg\',this.value)" style="'+iSty+';margin-bottom:14px">';
 
   html+='<label style="'+lSty+'">3 · Injection cadence</label>';
-  html+='<select onchange="wizSetTrtPlan(\'cadenceDays\',this.value)" style="'+iSty+';margin-bottom:14px">';
-  html+='<option value="0">How often?…</option>';
-  var freqs=(typeof _TC_FREQ_OPTS!=='undefined')?_TC_FREQ_OPTS:[{label:'Weekly',days:7}];
-  freqs.forEach(function(f){
-    html+='<option value="'+f.days+'"'+(Math.abs(f.days-parseDec(p.cadenceDays))<0.01?' selected':'')+'>'+f.label+'</option>';
-  });
+  var maxN=(typeof _TC_CADENCE_MAX_N!=='undefined')?_TC_CADENCE_MAX_N:20;
+  var units=(typeof _TC_CADENCE_ORDER!=='undefined')?_TC_CADENCE_ORDER:['day','week','month'];
+  var uLabel=function(u,n){return (typeof _tcCadenceUnitLabel==='function')?_tcCadenceUnitLabel(u,n):(parseInt(n,10)===1?u:u+'s');};
+  var curN=parseInt(p.cadenceN,10)||0;
+  html+='<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px">';
+  html+='<span style="font-size:13px;color:var(--muted2);flex-shrink:0">Every</span>';
+  html+='<select onchange="wizSetTrtCadence(\'cadenceN\',this.value)" style="'+iSty+';flex:1;min-width:0">';
+  html+='<option value="0"'+(curN?'':' selected')+'>—</option>';
+  for(var _n=1;_n<=maxN;_n++) html+='<option value="'+_n+'"'+(curN===_n?' selected':'')+'>'+_n+'</option>';
   html+='</select>';
+  html+='<select onchange="wizSetTrtCadence(\'cadenceUnit\',this.value)" style="'+iSty+';flex:1.4;min-width:0">';
+  units.forEach(function(u){
+    html+='<option value="'+u+'"'+(p.cadenceUnit===u?' selected':'')+'>'+uLabel(u,curN)+'</option>';
+  });
+  html+='</select></div>';
 
   html+='<label style="'+lSty+'">4 · First injection</label>';
   html+='<input type="date" value="'+(p.startDate||'')+'" onchange="wizSetTrtPlan(\'startDate\',this.value)" style="'+iSty+'">';

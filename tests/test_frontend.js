@@ -2958,6 +2958,15 @@ console.log('\n── Wizard TRT step ──────────────
     check('  …the start-date field is there', /4 · First injection/.test(b.innerHTML));
     check('the footer always carries Next', /wizNext\(\)/.test(f.innerHTML));
     check('the advanced multi-compound config is still reachable', /wizToggleTrtClassic/.test(b.innerHTML));
+    check('  …and the cadence is the same two-field control as T-Calc',
+      /wizSetTrtCadence\('cadenceN'/.test(b.innerHTML) && /wizSetTrtCadence\('cadenceUnit'/.test(b.innerHTML));
+    check('  …offering 1 to 20 and day/week/month',
+      /<option value="20"/.test(b.innerHTML) && /value="month"/.test(b.innerHTML));
+    if(typeof G.wizSetTrtCadence==='function'){
+      G.wizSetTrtCadence('cadenceN','5'); G.wizSetTrtCadence('cadenceUnit','week');
+      check('  …and setting it recomputes the wizard plan interval',
+        G._wiz.trtPlan.cadenceDays===35, String(G._wiz.trtPlan.cadenceDays));
+    }
 
     // Fail-safe: if a helper this step depends on blows up, the user still gets a step
     var _svIds=G._tcAllCompIds;
@@ -3083,6 +3092,77 @@ console.log('\n── T-Calc simple planner ────────────
         G._tcp.simplePlan.compId === 'enanthate' && G._tcp.manualLog.length === 1);
       G._injectionsCache = _svCache;
     }
+
+  // ── Cadence: a number plus a unit, not a preset list ────────────────────────
+  // Reported 2026-08-01: "can't choose every 2nd day or third etc". The dropdown
+  // offered a fixed set (Daily, EOD, 3x/week, weekly, every 2/3/6/8/10/12 weeks), so
+  // every 3 days, every 5 weeks and so on were unreachable. Cadence is now "every
+  // N unit" with N in 1..20 and unit in day/week/month.
+  if(typeof G._tcCadenceToDays==='function'){
+    check('a month is a fixed 30-day step, not a calendar month',
+      G._TC_CADENCE_UNITS.day===1 && G._TC_CADENCE_UNITS.week===7 && G._TC_CADENCE_UNITS.month===30,
+      JSON.stringify(G._TC_CADENCE_UNITS));
+    check('every 3 days is 3 days', G._tcCadenceToDays(3,'day')===3);
+    check('every 2 weeks is 14 days', G._tcCadenceToDays(2,'week')===14);
+    check('every 3 months is 90 days', G._tcCadenceToDays(3,'month')===90);
+    check('a string from a <select> is accepted', G._tcCadenceToDays('5','week')===35);
+    check('no number yields no interval', G._tcCadenceToDays(0,'week')===0);
+    check('an unknown unit yields no interval', G._tcCadenceToDays(2,'fortnight')===0);
+
+    // Reading a saved day count back into the two fields
+    check('14 days reads back as every 2 weeks',
+      JSON.stringify(G._tcCadenceFromDays(14))==='{"n":2,"unit":"week"}', JSON.stringify(G._tcCadenceFromDays(14)));
+    check('90 days reads back as every 3 months',
+      JSON.stringify(G._tcCadenceFromDays(90))==='{"n":3,"unit":"month"}', JSON.stringify(G._tcCadenceFromDays(90)));
+    check('3 days reads back as every 3 days',
+      JSON.stringify(G._tcCadenceFromDays(3))==='{"n":3,"unit":"day"}', JSON.stringify(G._tcCadenceFromDays(3)));
+    check('7 days prefers weeks over days',
+      JSON.stringify(G._tcCadenceFromDays(7))==='{"n":1,"unit":"week"}', JSON.stringify(G._tcCadenceFromDays(7)));
+    check('an interval too long for 20 of any unit still reads as days',
+      G._tcCadenceFromDays(999).unit==='day');
+    check('no interval reads back as blank', G._tcCadenceFromDays(0).n===0);
+    check('the unit label pluralises with the number',
+      G._tcCadenceUnitLabel('day',1)==='day' && G._tcCadenceUnitLabel('day',3)==='days' &&
+      G._tcCadenceUnitLabel('week',2)==='weeks');
+
+    // Setting either field recomputes the one stored interval
+    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'125',cadenceN:0,cadenceUnit:'week',cadenceDays:0,startDate:_today}});
+    G._tcSetSimplePlanCadence('cadenceN','3');
+    check('picking a number recomputes the interval', G._tcp.simplePlan.cadenceDays===21,
+      String(G._tcp.simplePlan.cadenceDays));
+    G._tcSetSimplePlanCadence('cadenceUnit','day');
+    check('switching the unit recomputes it again, keeping the number',
+      G._tcp.simplePlan.cadenceDays===3 && G._tcp.simplePlan.cadenceN===3,
+      G._tcp.simplePlan.cadenceN+' x '+G._tcp.simplePlan.cadenceUnit+' = '+G._tcp.simplePlan.cadenceDays);
+    G._tcSetSimplePlanCadence('cadenceN','99');
+    check('a number beyond the maximum is clamped, never stored raw',
+      G._tcp.simplePlan.cadenceN===G._TC_CADENCE_MAX_N, String(G._tcp.simplePlan.cadenceN));
+    G._tcSetSimplePlanCadence('cadenceUnit','bogus');
+    check('an unrecognised unit falls back to weeks rather than zeroing the plan',
+      G._tcp.simplePlan.cadenceUnit==='week' && G._tcp.simplePlan.cadenceDays>0);
+
+    // Every-3-days actually generates a 3-day schedule — the reported gap
+    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'50',cadenceN:3,cadenceUnit:'day',cadenceDays:3,startDate:_today}});
+    var _inj3 = G._tcSimplePlanInjections();
+    check('every 3 days generates injections 3 days apart', _inj3.length>2 &&
+      Math.round((new Date(_inj3[1].date)-new Date(_inj3[0].date))/86400000)===3,
+      _inj3.length?_inj3.slice(0,3).map(function(e){return e.date;}).join(' '):'none');
+
+    // A plan saved before this control keeps its exact interval until it is edited
+    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:3.5,startDate:_today}});
+    check('a legacy fractional cadence is preserved, not rounded away',
+      G._tcSimplePlan().cadenceDays===3.5, String(G._tcSimplePlan().cadenceDays));
+    check('  …and is still shown in the two fields as best it can be',
+      G._tcSimplePlan().cadenceN>0 && !!G._tcSimplePlan().cadenceUnit);
+    check('  …and still generates its 3.5-day schedule',
+      G._tcSimplePlanInjections().length>0);
+    G._tcSetSimplePlanCadence('cadenceN','4');
+    check('  …until the user picks a number, which replaces it',
+      G._tcp.simplePlan.cadenceDays===4, String(G._tcp.simplePlan.cadenceDays));
+  } else {
+    check('_tcCadenceToDays available', false);
+  }
+
     G._tcp = _svTcp;
   }else{
     check('_tcPlannerMode / _tcSimplePlanInjections available', false);
@@ -3146,6 +3226,25 @@ console.log('\n── T-Calc simple planner ────────────
     check('  …each names its compound', /<option value="[^"]+"[^>]*>[^<]+</.test(_esterBlock));
     G._tcp = _svTcp2;
   }
+  // The control itself: two fields, in both places a plan can be built
+  if (typeof G._tcSimplePlannerHtml === 'function') {
+    var _svTcp3 = G._tcp;
+    G._tcp = {manualLog:[], simplePlan:{compId:'enanthate',doseMg:'125',cadenceN:3,cadenceUnit:'day',cadenceDays:3,startDate:'2026-08-01'}, plannerMode:'simple'};
+    var _cadHtml = G._tcSimplePlannerHtml('', '');
+    var _cadBlock = _cadHtml.slice(_cadHtml.indexOf('3 · Injection cadence'), _cadHtml.indexOf('4 · First injection'));
+    check('the cadence row renders two selects, not one preset list',
+      (_cadBlock.match(/<select/g)||[]).length===2, JSON.stringify((_cadBlock.match(/<select/g)||[]).length));
+    check('  …the number runs 1 to 20',
+      /<option value="1"/.test(_cadBlock) && /<option value="20"/.test(_cadBlock) && !/<option value="21"/.test(_cadBlock));
+    check('  …the unit offers day, week and month',
+      /value="day"/.test(_cadBlock) && /value="week"/.test(_cadBlock) && /value="month"/.test(_cadBlock));
+    check('  …the saved cadence comes back selected',
+      /<option value="3" selected>/.test(_cadBlock) && /value="day" selected/.test(_cadBlock), _cadBlock.slice(0,400));
+    check('  …and the old preset list is gone from this control',
+      !/2×\/week|E3\.5D|How often/.test(_cadBlock));
+    G._tcp = _svTcp3;
+  }
+
 
   // Catch-all for the bug class: a `typeof X === 'function'` guard around a helper
   // that does not exist anywhere fails open and silently renders nothing.
