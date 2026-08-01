@@ -1614,6 +1614,83 @@ console.log('\n── dose dedup migration ────────────�
     !rawScript.includes("if(!_activeStackIndices.length)_activeStackIndices=[0];"));
 }
 
+
+// ── Wizard summaries list every tier ─────────────────────────────────────────
+// Reported 2026-08-01: "never shows trt ester chosen, makes me think it is a
+// peptide-only stack". Validate and Review read only the classic _wiz.trt tier, so a
+// protocol whose testosterone came from the T-Calc planner (_wiz.trtPlan — the
+// default path since the TRT step became that planner) listed its peptides and
+// nothing else. Both steps now go through _wizTrtSummaryRows.
+{
+  console.log('\n── Wizard summaries cover every tier ──────────────────────');
+  const _svWiz = G._wiz;
+  const _mkEl2 = () => { let h=''; return {set innerHTML(v){h=v;}, get innerHTML(){return h;}}; };
+  const _pep = {id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0,1,2,3,4,5,6],times:['AM'],dose_am:'3',unit_am:'mg',active:true};
+
+  check('_wizTrtSummaryRows is defined', typeof G._wizTrtSummaryRows === 'function');
+  if (typeof G._wizTrtSummaryRows === 'function') {
+    // A plan built in the TRT step is a real TRT compound and must be summarised
+    G._wiz = {goals:['trt'], peptides:[_pep], trt:{}, enhanced:{}, stackName:'P',
+      trtPlan:{compId:'enanthate',doseMg:'125',cadenceN:5,cadenceUnit:'day',cadenceDays:5,startDate:'2026-08-01'}};
+    let rows = G._wizTrtSummaryRows();
+    check('a T-Calc-planner protocol reports its ester', rows.length===1 && rows[0].id==='enanthate',
+      JSON.stringify(rows));
+    check('  …with its dose', rows[0].dose==='125mg', rows[0].dose);
+    check('  …and its cadence in words', rows[0].cadence==='Every 5 days', rows[0].cadence);
+    check('  …named, not left as a raw id', rows[0].name && rows[0].name!=='enanthate', rows[0].name);
+
+    G._wiz.trtPlan.cadenceN=1; G._wiz.trtPlan.cadenceUnit='week'; G._wiz.trtPlan.cadenceDays=7;
+    check('a cadence of one reads "Every week", not "Every 1 weeks"',
+      G._wizTrtSummaryRows()[0].cadence==='Every week', G._wizTrtSummaryRows()[0].cadence);
+
+    // An incomplete plan is not a compound
+    G._wiz.trtPlan={compId:'enanthate',doseMg:'',cadenceN:0,cadenceUnit:'week',cadenceDays:0,startDate:''};
+    check('an unfinished plan contributes nothing', G._wizTrtSummaryRows().length===0);
+
+    // The classic tier still works, and both together de-duplicate
+    G._wiz.trtPlan=null;
+    G._wiz.trt={enabled:true,compounds:[{id:'testosterone-cyp',name:'Test Cyp',dose:'100',unit:'mg',freqVal:1,freqUnit:'weeks',dot:'#e8a020'}]};
+    rows = G._wizTrtSummaryRows();
+    check('the classic multi-compound tier is still summarised',
+      rows.length===1 && rows[0].id==='testosterone-cyp', JSON.stringify(rows));
+    G._wiz.trtPlan={compId:'testosterone-cyp',doseMg:'100',cadenceN:1,cadenceUnit:'week',cadenceDays:7,startDate:'2026-08-01'};
+    check('the same ester configured both ways is listed once',
+      G._wizTrtSummaryRows().length===1, JSON.stringify(G._wizTrtSummaryRows()));
+    G._wiz.trtPlan={compId:'enanthate',doseMg:'125',cadenceN:1,cadenceUnit:'week',cadenceDays:7,startDate:'2026-08-01'};
+    check('two different esters are both listed', G._wizTrtSummaryRows().length===2,
+      JSON.stringify(G._wizTrtSummaryRows().map(function(r){return r.id;})));
+  }
+
+  // End to end through the two steps that render a summary
+  G._wiz = {goals:['trt'], peptides:[_pep], trt:{}, enhanced:{}, stackName:'P', step:0,
+    trtPlan:{compId:'enanthate',doseMg:'125',cadenceN:5,cadenceUnit:'day',cadenceDays:5,startDate:'2026-08-01'}};
+  if (typeof G.wizStepValidate === 'function') {
+    const vb=_mkEl2(), vf=_mkEl2();
+    G.wizStepValidate(vb,vf);
+    check('Validate shows a TRT heading when a plan exists', /TRT</.test(vb.innerHTML) || />TRT/.test(vb.innerHTML),
+      vb.innerHTML.slice(0,200));
+    check('  …and names the ester', /Enanthate|Testosterone/i.test(vb.innerHTML));
+    check('  …alongside the peptides', /Retatrutide/.test(vb.innerHTML));
+  }
+  if (typeof G.wizStepReview === 'function') {
+    const rb=_mkEl2(), rf=_mkEl2();
+    G.wizStepReview(rb,rf);
+    check('Review lists the ester in the summary', /Enanthate|Testosterone/i.test(rb.innerHTML),
+      rb.innerHTML.slice(0,300));
+    check('  …with dose and cadence', /125mg/.test(rb.innerHTML) && /Every 5 days/.test(rb.innerHTML));
+    check('  …and still lists the peptides', /Retatrutide/.test(rb.innerHTML));
+  }
+
+  // A peptide-only protocol must NOT sprout an empty TRT section
+  G._wiz = {goals:[], peptides:[_pep], trt:{}, enhanced:{}, stackName:'P', step:0, trtPlan:null};
+  if (typeof G.wizStepValidate === 'function') {
+    const nb=_mkEl2(), nf=_mkEl2();
+    G.wizStepValidate(nb,nf);
+    check('a peptide-only protocol shows no TRT section', !/>TRT</.test(nb.innerHTML));
+  }
+  G._wiz = _svWiz;
+}
+
 // ── Only one protocol may be active ──────────────────────────────────────────
 // Reported 2026-08-01: three protocols showed "Active" at once, including two
 // overlapping TRT protocols, so Today merged doses from all of them. Activation

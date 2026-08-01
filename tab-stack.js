@@ -2266,21 +2266,57 @@ function wizSetEnhDose(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c
 function wizSetEnhUnit(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
 function wizSetEnhDoseSlot(id,slot,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c['dose_'+_slotKey(slot)]=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,_enhSplitTotal(c));}}
 function wizSetEnhDays(id,di){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+// Every TRT compound this protocol will actually dose, whichever way the tier was
+// filled in. Reported 2026-08-01: the Validate and Review steps read only the classic
+// _wiz.trt tier, so a protocol whose testosterone came from the T-Calc planner listed
+// its peptides and nothing else — it read as a peptide-only stack. Summaries must
+// always show every tier, so they go through this.
+// Returns display rows: {id, name, dot, dose, cadence}.
+function _wizTrtSummaryRows(){
+  var rows=[], seen={};
+  var nameOf=function(id){
+    if(typeof _tcCompInfo==='function'){var cd=_tcCompInfo(id);if(cd&&cd.name)return cd.name;}
+    var t=(typeof TRT_CAT!=='undefined'?TRT_CAT:[]).find(function(c){return c.id===id;});
+    return t?t.name:(id||'Testosterone');
+  };
+  // The T-Calc planner plan, if the user filled it in on the TRT step.
+  var p=(_wiz&&_wiz.trtPlan)||null;
+  if(p&&p.compId&&parseDec(p.doseMg)>0&&parseDec(p.cadenceDays)>0){
+    var n=parseInt(p.cadenceN,10)||0;
+    var cad=n?('Every '+(n===1?'':n+' ')+((typeof _tcCadenceUnitLabel==='function')?_tcCadenceUnitLabel(p.cadenceUnit,n):p.cadenceUnit))
+             :('Every '+parseDec(p.cadenceDays)+' days');
+    rows.push({id:p.compId,name:nameOf(p.compId),dot:'var(--accent4)',dose:parseDec(p.doseMg)+'mg',cadence:cad});
+    seen[p.compId]=true;
+  }
+  // Anything configured in the classic multi-compound editor.
+  (typeof _trtCompounds==='function'?_trtCompounds(_wiz&&_wiz.trt):[]).forEach(function(c){
+    if(c.id&&seen[c.id])return;
+    if(c.id)seen[c.id]=true;
+    var days=c.days&&c.days.length===7?'Every day':c.days&&c.days.length?c.days.length+'x/week'
+            :(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'TRT');
+    rows.push({id:c.id||'',name:c.name||nameOf(c.id),dot:c.dot||'var(--accent4)',
+               dose:c.dose?c.dose+(c.unit||'mg'):'',cadence:days});
+  });
+  return rows;
+}
 function wizStepValidate(body,footer){
   var g=(_wiz&&_wiz.goals)||[];
   var pepGoals=g.filter(function(x){return x!=='trt'&&x!=='enhanced';});
   var hasPeps=pepGoals.length>0||(!_wiz.trt.enabled&&!g.includes('enhanced'));
-  var hasTRT=!!(_wiz.trt&&_wiz.trt.enabled);
   var hasEnhanced=g.includes('enhanced');
   var html='<div class="wiz-section" style="margin-bottom:8px">All Compounds</div>';
   if(hasPeps&&_wiz.peptides.length){
     html+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Peptides</div>';
     _wiz.peptides.forEach(function(p){html+='<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><div style="width:7px;height:7px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><span style="font-size:13px;color:var(--text)">'+p.name+'</span></div>';});
   }
-  if(hasTRT&&_wiz.trt.compound){
+  var _trtRows=_wizTrtSummaryRows();
+  if(_trtRows.length){
     html+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:10px 0 6px">TRT</div>';
-    html+='<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><div style="width:7px;height:7px;border-radius:50%;background:var(--accent4);flex-shrink:0"></div><span style="font-size:13px;color:var(--text)">'+_esc(_wiz.trt.compound)+'</span></div>';
+    _trtRows.forEach(function(r){
+      html+='<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><div style="width:7px;height:7px;border-radius:50%;background:'+r.dot+';flex-shrink:0"></div><span style="font-size:13px;color:var(--text)">'+_esc(r.name)+'</span></div>';
+    });
   }
+
   if(hasEnhanced&&_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length){
     html+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:10px 0 6px">Enhanced</div>';
     _wiz.enhanced.compounds.forEach(function(c){html+='<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><div style="width:7px;height:7px;border-radius:50%;background:'+(c.dot||'var(--accent2)')+';flex-shrink:0"></div><span style="font-size:13px;color:var(--text)">'+_esc(c.name||c.id)+'</span></div>';});
@@ -2324,7 +2360,7 @@ function wizStepReview(body,footer){
   var _reviewFlow=_wizFlow();
   if(_wiz.peptides.length){_wiz.peptides.forEach(function(p){var dose=_slotDoseSummary(p,'/',false)||'?';var days=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?p.days.length+'x/week':'?';html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(p.name)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc(dose+' · '+days)+'</div></div>';});}
   else if(_reviewFlow.includes('peptides')){html+='<div style="color:var(--muted2);font-size:13px;">No peptides selected.</div>';}
-  _trtCompounds(_wiz.trt).forEach(function(c){var days=c.days&&c.days.length===7?'Every day':c.days&&c.days.length?c.days.length+'x/week':(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'TRT');html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(c.dot||'var(--accent4)')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(c.name)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc((c.dose?c.dose+(c.unit||'mg')+' · ':'')+days)+'</div></div>';});
+  _wizTrtSummaryRows().forEach(function(r){html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+r.dot+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(r.name)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc((r.dose?r.dose+' · ':'')+r.cadence)+'</div></div>';});
   if((_wiz.goals||[]).includes('enhanced')){
     html+='<div class="wiz-section" style="margin-top:16px">Enhancement Compounds</div>';
     if(_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length){
