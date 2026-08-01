@@ -407,7 +407,11 @@ function _tcCompInfo(compId) {
       // Documented time-to-peak, where the compound's label/SmPC states one. Drives the
       // absorption constant via _tcKa — see that function. Absent for compounds whose
       // labels state no tmax (cypionate, propionate, gel), which keep the bucket default.
-      tmaxDays:        extra.tmaxDays || 0
+      tmaxDays:        extra.tmaxDays || 0,
+      // Mass of testosterone per mass of ester = MW(testosterone) / MW(ester).
+      // Backend-served where present; the fallback below is the molecular-weight ratio,
+      // a physical constant rather than compound data.
+      testosteroneFraction: extra.testosteroneFraction || _TC_T_FRACTION[compId] || 1
     };
   }
   var cat   = (typeof TRT_CAT   !== 'undefined') ? TRT_CAT.find(function(x){ return x.id === compId; })   : null;
@@ -421,9 +425,34 @@ function _tcCompInfo(compId) {
     halfLifeDaysLow:  hl,
     halfLifeDaysHigh: hl,
     halfLifeNote: '',
-    halfLifeStr:  guide ? guide.halfLife : ''
+    halfLifeStr:  guide ? guide.halfLife : '',
+    // The offline path must carry the ester correction too. Without this the whole
+    // fraction is silently 1 whenever the /trt-catalog fetch fails — the model would
+    // quietly go back to treating a 100 mg undecanoate dose as 100 mg of testosterone
+    // (it is 63.1 mg), which is the exact error the field exists to fix.
+    testosteroneFraction: _TC_T_FRACTION[compId] || 1
   };
 }
+
+// Testosterone mass fraction of each ester = MW(testosterone, 288.4) / MW(ester).
+// Physical constants (molecular weights), not compound data — the same class as the
+// Vermeulen binding constants below. Backend-served via /trt-catalog; this is the
+// offline fallback. Every weight is from PubChem, recorded in the backend's
+// docs/enhanced-bodybuilding/sources/pubchem-*.txt:
+//   propionate C22H32O3 344.5 | enanthate C26H40O3 400.6
+//   cypionate  C27H40O3 412.6 | undecanoate C30H48O3 456.7
+// Sustanon 250 is a blend: 30 mg propionate + 60 phenylpropionate + 60 isocaproate +
+// 100 decanoate (SmPC composition), whose testosterone masses sum to 176.2 mg of the
+// 250 mg label dose -> 0.7046.
+var _TC_T_FRACTION = {
+  propionate:  0.8372,
+  enanthate:   0.7199,
+  testoviron:  0.7199,
+  cypionate:   0.6990,
+  nebido:      0.6315,
+  sustanon:    0.7046,
+  topical:     1.0
+};
 
 // ── Vermeulen free-T calculator ───────────────────────────────────────────────
 
@@ -1540,8 +1569,14 @@ function _tcDefaultFT(birthYear) {
 // as total[t] * (calFT_arr ? calFT_arr[t] : scale).
 function _tcFreeTSeries(sorted, hooks) {
   hooks = hooks || {};
-  var firstDate = new Date(sorted[0].date);
-  var lastDate  = new Date(sorted[sorted.length - 1].date);
+  // Every date-only string in this function is parsed at LOCAL NOON. Mixing conventions
+  // is a real off-by-one: a bare new Date('2026-06-01') is UTC midnight, while the
+  // bloodwork/suppressor dates below are parsed as '<date>T12:00:00' (local noon) to stay
+  // DST-proof. Differencing the two gives a half-day remainder that Math.round promotes to
+  // a whole day, so the draw landed on index 20 of a series starting 2026-06-01 instead of
+  // 19 — and the curve was anchored one day off the measurement it was calibrated against.
+  var firstDate = new Date(sorted[0].date + 'T12:00:00');
+  var lastDate  = new Date(sorted[sorted.length - 1].date + 'T12:00:00');
 
   var maxHL = 1;
   sorted.forEach(function(e) {
@@ -1571,8 +1606,13 @@ function _tcFreeTSeries(sorted, hooks) {
     var hlHi  = cd.halfLifeDaysHigh || hl;
     if (hlLo !== hl || hlHi !== hl) hasPkBand = true;
     var bioav = cd.bioavailability || 1;
-    var injectDay = Math.round((new Date(e.date) - firstDate) / 86400000);
-    var absorbed  = parseDec(e.doseMg) * bioav;
+    var injectDay = Math.round((new Date(e.date + 'T12:00:00') - firstDate) / 86400000);
+    // A dose is prescribed as ESTER mass, but only the testosterone part is the drug:
+    // 100 mg of enanthate is 72.0 mg of testosterone, undecanoate 63.2 mg. For a
+    // single-ester user this is a constant the calibration absorbs, so it never showed;
+    // it is a real error the moment two esters are compared or one is switched for
+    // another (enanthate vs undecanoate is 14%).
+    var absorbed  = parseDec(e.doseMg) * bioav * (cd.testosteroneFraction || 1);
     var series = [[hl, total], [hlLo, totalLo], [hlHi, totalHi]];
     for (var si = 0; si < series.length; si++) {
       var _hl = series[si][0], arr = series[si][1];
@@ -1602,7 +1642,8 @@ function _tcFreeTSeries(sorted, hooks) {
   var _logMean = (_logPeak + _logTrough) / 2 || _logPeak;
   // Always compute absorbed totals — needed for both calFT and warm-start
   var _totalAbsMg = 0;
-  sorted.forEach(function(e) { _totalAbsMg += parseDec(e.doseMg) * ((_tcCompInfo(e.compId).bioavailability) || 1); });
+  sorted.forEach(function(e) { var _ci2 = _tcCompInfo(e.compId);
+    _totalAbsMg += parseDec(e.doseMg) * (_ci2.bioavailability || 1) * (_ci2.testosteroneFraction || 1); });
   var _effMgWk = _logDays > 0 ? _totalAbsMg / _logDays * 7 : 0;
 
   var calFT = null;
@@ -1720,8 +1761,16 @@ function _tcFreeTSeries(sorted, hooks) {
         // planned after today, so the peak cannot drop as future injections are added.
         // (Anchoring the floor at the tiny day-0 residual instead made calFT enormous — the
         // curve started at baseline but the peak was absurdly high.)
+        // …but only when day 0 really IS a pre-cycle baseline: either no draw at all, or a
+        // draw dated before the first injection and clamped forward to day 0. A draw dated
+        // exactly ON the first injection day is a genuine day-0 anchor — _mftNum describes
+        // the user at the draw, not before the cycle — and total[today] grows with every
+        // injection logged between the draw and today, so using it here would let a log
+        // extension move calFT. That case falls through to the settled-PK baseline below,
+        // which sees only the draw-date injections and is therefore immune.
         var _slopeDay0 = Math.round((Date.now() - firstDate.getTime()) / 86400000);
-        if (_anchorDay === 0 && _slopeDay0 >= 1 && _slopeDay0 <= _logDays && total[_slopeDay0] > 0) {
+        var _p2PreCycle = (_bwAnchorDay === null || _bwAnchorDay < 0);
+        if (_anchorDay === 0 && _p2PreCycle && _slopeDay0 >= 1 && _slopeDay0 <= _logDays && total[_slopeDay0] > 0) {
           _p2Baseline = total[_slopeDay0];
         } else if (_p2Pk > 0) {
           if (_p2Tr === Infinity) _p2Tr = _p2Pk;
@@ -1925,13 +1974,28 @@ function _tcFreeTSeries(sorted, hooks) {
       // suppression alone — so with no suppressors the curve stays flat at the anchor, and with
       // GH/Boron it shows their effect, without inventing a T-driven swing we can't support.
       var _useBeta = (_tier === 'measured');
+      // Total T at the calibration anchor corresponds to total[_shbgRefDay] of modelled
+      // drug. Everywhere else the modelled amount says how far above or below that the
+      // user is, so total T must MOVE with it — pinning it at the anchor and only varying
+      // SHBG made free T strictly proportional to dose, which (with the linearised
+      // binding equation, fixed the same day) is what made a cycle projection read low.
+      var _totRef = total[_shbgRefDay] || 0;
       var _mkArr = function(beta) {
         var arr = new Float64Array(totalDays + 1);
         for (var t = 0; t <= totalDays; t++) {
           var _tf = _useBeta ? _tFactor(t, beta) : 1;
           var _shbgT = Math.max(1, _shbgBase * _ghProd(t) * _tf);
-          var _vermT = _tcVermeulenFT(_ttNum, _shbgT);
-          arr[t] = _vermT ? calFT * (_vermT / _vermBw) : calFT;
+          // Dose ratio vs the anchor. Without a usable anchor amount we cannot say how
+          // far from it we are, so fall back to the SHBG-only behaviour.
+          var _ratio = _totRef > 0 ? total[t] / _totRef : 1;
+          var _vermT = (_totRef > 0 && _ratio > 0)
+            ? _tcVermeulenFT(_ttNum * _ratio, _shbgT)
+            : _tcVermeulenFT(_ttNum, _shbgT);
+          // callers render total[t] * arr[t], so divide the ratio back out: the array
+          // carries the binding non-linearity, total[] carries the amount.
+          arr[t] = (_vermT && _vermBw > 0 && _ratio > 0)
+            ? calFT * (_vermT / _vermBw) / _ratio
+            : calFT;
         }
         return arr;
       };
@@ -1983,6 +2047,25 @@ function _tcFreeTSeries(sorted, hooks) {
       calFT_arr[_et] = scale;
       _calFTlo[_et]  = scale * (1 - _estFrac);
       _calFThi[_et]  = scale * (1 + _estFrac);
+    }
+  }
+
+  // Anchor the finished curve on the measurement. calFT comes from _logMean — the
+  // peak/trough mean of the raw accumulation — so the rendered series only ever passed
+  // APPROXIMATELY through the user's own free T on the draw day. The linearised binding
+  // equation happened to land inside 3%; the correct one does not, which is how this
+  // surfaced. Normalising here rather than inside the SHBG branch covers every path that
+  // can produce calFT_arr, including the no-SHBG-model fallback directly above.
+  if (calFT_arr && _mftNum > 0) {
+    var _anchDay = Math.max(0, Math.min(totalDays, _anchorDay));
+    var _at = total[_anchDay] * calFT_arr[_anchDay];
+    if (_at > 0) {
+      var _k = _mftNum / _at;
+      for (var _ai = 0; _ai <= totalDays; _ai++) {
+        calFT_arr[_ai] *= _k;
+        if (_calFTlo) _calFTlo[_ai] *= _k;
+        if (_calFThi) _calFThi[_ai] *= _k;
+      }
     }
   }
 
@@ -2314,7 +2397,7 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   }
 
   sorted.forEach(function(e) {
-    var injectDay = Math.round((new Date(e.date) - firstDate) / 86400000);
+    var injectDay = Math.round((new Date(e.date + 'T12:00:00') - firstDate) / 86400000);
     if (injectDay < xStart || injectDay > xEnd) return;
     var dot = _tcCompInfo(e.compId).dot || lineColor;
     var ix = xOf(injectDay);

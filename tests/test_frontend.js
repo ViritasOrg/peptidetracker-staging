@@ -4445,8 +4445,34 @@ if (typeof G._tcFreeTSeries === 'function') {
   var _psFlat = G._tcFreeTSeries(_psLog.slice(), {});
   check('no-bloodwork SHBG: model runs in the estimate tier (calibrated pmol/L)',
     _psFlat.tier === 'estimate' && _psFlat.calFT > 0 && !!_psFlat.calFT_arr);
-  check('no-bloodwork SHBG: with no suppressors the curve is flat (no invented T-driven swing)',
-    _psSpread(_psFlat) < 1.01);
+  // What "no invented T-driven swing" means, now that the binding equation is the real
+  // Vermeulen one. This used to assert calFT_arr was FLAT (spread < 1.01). That assertion
+  // only held while free T was LINEAR in total T: with saturable SHBG binding, free T rises
+  // faster than proportionally, so calFT_arr — which carries exactly that non-linearity,
+  // total[] carrying the amount — must bend with dose. Demanding flatness would be demanding
+  // the linearisation back. (Verified: in this tier the array reproduces bit-for-bit from a
+  // CONSTANT-SHBG Vermeulen reconstruction.)
+  //
+  // The real invariant is that SHBG itself never moves without a measured total T — the β
+  // power-law stays off. β acts through a LAGGED EMA of total T, so when it is on, two days
+  // that share the same total T get different free-T scaling depending on how they got
+  // there. With SHBG constant, calFT_arr is a pure function of total[t] and nothing else.
+  function _psPathDep(s){
+    var worst = 0;
+    for (var a = 0; a <= s.totalDays; a++) {
+      for (var b = a + 15; b <= s.totalDays; b++) {          // rising limb vs falling limb
+        if (!(s.total[a] > 0) || !(s.total[b] > 0)) continue;
+        if (Math.abs(s.total[a] / s.total[b] - 1) > 0.002) continue;   // same total T
+        var d = Math.abs(s.calFT_arr[a] / s.calFT_arr[b] - 1);
+        if (d > worst) worst = d;
+      }
+    }
+    return worst;
+  }
+  var _psDepEst = _psPathDep(_psFlat);
+  check('no-bloodwork SHBG: no β-driven swing — SHBG is constant, so free T is a pure function of total T',
+    _psDepEst < 0.002, 'path-dependence=' + _psDepEst.toFixed(6));
+
   // add a GH suppressor → the curve must bend (suppression shows without any bloodwork)
   G._tcGhStack = [{pepId:'hgh', startDateStr:'2026-05-01', interactions:_psGhI, dailyDose:5}];
   var _psSupp = G._tcFreeTSeries(_psLog.slice(), {});
@@ -4459,7 +4485,65 @@ if (typeof G._tcFreeTSeries === 'function') {
   check('no-bloodwork SHBG: no population baseline → falls back to a flat estimate',
     _psSpread(G._tcFreeTSeries(_psLog.slice(), {})) < 1.01);
   G._tcShbgBaseline = _psBase;
+  // Teeth for the path-dependence check above: with a MEASURED total T the β power-law does
+  // run, SHBG tracks the lagged T level, and the very same measurement separates clearly.
+  // Without this, "path-dependence is small" could pass simply by being unmeasurable.
+  G._tcGhStack = [];
+  G._tcp = {measuredFT:'400', currentDoseMgWk:'', totalT:'25', shbg:'40', birthYear:'1985', manualLog:_psLog};
+  G._tcBwEntries = [{date:'2026-05-01', total_t:25, shbg:40, free_t:400}];
+  var _psMeas = G._tcFreeTSeries(_psLog.slice(), {});
+  var _psDepMeas = _psPathDep(_psMeas);
+  check('no-bloodwork SHBG: …and the measured tier DOES apply β (so the check above can fail)',
+    _psMeas.tier === 'measured' && _psDepMeas > 0.005 && _psDepMeas > _psDepEst * 5,
+    'measured=' + _psDepMeas.toFixed(6) + ' vs estimate=' + _psDepEst.toFixed(6));
   G._tcp = _psTp; G._tcBwEntries = _psBw; G._tcGhStack = _psGh;
+}
+
+// ── Ester mass fraction: a dose is ESTER mass, only part of it is testosterone ──
+console.log('\n── T-calc: ester mass fraction (testosteroneFraction) ──');
+if (typeof G._TC_T_FRACTION === 'object' && G._TC_T_FRACTION) {
+  var _efT = 288.4;   // testosterone C19H28O2, PubChem CID 6013
+  var _efMW = { propionate:344.5, enanthate:400.6, cypionate:412.6, undecanoate:456.7,
+                phenylpropionate:420.6, isocaproate:386.6, decanoate:442.7 };
+  function _efRatio(e){ return Math.round(_efT/_efMW[e]*10000)/10000; }
+  check('ester fraction: enanthate is the MW ratio, not a remembered constant',
+    Math.abs(G._TC_T_FRACTION.enanthate - _efRatio('enanthate')) < 1e-9,
+    'got ' + G._TC_T_FRACTION.enanthate + ' want ' + _efRatio('enanthate'));
+  check('ester fraction: testoviron IS enanthate, same fraction',
+    G._TC_T_FRACTION.testoviron === G._TC_T_FRACTION.enanthate);
+  check('ester fraction: cypionate', Math.abs(G._TC_T_FRACTION.cypionate - _efRatio('cypionate')) < 1e-9);
+  check('ester fraction: propionate', Math.abs(G._TC_T_FRACTION.propionate - _efRatio('propionate')) < 1e-9);
+  check('ester fraction: nebido is undecanoate', Math.abs(G._TC_T_FRACTION.nebido - _efRatio('undecanoate')) < 1e-9);
+  check('ester fraction: topical gel is unesterified testosterone (1.0)', G._TC_T_FRACTION.topical === 1.0);
+  // Sustanon is a blend — the dose-weighted mean of its four SmPC-stated components.
+  // Regression on a real error: 0.729 (from a "182.2 mg" figure that does not reproduce)
+  // overstated its testosterone content by 3.5%.
+  var _efBlend = [[30,'propionate'],[60,'phenylpropionate'],[60,'isocaproate'],[100,'decanoate']];
+  var _efMg = 0, _efTotal = 0;
+  _efBlend.forEach(function(c){ _efMg += c[0]; _efTotal += c[0] * _efT / _efMW[c[1]]; });
+  check('ester fraction: Sustanon components sum to the 250 mg label dose', _efMg === 250);
+  check('ester fraction: Sustanon blend is 176.2 mg testosterone per 250 mg',
+    Math.abs(_efTotal - 176.16) < 0.05, 'got ' + _efTotal.toFixed(2));
+  check('ester fraction: Sustanon is the dose-weighted blend (0.7046)',
+    Math.abs(G._TC_T_FRACTION.sustanon - Math.round(_efTotal/250*10000)/10000) < 1e-9,
+    'got ' + G._TC_T_FRACTION.sustanon);
+  check('ester fraction: the superseded 0.729 is gone', G._TC_T_FRACTION.sustanon !== 0.729);
+  // Ordering the model depends on: a heavier ester delivers LESS testosterone per mg.
+  check('ester fraction: propionate > enanthate > cypionate > undecanoate (heavier ester, less T)',
+    G._TC_T_FRACTION.propionate > G._TC_T_FRACTION.enanthate &&
+    G._TC_T_FRACTION.enanthate  > G._TC_T_FRACTION.cypionate &&
+    G._TC_T_FRACTION.cypionate  > G._TC_T_FRACTION.nebido);
+  // The whole point: switching ester at the same mg changes delivered testosterone.
+  if (typeof G._tcCompInfo === 'function') {
+    var _efEn = G._tcCompInfo('enanthate'), _efNe = G._tcCompInfo('nebido');
+    check('ester fraction: _tcCompInfo exposes it to the PK model',
+      _efEn.testosteroneFraction > 0 && _efNe.testosteroneFraction > 0);
+    check('ester fraction: 100 mg enanthate delivers ~14% more testosterone than 100 mg undecanoate',
+      Math.abs((_efEn.testosteroneFraction / _efNe.testosteroneFraction) - 1.14) < 0.02,
+      'ratio=' + (_efEn.testosteroneFraction / _efNe.testosteroneFraction).toFixed(4));
+  }
+} else {
+  check('_TC_T_FRACTION defined', false);
 }
 
 // Regression: warm-start ke for curDose=0 must use slowest compound ke (not weighted avg).
