@@ -3131,7 +3131,13 @@ function buildTCalc() {
 
   var log      = _tcp.manualLog || [];
   var comps    = _tcManualComps();
-  var validLog = log.filter(function(e){ return e.date && e.doseMg && parseDec(e.doseMg) > 0; });
+  // The curve is driven by _tcCurveLog(), NOT by the manual log: with the simple planner
+  // live the schedule is generated from the plan and manualLog is legitimately empty.
+  // Gating the card on manualLog meant an active plan — "140 mg/week, 74 injections
+  // projected, shown in the plasma curve above" — rendered "No injections logged yet" and
+  // no canvas at all. The draw calls already used _tcCurveLog(); only this gate did not.
+  // `log` below still means the manual log, which is what the advanced planner edits.
+  var validLog = _tcCurveLog();
   var mftNum   = parseDec(_tcp.measuredFT) || 0;
 
   var html = '';
