@@ -483,6 +483,28 @@ var _TC_T_FRACTION = {
 // It is NOT a fitted constant. Do not "restore" a calibration factor.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// HPTA suppression: your own production is NOT a constant once you inject.
+// Exogenous androgen suppresses LH/FSH, so endogenous output falls toward zero — at
+// supraphysiological doses it is essentially fully shut down. Adding a fixed P at every
+// timepoint therefore overstates the plateau: for a 100 mg TU q2d protocol the modelled
+// steady state ran (rate+P)/P instead of (rate+P_suppressed)/P, about 20% high.
+//
+// Shape: P(rate) = P0 * exp(-rate/P0). It is a MODEL, not a retrieved curve — but it
+// introduces NO new free parameter, because the scale is P0 itself, which is the
+// physiologically natural choice: feedback is set by how far exogenous input exceeds
+// your own output. Behaviour it produces:
+//   rate 0            -> P0          (pre-cycle: unsuppressed, so a baseline draw still
+//                                     calibrates against true unsuppressed production)
+//   rate = P0         -> 0.37 * P0   (a replacement-level dose partly suppresses)
+//   rate = 4.9 * P0   -> 0.008 * P0  (supraphysiological: effectively shut down)
+// The near-complete suppression at supraphysiological doses is well established; the
+// exact curve between those points is this model's assumption and is labelled as such.
+function _tcEndogAt(drugRateMgd, p0) {
+  if (!(p0 > 0)) return 0;
+  var r = drugRateMgd > 0 ? drugRateMgd : 0;
+  return p0 * Math.exp(-r / p0);
+}
+
 // Endogenous testosterone production, mg/day. The one link between "my own level" and
 // "mg I inject", so it sets how far above baseline any protocol lands.
 // TODO: move to the backend with a citation (clinical range ~3-10 mg/day).
@@ -1818,8 +1840,11 @@ function _tcFreeTSeries(sorted, hooks) {
   var _endogP = TCALC_ENDOG_T_MGD > 0 ? TCALC_ENDOG_T_MGD : 0;
   if (_endogP > 0) {
     for (var _ep = 0; _ep <= totalDays; _ep++) {
-      total[_ep] += _endogP;
-      if (hasPkBand) { totalLo[_ep] += _endogP; totalHi[_ep] += _endogP; }
+      total[_ep] += _tcEndogAt(total[_ep], _endogP);
+      if (hasPkBand) {
+        totalLo[_ep] += _tcEndogAt(totalLo[_ep], _endogP);
+        totalHi[_ep] += _tcEndogAt(totalHi[_ep], _endogP);
+      }
     }
   }
 
