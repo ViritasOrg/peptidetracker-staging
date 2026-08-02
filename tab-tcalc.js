@@ -943,12 +943,27 @@ function _tcSimplePlanInjections(){
   if (!start || isNaN(start.getTime())) return [];
   var end = new Date(Math.max(NOW.getTime(), start.getTime()) + _TC_SIMPLE_HORIZON_DAYS * 86400000);
   var out = [];
-  // Cadence can be fractional (3x/week = 7/3 d); step in ms and re-derive the date so
-  // rounding cannot drift over a long horizon.
-  var stepMs = p.cadenceDays * 86400000;
-  if (!(stepMs > 0)) return [];
+  // Step in CALENDAR DAYS, never in milliseconds.
+  //
+  // This used to advance by i * cadenceDays * 86400000 ms from parseLocalDate(startDate),
+  // which is LOCAL MIDNIGHT. A fixed number of milliseconds is not a fixed number of local
+  // days: at each daylight-saving transition the wall clock moves an hour, and anchored at
+  // midnight that immediately crosses a date boundary. Real output for "every 5 days" from
+  // 2026-08-02 in a European timezone:
+  //     2026-10-21 -> 2026-10-25   a 4-DAY gap  (clocks back, landed 23:00 the day before)
+  //     2027-03-24 -> 2027-03-30   a 6-DAY gap  (clocks forward)
+  // i.e. one dose crammed in and one dropped, which drew two visible kinks in the plasma
+  // curve — an artifact of the calendar, mistaken for pharmacology.
+  //
+  // Date arithmetic through the Date constructor normalises in local time, so day offsets
+  // are DST-proof. Cadence can still be fractional (3x/week = 7/3 d): round the CUMULATIVE
+  // offset rather than each step, so doses land on whole days without drifting over a long
+  // horizon — 7/3 gives 0, 2, 5, 7, 9, 12, 14 ... which is exactly 3 per week.
+  var cadence = parseDec(p.cadenceDays) || 0;
+  if (!(cadence > 0)) return [];
   for (var i = 0; i < _TC_SIMPLE_MAX_INJ; i++){
-    var t = new Date(start.getTime() + i * stepMs);
+    var t = new Date(start.getFullYear(), start.getMonth(),
+                     start.getDate() + Math.round(i * cadence), 12, 0, 0, 0);
     if (t > end) break;
     out.push({ compId: p.compId, doseMg: String(parseDec(p.doseMg)), date: dateKey(t), source: 'simple' });
   }
