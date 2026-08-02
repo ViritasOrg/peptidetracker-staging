@@ -8029,4 +8029,11 @@ console.log('\n── T-History: read-only view ──────────�
 
 console.log('\n───────────────────────────────────────────────────────────');
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
-if(failed>0)process.exit(1);
+// Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
+// block near the top of this file; that callback is a microtask and only runs after
+// this synchronous phase finishes. Calling process.exit(1) killed the process first,
+// so ANY synchronous failure silently skipped those 137 tests — they disappeared
+// exactly when the suite was already broken and you most needed them. Setting
+// exitCode lets the queue drain; the async block prints the full total and exits
+// with the true aggregate.
+process.exitCode = failed > 0 ? 1 : 0;
