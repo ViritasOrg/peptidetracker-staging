@@ -66,6 +66,9 @@ const sandbox = vm.createContext({
   document:  {getElementById:()=>mockEl(),querySelectorAll:()=>[mockEl()],querySelector:()=>mockEl(),createElement:()=>mockEl(),body:mockEl(),head:mockEl(),createTextNode:()=>mockEl(),addEventListener:noop,hidden:false,documentElement:{style:{setProperty:noop,getPropertyValue:()=>''}}},
   fetch:     async()=>({ok:false,json:async()=>({})}),
   google:undefined,confirm:()=>false,alert:noop,Image:function(){},setTimeout:noop,clearTimeout:noop,setInterval:noop,console,
+  // The real browser has this; buildTCalc schedules its canvas draw through it. Without
+  // it, any test that renders a NON-EMPTY plasma curve throws ReferenceError.
+  requestAnimationFrame:noop,cancelAnimationFrame:noop,
   AbortController:class{constructor(){this.signal={};}abort(){}},
 });
 vm.runInContext(patchedScript, sandbox);
@@ -4701,6 +4704,40 @@ console.log('\n── T-calc: always pmol/L, population estimate when no lab ─
       Math.abs(_puFt(_puC,0) - 217) < 1.0, 'day0='+_puFt(_puC,0).toFixed(1));
     check('dated lab: no longer flagged as an estimate', _puC.tier !== 'estimate', 'tier='+_puC.tier);
     G._tcp = _puSave.tp; G._tcBwEntries = _puSave.bw; G._tcGhStack = _puSave.gh;
+  }
+}
+
+// ── Simple planner must actually drive the plasma curve ──
+// Reported 2026-08-02 (trt-stage): the plan card said "140 mg/week - 74 injections
+// projected - Shown in the plasma curve at the top of this page" while the curve itself
+// said "No injections logged yet" and drew nothing. buildTCalc gated the curve card on
+// _tcp.manualLog, which is legitimately EMPTY when the simple planner is the live one.
+console.log('\n── T-calc: the live planner drives the curve ──');
+{
+  var _spSrc = require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
+  check('curve gate uses _tcCurveLog(), not a manualLog filter',
+    /var validLog = _tcCurveLog\(\);/.test(_spSrc) &&
+    !/var validLog = log\.filter/.test(_spSrc),
+    'buildTCalc still gates the plasma curve on the manual log');
+  if (typeof G._tcCurveLog === 'function' && typeof G._tcSimplePlanInjections === 'function') {
+    var _spSave = {tp:G._tcp};
+    // Simple planner live, manual log EMPTY — exactly the reported state.
+    G._tcp = Object.assign({}, G._tcp, {
+      manualLog: [],
+      simplePlan: {compId:'testoviron', doseMg:'100', cadenceN:5, cadenceUnit:'days',
+                   cadenceDays:5, startDate:'2026-08-02'},
+      plannerMode: 'simple'
+    });
+    var _spInj = G._tcSimplePlanInjections();
+    check('simple planner generates a schedule from the plan alone', _spInj.length > 0,
+      'got ' + _spInj.length + ' injections');
+    var _spCurve = G._tcCurveLog();
+    check('curve log is non-empty when the plan is live and manualLog is empty',
+      _spCurve.length > 0, 'got ' + _spCurve.length);
+    check('curve log entries carry the planned compound and dose',
+      _spCurve.length > 0 && _spCurve[0].compId === 'testoviron' && parseFloat(_spCurve[0].doseMg) === 100,
+      _spCurve.length ? JSON.stringify(_spCurve[0]) : 'empty');
+    G._tcp = _spSave.tp;
   }
 }
 
