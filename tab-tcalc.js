@@ -454,25 +454,82 @@ var _TC_T_FRACTION = {
   topical:     1.0
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// FREE-T MODEL — ABSOLUTE, NOT SCALE-FITTED. Read this before changing it.
+//
+// The curve is computed from physiology and calibrated by SOLVING for the user's
+// own baseline. It is never scaled to make a single lab value land on the line.
+//
+//   total[t]  = testosterone APPEARANCE RATE, mg/day  (ke * PkConc, integrates to
+//               the injected mass) + endogenous production P
+//   TT(t)     = TT_base * total[t] / P
+//   FT(t)     = Vermeulen(TT(t), SHBG(t))
+//
+// Testosterone's own elimination half-life is ~1 h, far faster than any depot's
+// release, so serum level tracks appearance rate and the SAME clearance applies to
+// endogenous and injected testosterone. That is what makes the ratio total/P the
+// whole story, and why no scale factor is needed.
+//
+// WHY THE OLD ARCHITECTURE FAILED (do not reintroduce it). It picked calFT so the
+// curve passed through one measured free T, and it invented an "endogenous baseline"
+// from the drug curve itself (the peak/trough mean, or total[today]). That slab set
+// the entire multiplier while meaning nothing physically, so the same protocol with
+// the same labs returned 435-15789 pmol/L depending only on how far into it you were.
+// Prod projected 8457 pmol/L for a protocol whose true plateau is ~1565, and its curve
+// missed the user's own measured baseline by 3x. Both directions, one cause.
+//
+// calFT_arr[t] is now just FT(t)/total[t] — the conversion from appearance rate to
+// free T at time t — kept so existing callers still render total[t]*calFT_arr[t].
+// It is NOT a fitted constant. Do not "restore" a calibration factor.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Endogenous testosterone production, mg/day. The one link between "my own level" and
+// "mg I inject", so it sets how far above baseline any protocol lands.
+// TODO: move to the backend with a citation (clinical range ~3-10 mg/day).
+var TCALC_ENDOG_T_MGD = 6.5;
+
 // ── Vermeulen free-T calculator ───────────────────────────────────────────────
 
-function _tcVermeulenFT(totalT, shbg) {
-  if (!totalT || !shbg || totalT <= 0 || shbg <= 0) return null;
-  var K_SHBG = 5.97e8, K_ALB = 3.6e4;
-  var alb    = 4.3 / 66500 * 10;
-  var denom  = 1 + K_SHBG * (shbg * 1e-9) + K_ALB * alb;
-  return (totalT * 1e-9 / denom) * 1e12;
+// ── Vermeulen binding: the SATURABLE quadratic, not a linearisation ──
+// Testosterone OCCUPIES SHBG's binding sites, so the free fraction is not a constant:
+// as total T rises SHBG saturates and free T rises FASTER than proportionally. Solving
+// the law of mass action gives a quadratic in free T.
+//
+// This replaced a linearised form, FT = TT/(1 + K_SHBG*[SHBG] + K_ALB*[Alb]), which pins
+// the free fraction at ~2.08% at every level — 2x total T gave exactly 2x free T. That is
+// acceptable near baseline, where SHBG is only partly occupied, and badly wrong above it:
+// at a supraphysiological TT ~65-78 nmol/L the true free fraction is ~3%, so the linear
+// form under-reported free T by ~51% (1565 vs 2368 pmol/L on a real user's protocol).
+// Under-reporting free androgen is the direction that invites dose escalation.
+// Independently verified 2026-08-01. Do not "simplify" this back to a constant fraction.
+var TCALC_K_SHBG = 1.0e9;   // L/mol, testosterone-SHBG association constant (Vermeulen)
+var TCALC_K_ALB  = 3.6e4;   // L/mol, testosterone-albumin
+var TCALC_ALB_GL = 43;      // g/L, assumed albumin (Vermeulen's default)
+var TCALC_ALB_MW = 66430;   // g/mol
+
+function _tcAlbN() {
+  return 1 + TCALC_K_ALB * (TCALC_ALB_GL / TCALC_ALB_MW);
 }
 
-// Inverse of the (linear-in-TT) Vermeulen equation: given free T (pmol/L) and SHBG
-// (nmol/L), return the total T (nmol/L) that produces it. Used to infer a plausible
-// total T for users without a measured value, so the SHBG model can still run.
+// totalT and shbg in nmol/L -> free T in pmol/L.
+function _tcVermeulenFT(totalT, shbg) {
+  if (!totalT || !shbg || totalT <= 0 || shbg <= 0) return null;
+  var T = totalT * 1e-9, S = shbg * 1e-9;
+  var N = _tcAlbN();
+  var a = TCALC_K_SHBG * N;
+  var b = N + TCALC_K_SHBG * (S - T);
+  var disc = b * b + 4 * a * T;
+  if (!(disc >= 0)) return null;
+  var ft = (-b + Math.sqrt(disc)) / (2 * a);
+  return ft > 0 ? ft * 1e12 : null;
+}
+
+// free T in pmol/L + SHBG in nmol/L -> total T in nmol/L. Exact inverse of the above.
 function _tcInvVermeulenTT(freeFT, shbg) {
   if (!(freeFT > 0) || !(shbg > 0)) return 0;
-  var K_SHBG = 5.97e8, K_ALB = 3.6e4;
-  var alb    = 4.3 / 66500 * 10;
-  var denom  = 1 + K_SHBG * (shbg * 1e-9) + K_ALB * alb;
-  return freeFT * denom / 1000;
+  var FT = freeFT * 1e-12, S = shbg * 1e-9;
+  var tt = FT * _tcAlbN() + TCALC_K_SHBG * S * FT / (1 + TCALC_K_SHBG * FT);
+  return tt * 1e9;
 }
 
 // Population SHBG baseline (nmol/L) for an age, from the backend age→SHBG table.
@@ -1619,10 +1676,29 @@ function _tcFreeTSeries(sorted, hooks) {
       var ke  = Math.LN2 / _hl;
       var ka  = _tcKa(_hl, cd.tmaxDays);
       for (var t = injectDay; t <= totalDays; t++) {
-        arr[t] += _tcPkConc(absorbed, ka, ke, t - injectDay);
+        // ABSOLUTE APPEARANCE RATE, mg testosterone/day — not an arbitrary PK scale.
+        // _tcPkConc integrates to dose/ke, so ke*_tcPkConc integrates to exactly the
+        // injected testosterone mass: every mg eventually appears, nothing invented.
+        // This is what lets the whole curve be computed from physiology instead of
+        // being scaled to fit one lab value. See the model note above _tcFreeTSeries.
+        arr[t] += ke * _tcPkConc(absorbed, ka, ke, t - injectDay);
       }
     }
   });
+
+  // PK band: order the two half-life series element-wise, do not assume the shorter
+  // half-life is the lower curve. In APPEARANCE-RATE units a faster-releasing ester gives
+  // a HIGHER rate early and a lower one later, so hlLo/hlHi cross the central curve
+  // instead of bracketing it. (Under the old amount-like units longer half-life simply
+  // meant more accumulation, so lo/hi held by construction.) Taking min/max per day keeps
+  // the band an honest envelope of the declared half-life range at every timepoint.
+  if (hasPkBand) {
+    for (var _bd = 0; _bd <= totalDays; _bd++) {
+      var _bl = totalLo[_bd], _bh = totalHi[_bd];
+      totalLo[_bd] = Math.min(_bl, _bh);
+      totalHi[_bd] = Math.max(_bl, _bh);
+    }
+  }
 
   // Calibrated pmol/L scale using settled peak/trough over the log window (not washout tail)
   var _mftNum  = parseDec(_tcp.measuredFT)      || _tcDefaultFT(parseInt(_tcp.birthYear) || 0);
@@ -1646,14 +1722,11 @@ function _tcFreeTSeries(sorted, hooks) {
     _totalAbsMg += parseDec(e.doseMg) * (_ci2.bioavailability || 1) * (_ci2.testosteroneFraction || 1); });
   var _effMgWk = _logDays > 0 ? _totalAbsMg / _logDays * 7 : 0;
 
+  // NOTE: calFT is deliberately NOT fitted here. It used to be set to _mftNum/_logMean
+  // (or a dose-scaled variant) and then re-anchored, which is precisely the scale-fitting
+  // this model removed — it let any modelling error be absorbed into a constant. It is now
+  // assigned below purely as a "curve is in pmol/L" flag once the baseline has been solved.
   var calFT = null;
-  if (_mftNum > 0 && _logMean > 0) {
-    if (_curDose > 0) {
-      calFT = _mftNum * (_effMgWk || _curDose) / _curDose / _logMean;
-    } else {
-      calFT = _mftNum / _logMean;
-    }
-  }
 
   // Unified calibration anchor: the reference time at which _mftNum (the measured or
   // estimated free T) is taken to hold.  With an explicit bloodwork entry it is the draw
@@ -1663,7 +1736,16 @@ function _tcFreeTSeries(sorted, hooks) {
   // the end.  This is what makes calFT immune to appended future injections in BOTH the
   // bloodwork and no-bloodwork cases (previously only the bloodwork case was anchored,
   // so a no-bloodwork schedule re-scaled — and its peak dropped — as injections grew).
-  var _bwAnchorDate = _tcBwEntries && _tcBwEntries.length ? _tcBwEntries[0].date : null;
+  // Anchor on the entry that actually carries a dated measurement (see _bwCal below) —
+  // the newest entry may be a partial one with no usable value.
+  var _bwAnchorDate = null;
+  if (_tcBwEntries && _tcBwEntries.length) {
+    for (var _ba = 0; _ba < _tcBwEntries.length; _ba++) {
+      var _bae = _tcBwEntries[_ba];
+      if (_bae && _bae.date && (parseDec(_bae.free_t) > 0 || parseDec(_bae.total_t) > 0)) { _bwAnchorDate = _bae.date; break; }
+    }
+    if (!_bwAnchorDate) _bwAnchorDate = _tcBwEntries[0].date || null;
+  }
   var _anchorDay, _anchorCutoffDate;
   var _bwAnchorDay = _bwAnchorDate
     ? Math.round((new Date(_bwAnchorDate + 'T12:00:00') - firstDate) / 86400000)
@@ -1694,147 +1776,113 @@ function _tcFreeTSeries(sorted, hooks) {
     var _adD = new Date(firstDate.getTime() + _anchorDay * 86400000);
     _anchorCutoffDate = _adD.getFullYear() + '-' + String(_adD.getMonth() + 1).padStart(2, '0') + '-' + String(_adD.getDate()).padStart(2, '0');
   }
-  // Warm-start: pre-fill curve so the chart starts at the user's measured free T.
-  if (calFT && _mftNum > 0) {
-    if (_curDose > 0) {
-      // Known prior dose: model each compound's residual from a steady-state protocol.
-      // Use only injections up to the anchor date so that adding later injections
-      // cannot change the compound-fraction mix and thereby shift total[anchorDay].
-      var _wsFilterDate = _anchorCutoffDate;
-      var _wsSorted = _wsFilterDate
-        ? sorted.filter(function(e){ return e.date <= _wsFilterDate; })
-        : sorted;
-      if (_wsSorted.length === 0) _wsSorted = sorted;
-      var _wsGroups = {}, _wsTotalAbsMg = 0;
-      _wsSorted.forEach(function(e) {
-        var _wsBioav = (_tcCompInfo(e.compId).bioavailability || 1);
-        var _wsAbs   = parseDec(e.doseMg) * _wsBioav;
-        _wsTotalAbsMg += _wsAbs;
-        _wsGroups[e.compId] = (_wsGroups[e.compId] || 0) + _wsAbs;
+  // Prior-protocol residual: if the user was already dosing before this log begins,
+  // that drug is still appearing. Modelled as a steady-state train of past injections,
+  // in the same absolute mg/day units. Only injections up to the anchor are used, so
+  // appending later ones cannot change the mix and shift the anchor.
+  if (_curDose > 0) {
+    var _wsFilterDate = _anchorCutoffDate;
+    var _wsSorted = _wsFilterDate ? sorted.filter(function(e){ return e.date <= _wsFilterDate; }) : sorted;
+    if (_wsSorted.length === 0) _wsSorted = sorted;
+    var _wsGroups = {}, _wsTotalAbsMg = 0;
+    _wsSorted.forEach(function(e) {
+      var _wsCd  = _tcCompInfo(e.compId);
+      var _wsAbs = parseDec(e.doseMg) * (_wsCd.bioavailability || 1) * (_wsCd.testosteroneFraction || 1);
+      _wsTotalAbsMg += _wsAbs;
+      _wsGroups[e.compId] = (_wsGroups[e.compId] || 0) + _wsAbs;
+    });
+    if (_wsTotalAbsMg > 0) {
+      Object.keys(_wsGroups).forEach(function(wsId) {
+        var wsCd    = _tcCompInfo(wsId);
+        var wsHl    = wsCd.halfLifeDays || 1;
+        var wsKe    = Math.LN2 / wsHl;
+        var wsKa    = _tcKa(wsHl, wsCd.tmaxDays);
+        var wsIv    = wsHl >= 20 ? 84 : wsHl >= 9 ? 14 : wsHl >= 3 ? 3.5 : 1;
+        var wsCompWk     = _curDose * (_wsGroups[wsId] / _wsTotalAbsMg);
+        var wsDosePerInj = wsCompWk * wsIv / 7 * (wsCd.bioavailability || 1) * (wsCd.testosteroneFraction || 1);
+        var wsLookback   = Math.ceil(wsHl * 10 / wsIv);
+        for (var _wsk = 1; _wsk <= wsLookback; _wsk++) {
+          var _wsDt = _wsk * wsIv;
+          for (var _wst = 0; _wst <= totalDays; _wst++) {
+            total[_wst] += wsKe * _tcPkConc(wsDosePerInj, wsKa, wsKe, _wst + _wsDt);
+          }
+        }
       });
-      if (_wsTotalAbsMg > 0) {
-        Object.keys(_wsGroups).forEach(function(wsId) {
-          var wsCd    = _tcCompInfo(wsId);
-          var wsHl    = wsCd.halfLifeDays || 1;
-          var wsBioav = wsCd.bioavailability || 1;
-          var wsKe    = Math.LN2 / wsHl;
-          var wsKa    = _tcKa(wsHl, wsCd.tmaxDays);
-          var wsIv    = wsHl >= 20 ? 84 : wsHl >= 9 ? 14 : wsHl >= 3 ? 3.5 : 1;
-          var wsCompFrac   = _wsGroups[wsId] / _wsTotalAbsMg;
-          var wsCompWk     = _curDose * wsCompFrac;
-          var wsDosePerInj = wsCompWk * wsIv / 7 * wsBioav;
-          var wsLookback   = Math.ceil(wsHl * 10 / wsIv);
-          for (var _wsk = 1; _wsk <= wsLookback; _wsk++) {
-            var _wsDt = _wsk * wsIv;
-            for (var _wst = 0; _wst <= totalDays; _wst++) {
-              total[_wst] += _tcPkConc(wsDosePerInj, wsKa, wsKe, _wst + _wsDt);
-            }
-          }
-        });
-      }
-    } else {
-      // The log is the complete injection history — no prior protocol residual exists.
-      // Add a constant endogenous baseline (continuous production) so the chart starts
-      // at _mftNum and rises above it as injections accumulate.  A decaying exponential
-      // here was wrong: it represented a fictional prior-dose residual that drained away
-      // at peak time (making the peak read too low) and post-dose (making levels appear
-      // to crash faster than the compound's half-life actually dictates).
-      //
-      // Derive the baseline from only the pre-anchor portion of total[] so that
-      // injections after the anchor cannot inflate it, shift total[anchorDay], and
-      // thereby move calFT.  The anchor is the bloodwork draw date when one exists, or
-      // "today" otherwise — the same immunity now applies with or without bloodwork.
-      var _p2Baseline = _logMean;
-      if (_anchorDay >= 0) {
-        var _p2MaxT = Math.min(_logDays, _anchorDay);
-        var _p2Pk = 0, _p2Tr = Infinity;
-        for (var _p2i = 0; _p2i <= _p2MaxT; _p2i++) {
-          if (total[_p2i] > _p2Pk) _p2Pk = total[_p2i];
-          if (total[_p2i] < _p2Tr) _p2Tr = total[_p2i];
-        }
-        // Baseline case (curve anchored at day 0 — a pre-cycle baseline draw, or none):
-        // the measured free T is the user's PRE-cycle baseline, so the curve must start
-        // there and rise.  Scale the injected accumulation so its value at "today" equals
-        // one baseline unit: the floor becomes total[today] (the accumulation so far).  With
-        // calFT anchored at total[0] = this floor, displayed[0] = _mftNum (the curve starts
-        // at baseline) AND the peak is physiological.  total[today] is invariant to injections
-        // planned after today, so the peak cannot drop as future injections are added.
-        // (Anchoring the floor at the tiny day-0 residual instead made calFT enormous — the
-        // curve started at baseline but the peak was absurdly high.)
-        // …but only when day 0 really IS a pre-cycle baseline: either no draw at all, or a
-        // draw dated before the first injection and clamped forward to day 0. A draw dated
-        // exactly ON the first injection day is a genuine day-0 anchor — _mftNum describes
-        // the user at the draw, not before the cycle — and total[today] grows with every
-        // injection logged between the draw and today, so using it here would let a log
-        // extension move calFT. That case falls through to the settled-PK baseline below,
-        // which sees only the draw-date injections and is therefore immune.
-        var _slopeDay0 = Math.round((Date.now() - firstDate.getTime()) / 86400000);
-        var _p2PreCycle = (_bwAnchorDay === null || _bwAnchorDay < 0);
-        if (_anchorDay === 0 && _p2PreCycle && _slopeDay0 >= 1 && _slopeDay0 <= _logDays && total[_slopeDay0] > 0) {
-          _p2Baseline = total[_slopeDay0];
-        } else if (_p2Pk > 0) {
-          if (_p2Tr === Infinity) _p2Tr = _p2Pk;
-          _p2Baseline = (_p2Pk + _p2Tr) / 2 || _p2Pk;
-        } else {
-          // Anchor on day 0 with no "today" accumulation (all-future plan or all-past log):
-          // total[0] = 0 for every injection (tcPkConc(dt=0)=0), so the pre-anchor scan finds
-          // nothing.  Compute the stable baseline from the anchor-date injections' OWN settled
-          // PK — later injections are excluded so adding them cannot shift total[anchorDay].
-          var _bwDateStr2 = _anchorCutoffDate;
-          var _bwDayArr = new Float64Array(totalDays + 1);
-          sorted.forEach(function(e) {
-            if (e.date !== _bwDateStr2) return;
-            var _bwcd = _tcCompInfo(e.compId);
-            var _bwke = Math.LN2 / (_bwcd.halfLifeDays || 1);
-            var _bwka = _tcKa(_bwcd.halfLifeDays || 1, _bwcd.tmaxDays);
-            var _bwabs = parseDec(e.doseMg) * (_bwcd.bioavailability || 1);
-            for (var _bwt = 0; _bwt <= totalDays; _bwt++) {
-              _bwDayArr[_bwt] += _tcPkConc(_bwabs, _bwka, _bwke, _bwt);
-            }
-          });
-          var _bwDayPk = 0, _bwDayTr = Infinity;
-          for (var _bwst = 0; _bwst <= totalDays; _bwst++) {
-            if (_bwDayArr[_bwst] > _bwDayPk) _bwDayPk = _bwDayArr[_bwst];
-            if (_bwDayArr[_bwst] < _bwDayTr) _bwDayTr = _bwDayArr[_bwst];
-          }
-          if (_bwDayPk > 0) {
-            if (_bwDayTr === Infinity) _bwDayTr = _bwDayPk;
-            _p2Baseline = (_bwDayPk + _bwDayTr) / 2 || _bwDayPk;
-          }
-          // If still 0 (no anchor-date injection data), _logMean fallback stands.
-        }
-      }
-      for (var _blt = 0; _blt <= totalDays; _blt++) {
-        total[_blt] += _p2Baseline;
-        // Endogenous baseline is not half-life dependent — add it to the band series too
-        // so they stay directly comparable to the central curve.
-        if (hasPkBand) { totalLo[_blt] += _p2Baseline; totalHi[_blt] += _p2Baseline; }
-      }
     }
   }
 
-  // Anchor calFT at the unified anchor day (the bloodwork draw date, or today when no
-  // bloodwork entry exists) so that adding future injections cannot re-scale the curve.
-  // total[] now includes any warm-start residual, so total[anchorDay] reflects exactly
-  // what the model predicts at the anchor — and calFT is chosen to make that equal
-  // _mftNum.  Injections after anchorDay contribute 0 at anchorDay (PkConc(dt<0)=0), so
-  // calFT is immune to log extensions beyond the anchor.  Without this, a no-bloodwork
-  // schedule fell back to calFT = _mftNum / _logMean over a window that grew with the
-  // schedule, so appending injections lowered calFT and dragged the peak down.
-  if (calFT && _mftNum > 0 && _anchorDay >= 0 && _anchorDay <= totalDays && total[_anchorDay] > 0) {
-    calFT = _mftNum / total[_anchorDay];
+  // ENDOGENOUS PRODUCTION — a real, constant appearance rate, in the same mg/day units.
+  // This replaces the old "_p2Baseline" slab, which was carved out of the drug curve
+  // itself (its peak/trough mean, or total[today]) and therefore had no physical meaning
+  // while setting the entire multiplier. total[] is now drug + own production throughout.
+  var _endogP = TCALC_ENDOG_T_MGD > 0 ? TCALC_ENDOG_T_MGD : 0;
+  if (_endogP > 0) {
+    for (var _ep = 0; _ep <= totalDays; _ep++) {
+      total[_ep] += _endogP;
+      if (hasPkBand) { totalLo[_ep] += _endogP; totalHi[_ep] += _endogP; }
+    }
   }
-  // Anchor the PK band the same way. Each series gets its OWN calibration so all three
-  // pass through the measured value at the anchor — what is known is the level at the
-  // blood draw; what is uncertain is where it goes from there. The band therefore
-  // pinches to nothing at the anchor and widens away from it, which is the honest shape.
-  var _calFTPkLo = calFT, _calFTPkHi = calFT;
-  if (hasPkBand && _mftNum > 0 && _anchorDay >= 0 && _anchorDay <= totalDays) {
-    if (totalLo[_anchorDay] > 0) _calFTPkLo = _mftNum / totalLo[_anchorDay];
-    if (totalHi[_anchorDay] > 0) _calFTPkHi = _mftNum / totalHi[_anchorDay];
-  }
-  if (hooks.calFT) hooks.calFT(calFT);
 
+  // ── SOLVE for the user's own baseline. Nothing is scaled to fit a lab value. ──
+  // At the draw the model already knows the appearance rate total[anchorDay] (drug +
+  // endogenous). The lab tells us the level THERE. Since TT scales with appearance rate,
+  //     TT_base = TT_at_draw * P / total[anchorDay]
+  // recovers the user's unmedicated total T — solving out whatever drug was on board.
+  // A pre-cycle draw (total[anchor] == P) returns the measurement unchanged; a mid-cycle
+  // draw is corrected for the drug present. Injections after the anchor contribute 0
+  // there (PkConc(dt<0)=0), so appending them cannot move TT_base — the calFT-anchor
+  // invariant now holds structurally instead of by construction.
+  var _anchRate = (_anchorDay >= 0 && _anchorDay <= totalDays) ? total[_anchorDay] : _endogP;
+  if (!(_anchRate > 0)) _anchRate = _endogP || 1;
+  var _shbgMeas0 = parseDec(_tcp.shbg) || 0;
+  var _ttMeas0   = parseDec(_tcp.totalT) || 0;
+  // Total T at the draw: measured if we have it, else inferred from the measured free T
+  // and the SHBG that applied at the draw (Vermeulen inverse).
+  //
+  // PRECEDENCE: a MEASURED free T wins over the measured total T. Free T is the quantity
+  // this chart plots, and a direct free-T assay and a Vermeulen value calculated from
+  // total T + SHBG routinely disagree — for one real user, lab free T 217 pmol/L against
+  // Vermeulen(17 nmol/L, SHBG 45) = 332, a 1.5x gap. Anchoring on total T would draw a
+  // curve that visibly misses the user's own free-T result and looks broken. So we invert
+  // the measured free T through Vermeulen to get the total T consistent WITH IT, and use
+  // the measured total T only when no free T was recorded. The discrepancy is reported
+  // rather than hidden (see _bfAnnot / tier), never silently averaged away.
+  // ── CALIBRATION NEEDS A DATE. Do not guess when a reading was taken. ──
+  // TT_base is solved as TT_at_draw * P/total[anchorDay], so the anchor DAY is load
+  // bearing: the same number means very different things on day 0 and on day 200. An
+  // undated value used to default to "today", so a PRE-CYCLE baseline typed in by someone
+  // already weeks into a protocol was treated as their accumulated level and the whole
+  // projection was scaled down to fit it.
+  // A value typed into the T-Calc profile carries no date and therefore cannot calibrate;
+  // only a bloodwork entry (which does) can. The age-based population default is exempt:
+  // it is not a measurement of this user at an unknown time, it is an explicit estimate
+  // for "now", already surfaced as the 'estimate' tier with a wide band.
+  var _bwCal = null;
+  if (_tcBwEntries && _tcBwEntries.length) {
+    for (var _bi0 = 0; _bi0 < _tcBwEntries.length; _bi0++) {
+      var _c0 = _tcBwEntries[_bi0];
+      if (_c0 && _c0.date && (parseDec(_c0.free_t) > 0 || parseDec(_c0.total_t) > 0)) { _bwCal = _c0; break; }
+    }
+  }
+  var _mftUndated = !_ftIsDefault && !_bwCal;   // user's own number, no date anywhere
+  var _shbgForInv = _shbgMeas0 > 0 ? _shbgMeas0 : _tcShbgBaselineForAge(
+    (parseInt(_tcp.birthYear, 10) > 0) ? (new Date().getFullYear() - parseInt(_tcp.birthYear, 10)) : 0);
+  // Inverting free T needs SOME SHBG. With no measurement and no population table (no age
+  // on file, or the backend reference not loaded) fall back to a mid adult-male value, so
+  // the curve is still computed in pmol/L rather than silently degrading to raw mg/day —
+  // which is what callers plotted when this returned 0. The tier still reports the
+  // uncertainty; it must not change the UNITS of the answer.
+  if (!(_shbgForInv > 0)) _shbgForInv = 35;
+  var _ttAtDraw = null;
+  if (_mftNum > 0 && _shbgForInv > 0) _ttAtDraw = _tcInvVermeulenTT(_mftNum, _shbgForInv);
+  if (!(_ttAtDraw > 0) && _ttMeas0 > 0) _ttAtDraw = _ttMeas0;
+  var _ttBase = (_ttAtDraw > 0 && _endogP > 0 && !_mftUndated) ? (_ttAtDraw * _endogP / _anchRate) : 0;
+
+  // calFT is retained ONLY as "is the curve expressed in pmol/L" for existing callers and
+  // for the unit label. It is no longer a fitted scale factor and nothing multiplies by it.
+  calFT = (_ttBase > 0) ? 1 : null;
+  var _calFTPkLo = calFT, _calFTPkHi = calFT;
+  if (hooks.calFT) hooks.calFT(calFT);
   var scale     = calFT || 1;
   var unitLabel = calFT ? 'pmol/L' : 'mg';
 
@@ -1962,7 +2010,7 @@ function _tcFreeTSeries(sorted, hooks) {
       var _alpha = 1 - Math.exp(-1 / TCALC_TSHBG_LAG_DAYS);
       _tlag[0] = total[0];
       for (var _li = 1; _li <= totalDays; _li++) _tlag[_li] = _tlag[_li - 1] + (total[_li] - _tlag[_li - 1]) * _alpha;
-      var _tlagRef = _tlag[_shbgRefDay] || _tlag[0] || 1;
+      var _tlagRef = _tlag[_shbgRefDay] || _tlag[0] || 1;   // appearance rate at the draw
       var _tFactor = function(day, beta) {
         var r = (_tlag[day] || _tlagRef) / _tlagRef;
         if (r <= 0) return 1;
@@ -1979,23 +2027,17 @@ function _tcFreeTSeries(sorted, hooks) {
       // user is, so total T must MOVE with it — pinning it at the anchor and only varying
       // SHBG made free T strictly proportional to dose, which (with the linearised
       // binding equation, fixed the same day) is what made a cycle projection read low.
-      var _totRef = total[_shbgRefDay] || 0;
+      // FREE T, COMPUTED — not scaled. TT(t) = TT_base * total[t]/P, then Vermeulen.
+      // Callers render total[t]*arr[t], so arr[t] = FT(t)/total[t]: the conversion from
+      // appearance rate to free T at time t. There is no fitted constant anywhere here.
       var _mkArr = function(beta) {
         var arr = new Float64Array(totalDays + 1);
         for (var t = 0; t <= totalDays; t++) {
           var _tf = _useBeta ? _tFactor(t, beta) : 1;
           var _shbgT = Math.max(1, _shbgBase * _ghProd(t) * _tf);
-          // Dose ratio vs the anchor. Without a usable anchor amount we cannot say how
-          // far from it we are, so fall back to the SHBG-only behaviour.
-          var _ratio = _totRef > 0 ? total[t] / _totRef : 1;
-          var _vermT = (_totRef > 0 && _ratio > 0)
-            ? _tcVermeulenFT(_ttNum * _ratio, _shbgT)
-            : _tcVermeulenFT(_ttNum, _shbgT);
-          // callers render total[t] * arr[t], so divide the ratio back out: the array
-          // carries the binding non-linearity, total[] carries the amount.
-          arr[t] = (_vermT && _vermBw > 0 && _ratio > 0)
-            ? calFT * (_vermT / _vermBw) / _ratio
-            : calFT;
+          var _ttT = (_endogP > 0) ? _ttBase * total[t] / _endogP : _ttBase;
+          var _vermT = _tcVermeulenFT(_ttT, _shbgT);
+          arr[t] = (total[t] > 0 && _vermT > 0) ? _vermT / total[t] : 0;
         }
         return arr;
       };
@@ -2038,36 +2080,31 @@ function _tcFreeTSeries(sorted, hooks) {
 
   // If the SHBG model could not run (no measured SHBG and no population baseline — e.g. no
   // age on file), still render the estimate with a synthetic wide band so it's never blank.
-  if (!calFT_arr && calFT) {
+  // Fallback when the SHBG model could not run (no measured SHBG and no population
+  // baseline). Free T is still COMPUTED — Vermeulen at a fixed SHBG — never left as the
+  // raw appearance rate. Before this, callers that read total[t]*calFT_arr[t] fell back to
+  // scale=1 and plotted mg/day as if it were pmol/L (the Blood-Levels free-T line read 6.5).
+  if (!calFT_arr && _ttBase > 0 && _endogP > 0) {
+    var _fbShbg = _shbgMeas0 > 0 ? _shbgMeas0 : _tcShbgBaselineForAge(
+      (parseInt(_tcp.birthYear, 10) > 0) ? (new Date().getFullYear() - parseInt(_tcp.birthYear, 10)) : 0);
+    if (!(_fbShbg > 0)) _fbShbg = 35;
     var _estFrac = (_tier === 'estimate') ? 0.35 : 0.20;
     calFT_arr = new Float64Array(totalDays + 1);
     _calFTlo  = new Float64Array(totalDays + 1);
     _calFThi  = new Float64Array(totalDays + 1);
     for (var _et = 0; _et <= totalDays; _et++) {
-      calFT_arr[_et] = scale;
-      _calFTlo[_et]  = scale * (1 - _estFrac);
-      _calFThi[_et]  = scale * (1 + _estFrac);
+      var _fbT = _tcVermeulenFT(_ttBase * total[_et] / _endogP, _fbShbg);
+      var _fbA = (total[_et] > 0 && _fbT > 0) ? _fbT / total[_et] : 0;
+      calFT_arr[_et] = _fbA;
+      _calFTlo[_et]  = _fbA * (1 - _estFrac);
+      _calFThi[_et]  = _fbA * (1 + _estFrac);
     }
   }
 
-  // Anchor the finished curve on the measurement. calFT comes from _logMean — the
-  // peak/trough mean of the raw accumulation — so the rendered series only ever passed
-  // APPROXIMATELY through the user's own free T on the draw day. The linearised binding
-  // equation happened to land inside 3%; the correct one does not, which is how this
-  // surfaced. Normalising here rather than inside the SHBG branch covers every path that
-  // can produce calFT_arr, including the no-SHBG-model fallback directly above.
-  if (calFT_arr && _mftNum > 0) {
-    var _anchDay = Math.max(0, Math.min(totalDays, _anchorDay));
-    var _at = total[_anchDay] * calFT_arr[_anchDay];
-    if (_at > 0) {
-      var _k = _mftNum / _at;
-      for (var _ai = 0; _ai <= totalDays; _ai++) {
-        calFT_arr[_ai] *= _k;
-        if (_calFTlo) _calFTlo[_ai] *= _k;
-        if (_calFThi) _calFThi[_ai] *= _k;
-      }
-    }
-  }
+  // NO ANCHOR NORMALISATION. The curve already passes through the measurement because
+  // TT_base was solved from it — re-scaling here would reintroduce exactly the fitted
+  // constant this rewrite removed, and would silently absorb any modelling error into it.
+  // If the curve misses the lab, the MODEL is wrong and must be fixed, not rescaled.
 
   // Test hook: the displayed free-T value at the first plotted day (day 0).  With a
   // pre-cycle baseline anchor this must equal the measured baseline, i.e. the curve
