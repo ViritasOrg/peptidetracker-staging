@@ -507,8 +507,14 @@ function _tcEndogAt(drugRateMgd, p0) {
 
 // Endogenous testosterone production, mg/day. The one link between "my own level" and
 // "mg I inject", so it sets how far above baseline any protocol lands.
-// TODO: move to the backend with a citation (clinical range ~3-10 mg/day).
-var TCALC_ENDOG_T_MGD = 6.5;
+//
+// 5, not the 6.5 used until 2026-08-02. Handelsman's Endotext chapter "Androgen
+// Physiology, Pharmacology, Use and Misuse" sources a tracer-derived range of 3-10
+// mg/day, and anchors it concretely: an 800 mg implant "releasing ~5 mg per day
+// ... replicating the testosterone production rate in healthy eugonadal men".
+// Nothing published states 6.5 — it was a mid-range guess. Backend
+// ENDOGENOUS_T_PRODUCTION carries the full citation; keep the two in step.
+var TCALC_ENDOG_T_MGD = 5;
 
 // ── Vermeulen free-T calculator ───────────────────────────────────────────────
 
