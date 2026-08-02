@@ -490,23 +490,46 @@ var TCALC_ENDOG_T_MGD = 6.5;
 
 // ── Vermeulen free-T calculator ───────────────────────────────────────────────
 
-function _tcVermeulenFT(totalT, shbg) {
-  if (!totalT || !shbg || totalT <= 0 || shbg <= 0) return null;
-  var K_SHBG = 5.97e8, K_ALB = 3.6e4;
-  var alb    = 4.3 / 66500 * 10;
-  var denom  = 1 + K_SHBG * (shbg * 1e-9) + K_ALB * alb;
-  return (totalT * 1e-9 / denom) * 1e12;
+// ── Vermeulen binding: the SATURABLE quadratic, not a linearisation ──
+// Testosterone OCCUPIES SHBG's binding sites, so the free fraction is not a constant:
+// as total T rises SHBG saturates and free T rises FASTER than proportionally. Solving
+// the law of mass action gives a quadratic in free T.
+//
+// This replaced a linearised form, FT = TT/(1 + K_SHBG*[SHBG] + K_ALB*[Alb]), which pins
+// the free fraction at ~2.08% at every level — 2x total T gave exactly 2x free T. That is
+// acceptable near baseline, where SHBG is only partly occupied, and badly wrong above it:
+// at a supraphysiological TT ~65-78 nmol/L the true free fraction is ~3%, so the linear
+// form under-reported free T by ~51% (1565 vs 2368 pmol/L on a real user's protocol).
+// Under-reporting free androgen is the direction that invites dose escalation.
+// Independently verified 2026-08-01. Do not "simplify" this back to a constant fraction.
+var TCALC_K_SHBG = 1.0e9;   // L/mol, testosterone-SHBG association constant (Vermeulen)
+var TCALC_K_ALB  = 3.6e4;   // L/mol, testosterone-albumin
+var TCALC_ALB_GL = 43;      // g/L, assumed albumin (Vermeulen's default)
+var TCALC_ALB_MW = 66430;   // g/mol
+
+function _tcAlbN() {
+  return 1 + TCALC_K_ALB * (TCALC_ALB_GL / TCALC_ALB_MW);
 }
 
-// Inverse of the (linear-in-TT) Vermeulen equation: given free T (pmol/L) and SHBG
-// (nmol/L), return the total T (nmol/L) that produces it. Used to infer a plausible
-// total T for users without a measured value, so the SHBG model can still run.
+// totalT and shbg in nmol/L -> free T in pmol/L.
+function _tcVermeulenFT(totalT, shbg) {
+  if (!totalT || !shbg || totalT <= 0 || shbg <= 0) return null;
+  var T = totalT * 1e-9, S = shbg * 1e-9;
+  var N = _tcAlbN();
+  var a = TCALC_K_SHBG * N;
+  var b = N + TCALC_K_SHBG * (S - T);
+  var disc = b * b + 4 * a * T;
+  if (!(disc >= 0)) return null;
+  var ft = (-b + Math.sqrt(disc)) / (2 * a);
+  return ft > 0 ? ft * 1e12 : null;
+}
+
+// free T in pmol/L + SHBG in nmol/L -> total T in nmol/L. Exact inverse of the above.
 function _tcInvVermeulenTT(freeFT, shbg) {
   if (!(freeFT > 0) || !(shbg > 0)) return 0;
-  var K_SHBG = 5.97e8, K_ALB = 3.6e4;
-  var alb    = 4.3 / 66500 * 10;
-  var denom  = 1 + K_SHBG * (shbg * 1e-9) + K_ALB * alb;
-  return freeFT * denom / 1000;
+  var FT = freeFT * 1e-12, S = shbg * 1e-9;
+  var tt = FT * _tcAlbN() + TCALC_K_SHBG * S * FT / (1 + TCALC_K_SHBG * FT);
+  return tt * 1e9;
 }
 
 // Population SHBG baseline (nmol/L) for an age, from the backend age→SHBG table.

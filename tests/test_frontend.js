@@ -4481,9 +4481,17 @@ if (typeof G._tcFreeTSeries === 'function') {
   check('no-bloodwork SHBG: GH raises free T later in the cycle vs the same schedule with no GH',
     _psFt(_psSupp, _psSupp.totalDays - 5) > _psFt(_psFlat, _psFlat.totalDays - 5));
   // without the population SHBG baseline (e.g. table not loaded) → safe flat fallback
+  // With no population SHBG baseline the model must not invent SHBG DYNAMICS — SHBG is
+  // held fixed. This used to be asserted as "calFT_arr is flat (spread < 1.01)", which
+  // only held while binding was linearised. With the saturable Vermeulen quadratic the
+  // free FRACTION legitimately rises with total T even at constant SHBG, so a flat array
+  // would now mean the binding curve had been linearised again. Assert the real property:
+  // no path dependence — two days sharing a total T scale identically, which can only be
+  // true if nothing is moving SHBG around.
   G._tcShbgBaseline = null;
-  check('no-bloodwork SHBG: no population baseline → falls back to a flat estimate',
-    _psSpread(G._tcFreeTSeries(_psLog.slice(), {})) < 1.01);
+  var _psDepFlat = _psPathDep(G._tcFreeTSeries(_psLog.slice(), {}));
+  check('no-bloodwork SHBG: no population baseline → SHBG held fixed (no invented dynamics)',
+    _psDepFlat < 0.002, 'path-dependence=' + _psDepFlat.toFixed(6));
   G._tcShbgBaseline = _psBase;
   // Teeth for the path-dependence check above: with a MEASURED total T the β power-law does
   // run, SHBG tracks the lagged T level, and the very same measurement separates clearly.
@@ -4596,6 +4604,21 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcVermeulenFT === 'funct
   check('absolute model: plateau matches (rate+P)/P then Vermeulen, within 5%',
     Math.abs(_amA.peak-_amWant)/_amWant < 0.05,
     'model '+_amA.peak.toFixed(0)+' vs first-principles '+_amWant.toFixed(0));
+  // 6. Binding must stay SATURABLE. A linearised form pins the free fraction at a
+  //    constant, which under-reports free T by ~51% at supraphysiological total T —
+  //    the direction that invites dose escalation. Independently verified 2026-08-01.
+  var _amF15=G._tcVermeulenFT(15,40)/15000, _amF60=G._tcVermeulenFT(60,40)/60000;
+  check('absolute model: free fraction RISES with total T (SHBG saturates, not linear)',
+    _amF60 > _amF15*1.2, 'free% 15->'+(_amF15*100).toFixed(2)+'  60->'+(_amF60*100).toFixed(2));
+  check('absolute model: doubling total T raises free T MORE than 2x',
+    G._tcVermeulenFT(30,40)/G._tcVermeulenFT(15,40) > 2.05,
+    'ratio='+(G._tcVermeulenFT(30,40)/G._tcVermeulenFT(15,40)).toFixed(4));
+  check('absolute model: Vermeulen inverse round-trips through the quadratic',
+    Math.abs(G._tcInvVermeulenTT(G._tcVermeulenFT(25,40),40) - 25) < 0.01);
+  var _amSrcV=require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
+  check('absolute model: the linearised binding form has not come back',
+    /disc|Math\.sqrt/.test(_amSrcV.slice(_amSrcV.indexOf('function _tcVermeulenFT'), _amSrcV.indexOf('function _tcVermeulenFT')+700)),
+    'the quadratic solve is gone from _tcVermeulenFT');
   // 6. No fitted scale factor may come back.
   var _amSrc=require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
   check('absolute model: calFT is not refitted to the measurement',
