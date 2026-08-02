@@ -454,6 +454,11 @@ var _TC_T_FRACTION = {
   topical:     1.0
 };
 
+// Endogenous testosterone production rate, mg/day. Sets the ONLY physically meaningful
+// link between "my own level" and "mg I inject", so it fixes how far above baseline any
+// protocol lands. PLACEHOLDER pending a sourced backend value — clinical range ~3-10.
+var TCALC_ENDOG_T_MGD = 6.5;
+
 // ── Vermeulen free-T calculator ───────────────────────────────────────────────
 
 function _tcVermeulenFT(totalT, shbg) {
@@ -1744,65 +1749,36 @@ function _tcFreeTSeries(sorted, hooks) {
       // injections after the anchor cannot inflate it, shift total[anchorDay], and
       // thereby move calFT.  The anchor is the bloodwork draw date when one exists, or
       // "today" otherwise — the same immunity now applies with or without bloodwork.
-      var _p2Baseline = _logMean;
-      if (_anchorDay >= 0) {
-        var _p2MaxT = Math.min(_logDays, _anchorDay);
-        var _p2Pk = 0, _p2Tr = Infinity;
-        for (var _p2i = 0; _p2i <= _p2MaxT; _p2i++) {
-          if (total[_p2i] > _p2Pk) _p2Pk = total[_p2i];
-          if (total[_p2i] < _p2Tr) _p2Tr = total[_p2i];
-        }
-        // Baseline case (curve anchored at day 0 — a pre-cycle baseline draw, or none):
-        // the measured free T is the user's PRE-cycle baseline, so the curve must start
-        // there and rise.  Scale the injected accumulation so its value at "today" equals
-        // one baseline unit: the floor becomes total[today] (the accumulation so far).  With
-        // calFT anchored at total[0] = this floor, displayed[0] = _mftNum (the curve starts
-        // at baseline) AND the peak is physiological.  total[today] is invariant to injections
-        // planned after today, so the peak cannot drop as future injections are added.
-        // (Anchoring the floor at the tiny day-0 residual instead made calFT enormous — the
-        // curve started at baseline but the peak was absurdly high.)
-        // …but only when day 0 really IS a pre-cycle baseline: either no draw at all, or a
-        // draw dated before the first injection and clamped forward to day 0. A draw dated
-        // exactly ON the first injection day is a genuine day-0 anchor — _mftNum describes
-        // the user at the draw, not before the cycle — and total[today] grows with every
-        // injection logged between the draw and today, so using it here would let a log
-        // extension move calFT. That case falls through to the settled-PK baseline below,
-        // which sees only the draw-date injections and is therefore immune.
-        var _slopeDay0 = Math.round((Date.now() - firstDate.getTime()) / 86400000);
-        var _p2PreCycle = (_bwAnchorDay === null || _bwAnchorDay < 0);
-        if (_anchorDay === 0 && _p2PreCycle && _slopeDay0 >= 1 && _slopeDay0 <= _logDays && total[_slopeDay0] > 0) {
-          _p2Baseline = total[_slopeDay0];
-        } else if (_p2Pk > 0) {
-          if (_p2Tr === Infinity) _p2Tr = _p2Pk;
-          _p2Baseline = (_p2Pk + _p2Tr) / 2 || _p2Pk;
-        } else {
-          // Anchor on day 0 with no "today" accumulation (all-future plan or all-past log):
-          // total[0] = 0 for every injection (tcPkConc(dt=0)=0), so the pre-anchor scan finds
-          // nothing.  Compute the stable baseline from the anchor-date injections' OWN settled
-          // PK — later injections are excluded so adding them cannot shift total[anchorDay].
-          var _bwDateStr2 = _anchorCutoffDate;
-          var _bwDayArr = new Float64Array(totalDays + 1);
-          sorted.forEach(function(e) {
-            if (e.date !== _bwDateStr2) return;
-            var _bwcd = _tcCompInfo(e.compId);
-            var _bwke = Math.LN2 / (_bwcd.halfLifeDays || 1);
-            var _bwka = _tcKa(_bwcd.halfLifeDays || 1, _bwcd.tmaxDays);
-            var _bwabs = parseDec(e.doseMg) * (_bwcd.bioavailability || 1);
-            for (var _bwt = 0; _bwt <= totalDays; _bwt++) {
-              _bwDayArr[_bwt] += _tcPkConc(_bwabs, _bwka, _bwke, _bwt);
-            }
-          });
-          var _bwDayPk = 0, _bwDayTr = Infinity;
-          for (var _bwst = 0; _bwst <= totalDays; _bwst++) {
-            if (_bwDayArr[_bwst] > _bwDayPk) _bwDayPk = _bwDayArr[_bwst];
-            if (_bwDayArr[_bwst] < _bwDayTr) _bwDayTr = _bwDayArr[_bwst];
-          }
-          if (_bwDayPk > 0) {
-            if (_bwDayTr === Infinity) _bwDayTr = _bwDayPk;
-            _p2Baseline = (_bwDayPk + _bwDayTr) / 2 || _bwDayPk;
-          }
-          // If still 0 (no anchor-date injection data), _logMean fallback stands.
-        }
+      // ── Endogenous baseline, tied to PHYSIOLOGY rather than to the drug curve ──
+      // total[] is a testosterone-appearance curve, so your own production is just a
+      // constant additional appearance rate. That makes the ratio of delivered drug to
+      // endogenous output the ONLY thing setting how far above baseline a protocol lands:
+      //     T_steadystate / T_baseline = (rate_drug + P) / P
+      // Every earlier version invented this slab from the drug curve itself (the peak/
+      // trough mean, or total[today]), which has no physical meaning and set the entire
+      // multiplier arbitrarily — too small and the projection exploded, too large and it
+      // collapsed. The same protocol with the same labs returned anywhere from 435 to
+      // 15789 pmol/L depending only on how far into it you happened to be.
+      //
+      // Derivation of the slab, in total[]'s own units. One dose D of a compound with
+      // elimination constant ke contributes area D/ke, so at steady state a delivery rate
+      // of `rate` mg/day gives total_ss = rate/ke. To make the identity above hold:
+      //     slab = total_ss x P/rate = P/ke
+      // With several esters it is the mass-weighted mean of 1/ke. Crucially this depends
+      // only on the dose MIX, never on the injection COUNT, so appending injections
+      // cannot rescale the curve — the invariant the calFT-anchor tests protect.
+      var _p2W = 0, _p2M = 0;
+      sorted.forEach(function(e) {
+        var _pc = _tcCompInfo(e.compId);
+        var _pAbs = parseDec(e.doseMg) * (_pc.bioavailability || 1) * (_pc.testosteroneFraction || 1);
+        var _pKe = Math.LN2 / (_pc.halfLifeDays || 1);
+        if (_pAbs > 0 && _pKe > 0) { _p2W += _pAbs / _pKe; _p2M += _pAbs; }
+      });
+      var _p2Baseline;
+      if (_p2M > 0 && TCALC_ENDOG_T_MGD > 0) {
+        _p2Baseline = TCALC_ENDOG_T_MGD * (_p2W / _p2M);
+      } else {
+        _p2Baseline = _logMean;
       }
       for (var _blt = 0; _blt <= totalDays; _blt++) {
         total[_blt] += _p2Baseline;
