@@ -2298,8 +2298,27 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
     ctx.fillText(calFT ? Math.round(tv) : (tv >= 100 ? Math.round(tv) : tv >= 10 ? tv.toFixed(1) : tv.toFixed(2)), PAD.left - 4, ty + 3);
   }
   ctx.save(); ctx.translate(10, PAD.top + cH / 2); ctx.rotate(-Math.PI / 2);
-  ctx.textAlign = 'center'; ctx.fillStyle = '#444'; ctx.font = '8px -apple-system,system-ui,sans-serif';
-  ctx.fillText(unitLabel, 0, 0); ctx.restore();
+  ctx.textAlign = 'center'; ctx.fillStyle = calFT ? '#444' : '#e0a030';
+  ctx.font = '8px -apple-system,system-ui,sans-serif';
+  ctx.fillText(unitLabel + (calFT ? '' : '/day'), 0, 0); ctx.restore();
+
+  // ── UNCALIBRATED STATE — say so loudly. ──
+  // Without a DATED lab the model cannot place the curve on a pmol/L scale (the anchor
+  // day sets the whole scale, and guessing it is what produced wildly wrong levels
+  // before). It falls back to plotting the modelled drug appearance rate in mg/day.
+  // That is a completely different quantity from free T, so it must never be left to
+  // look like a free-T chart with an odd axis: a y-axis reading 0-35 where the user
+  // expects ~217+ pmol/L reads as a broken scale, not as "this is a different unit".
+  if (!calFT) {
+    var _ucY = PAD.top + 10;
+    ctx.textAlign = 'left'; ctx.font = 'bold 9px -apple-system,system-ui,sans-serif';
+    ctx.fillStyle = '#e0a030';
+    ctx.fillText('NOT CALIBRATED — mg/day, not pmol/L', PAD.left + 4, _ucY);
+    ctx.font = '8px -apple-system,system-ui,sans-serif';
+    ctx.fillStyle = '#e0a03099';
+    ctx.fillText('Add a dated blood test (free T or total T)', PAD.left + 4, _ucY + 11);
+    ctx.fillText('to see your actual levels.', PAD.left + 4, _ucY + 21);
+  }
 
   // SHBG suppression + β-source annotation (top-right of chart)
   if (_ghAnnot) {

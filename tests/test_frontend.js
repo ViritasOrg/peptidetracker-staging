@@ -4643,6 +4643,40 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcVermeulenFT === 'funct
   G._tcp=_amS.tp; G._tcBwEntries=_amS.bw; G._tcGhStack=_amS.gh;
 }
 
+// ── Uncalibrated state must ANNOUNCE itself ──
+// A y-axis reading 0-35 where the user expects 217+ pmol/L looks like a broken scale,
+// not like "this is mg/day". Henrik hit exactly that. Without a dated lab the curve is a
+// drug appearance rate, which is a different quantity from free T — the chart must say so.
+console.log('\n── T-calc: uncalibrated state is announced ──');
+{
+  var _ucSrc = require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
+  check('uncalibrated: chart states it is NOT calibrated', /NOT CALIBRATED/.test(_ucSrc));
+  check('uncalibrated: chart names the actual unit (mg/day, not pmol/L)',
+    /mg\/day, not pmol\/L/.test(_ucSrc));
+  check('uncalibrated: chart tells the user what to do about it',
+    /Add a dated blood test/.test(_ucSrc));
+  check('uncalibrated: the notice is gated on calFT being absent',
+    /if \(!calFT\) \{[\s\S]{0,600}NOT CALIBRATED/.test(_ucSrc),
+    'the notice must only show when the curve really is uncalibrated');
+  // And the state it announces must actually be reachable: an undated reading.
+  if (typeof G._tcFreeTSeries === 'function') {
+    var _ucSave = {tp:G._tcp, bw:G._tcBwEntries, gh:G._tcGhStack};
+    var _ucLog = [{compId:'nebido', doseMg:'100', date:'2026-06-26'},
+                  {compId:'nebido', doseMg:'100', date:'2026-06-28'}];
+    G._tcp = {measuredFT:'217', currentDoseMgWk:'0', totalT:'', shbg:'', birthYear:'1985', manualLog:_ucLog};
+    G._tcBwEntries = null; G._tcGhStack = [];
+    var _ucS = G._tcFreeTSeries(_ucLog.slice(), {});
+    check('uncalibrated: an undated reading really does yield the mg unit',
+      _ucS.calFT == null && _ucS.unitLabel === 'mg', 'calFT='+_ucS.calFT+' unit='+_ucS.unitLabel);
+    // …and a dated one calibrates, so the notice disappears for real users with labs.
+    G._tcBwEntries = [{date:'2026-06-25', free_t:217, shbg:45}];
+    var _ucS2 = G._tcFreeTSeries(_ucLog.slice(), {});
+    check('uncalibrated: a dated reading calibrates (notice would not show)',
+      _ucS2.calFT != null && _ucS2.unitLabel === 'pmol/L');
+    G._tcp = _ucSave.tp; G._tcBwEntries = _ucSave.bw; G._tcGhStack = _ucSave.gh;
+  }
+}
+
 // Regression: warm-start ke for curDose=0 must use slowest compound ke (not weighted avg).
 // Bug: weighted ke was dominated by TE (short HL=4.5d), causing the prior-protocol
 // baseline to wash out in ~7 days. By Day 30 it was <6% of initial, leaving total
