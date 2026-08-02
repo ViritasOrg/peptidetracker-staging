@@ -4546,6 +4546,65 @@ if (typeof G._TC_T_FRACTION === 'object' && G._TC_T_FRACTION) {
   check('_TC_T_FRACTION defined', false);
 }
 
+// ── ABSOLUTE free-T model: the invariants the old scale-fitted one violated ──
+console.log('\n── T-calc: absolute model (no fitted scale factor) ──');
+if (typeof G._tcFreeTSeries === 'function' && typeof G._tcVermeulenFT === 'function') {
+  var _amS={tp:G._tcp,bw:G._tcBwEntries,gh:G._tcGhStack};
+  function _amIso(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+  // 100 mg TU every 2 days — the real protocol that exposed this.
+  function _amRun(startStr,n){
+    var st=new Date(startStr+'T12:00:00');
+    var log=[]; var t=new Date(st.getTime());
+    for(var i=0;i<n;i++){log.push({compId:'nebido',doseMg:'100',date:_amIso(t)});t=new Date(t.getTime()+2*86400000);}
+    G._tcp={measuredFT:'217',currentDoseMgWk:'0',totalT:'',shbg:'45',birthYear:'1985',manualLog:log};
+    G._tcBwEntries=[{date:_amIso(new Date(st.getTime()-86400000)),free_t:217,shbg:45}];
+    G._tcGhStack=[];
+    var s=G._tcFreeTSeries(log.slice(),{});
+    var ft=function(i){return s.total[i]*(s.calFT_arr?s.calFT_arr[i]:s.scale);};
+    var mx=0;for(var i=0;i<=s.totalDays;i++)if(ft(i)>mx)mx=ft(i);
+    return {s:s, ft:ft, peak:mx};
+  }
+  var _amA=_amRun('2026-06-26',900);
+  // 1. total[] is an ABSOLUTE appearance rate in mg/day, not an arbitrary scale.
+  //    Before the first dose it is exactly endogenous production.
+  check('absolute model: day-0 appearance rate == endogenous production (mg/day)',
+    Math.abs(_amA.s.total[0] - G.TCALC_ENDOG_T_MGD) < 1e-6, 'total[0]='+_amA.s.total[0]);
+  // 2. Steady-state appearance rate == the dose rate. Mass balance: every injected mg
+  //    appears. 100mg TU q2d = 100*0.6315/2 mg testosterone/day, + endogenous.
+  var _amRate=100*0.6315/2, _amSS=0;
+  for(var i=Math.floor(_amA.s.totalDays*0.6);i<=Math.floor(_amA.s.totalDays*0.7);i++) _amSS=Math.max(_amSS,_amA.s.total[i]);
+  check('absolute model: steady-state rate == dose rate + endogenous (mass balance)',
+    Math.abs(_amSS-(_amRate+G.TCALC_ENDOG_T_MGD))/(_amRate+G.TCALC_ENDOG_T_MGD) < 0.03,
+    'got '+_amSS.toFixed(2)+' want '+(_amRate+G.TCALC_ENDOG_T_MGD).toFixed(2));
+  // 3. The curve starts at the user's own measured baseline (pre-cycle draw).
+  check('absolute model: day-0 free T == the measured baseline',
+    Math.abs(_amA.ft(0)-217) < 1.0, 'day0='+_amA.ft(0).toFixed(1));
+  // 4. THE BUG THIS REPLACED: the projected plateau must not depend on how far into the
+  //    protocol you happen to be. The old model answered 435-15789 pmol/L for one protocol
+  //    because its "endogenous baseline" was carved from the drug curve.
+  var _amB=_amRun('2025-06-01',900), _amC=_amRun('2026-07-25',900);
+  var _amSpread=Math.max(_amA.peak,_amB.peak,_amC.peak)/Math.min(_amA.peak,_amB.peak,_amC.peak);
+  check('absolute model: plateau does NOT depend on how far into the protocol you are',
+    _amSpread < 1.05,
+    'peaks '+_amA.peak.toFixed(0)+' / '+_amB.peak.toFixed(0)+' / '+_amC.peak.toFixed(0)+' spread='+_amSpread.toFixed(3));
+  // 5. The plateau matches first principles: TT scales as (rate+P)/P, then Vermeulen.
+  // No measured total T in this scenario -> 'partial' tier -> the beta power-law is OFF,
+  // so SHBG stays at the measured 45. (Applying beta here would be testing a different
+  // tier than the one the scenario configures.)
+  var _amTT0=G._tcInvVermeulenTT(217,45), _amMult=(_amRate+G.TCALC_ENDOG_T_MGD)/G.TCALC_ENDOG_T_MGD;
+  var _amWant=G._tcVermeulenFT(_amTT0*_amMult, 45);
+  check('absolute model: plateau matches (rate+P)/P then Vermeulen, within 5%',
+    Math.abs(_amA.peak-_amWant)/_amWant < 0.05,
+    'model '+_amA.peak.toFixed(0)+' vs first-principles '+_amWant.toFixed(0));
+  // 6. No fitted scale factor may come back.
+  var _amSrc=require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
+  check('absolute model: calFT is not refitted to the measurement',
+    !/calFT\s*=\s*_mftNum\s*\//.test(_amSrc), 'a calFT = _mftNum/... scale fit reappeared');
+  check('absolute model: no anchor re-normalisation of calFT_arr',
+    !/calFT_arr\[_ai\]\s*\*=/.test(_amSrc), 'the anchor normalisation reappeared');
+  G._tcp=_amS.tp; G._tcBwEntries=_amS.bw; G._tcGhStack=_amS.gh;
+}
+
 // Regression: warm-start ke for curDose=0 must use slowest compound ke (not weighted avg).
 // Bug: weighted ke was dominated by TE (short HL=4.5d), causing the prior-protocol
 // baseline to wash out in ~7 days. By Day 30 it was <6% of initial, leaving total
@@ -5773,12 +5832,21 @@ if (typeof G._tcDrawManualChart === 'function') {
     var _arr=_shCap.arr, _lo=_shCap.lo, _hi=_shCap.hi, _cal=_shCap.calFT, _ref=_shCap.refDay, _tot=_shCap.total;
     // peak index by central curve
     var _pk=0,_pv=0; for (var _t=0; _t<_tot.length; _t++){ var _v=_tot[_t]*_arr[_t]; if(_v>_pv){_pv=_v;_pk=_t;} }
-    check('T→SHBG: curve stays anchored at the draw (factor = 1 there)',
-      Math.abs(_arr[_ref]/_cal - 1) < 1e-6, 'arr[ref]/calFT='+(_arr[_ref]/_cal).toFixed(8));
+    // The curve must pass through the user's measured free T at the draw. This used to be
+    // asserted as arr[ref]/calFT === 1, which tested the old REPRESENTATION (arr was a
+    // multiplier around a fitted calFT). calFT is no longer a fitted scale factor — the
+    // baseline is solved from the lab instead — so assert the property directly. It now
+    // holds because TT_base was derived from this measurement, not because the curve was
+    // rescaled to hit it: a modelling error can no longer be absorbed into a constant.
+    check('T→SHBG: curve passes through the measured free T at the draw',
+      Math.abs(_tot[_ref] * _arr[_ref] - 217) < 0.5,
+      'rendered at draw=' + (_tot[_ref] * _arr[_ref]).toFixed(4) + ' vs measured 217');
     check('T→SHBG: band pinches to zero width at the draw',
       Math.abs(_lo[_ref]-_hi[_ref]) < 1e-6);
+    // Same contract change: compare the free-T FRACTION at the peak against its value at
+    // the draw, rather than against calFT.
     check('T→SHBG: free-T fraction rises above the draw dose (SHBG suppressed)',
-      _arr[_pk] > _cal * 1.02, 'arr[peak]/calFT='+(_arr[_pk]/_cal).toFixed(4));
+      _arr[_pk] > _arr[_ref] * 1.02, 'arr[peak]/arr[ref]='+(_arr[_pk]/_arr[_ref]).toFixed(4));
     check('T→SHBG: β band brackets the central curve at the peak',
       _lo[_pk] <= _arr[_pk] + 1e-9 && _arr[_pk] <= _hi[_pk] + 1e-9);
     check('T→SHBG: band has real width away from the draw (hi > lo at peak)',
