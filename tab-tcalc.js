@@ -2356,16 +2356,11 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   // Without a dated lab the curve is calibrated to the POPULATION AVERAGE for the user's
   // age. It is still a real pmol/L curve — units never change — but the level it is
   // pinned to is a population figure, not this user's. Say so plainly and ask for a test.
-  if (_tier === 'estimate') {
-    var _ucY = PAD.top + 10;
-    ctx.textAlign = 'left'; ctx.font = 'bold 9px -apple-system,system-ui,sans-serif';
-    ctx.fillStyle = '#e0a030';
-    ctx.fillText('ESTIMATE — population average for your age', PAD.left + 4, _ucY);
-    ctx.font = '8px -apple-system,system-ui,sans-serif';
-    ctx.fillStyle = '#e0a03099';
-    ctx.fillText('Educated guess, not your levels. Add a dated', PAD.left + 4, _ucY + 11);
-    ctx.fillText('blood test (free T or total T) for the real curve.', PAD.left + 4, _ucY + 21);
-  }
+  // Drawn as ONE block below, next to the badge — not here. This used to paint three
+  // lines starting at PAD.top+10, directly underneath the pill badge that starts at
+  // PAD.top+2, so the badge sat on top of the first line and the result read
+  // "...ge for your age" over a coloured pill, with the remaining two lines running
+  // across the curve. Two separate warnings saying the same thing, overlapping.
 
   // SHBG suppression + β-source annotation (top-right of chart)
   if (_ghAnnot) {
@@ -2459,8 +2454,11 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   for (var t3 = xStart + 1; t3 <= xEnd; t3++) {
     ctx.lineTo(xOf(t3), yOf(total[t3] * (calFT_arr ? calFT_arr[t3] : scale) || 0));
   }
-  // Estimate tiers (no bloodwork, or no SHBG data) draw dashed to signal lower confidence.
-  if (_tier && _tier !== 'measured') ctx.setLineDash([5,3]);
+  // The plasma curve is ALWAYS a solid line. Estimate tiers used to draw it dashed, which
+  // made an uncalibrated curve read as broken rather than uncertain — at Whole zoom the
+  // dashes alias against the injection cycles and the line disappears entirely. Lower
+  // confidence is already carried by the badge, the wider band and the axis note; it does
+  // not also need to degrade the line itself.
   ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
   ctx.setLineDash([]);
 
@@ -2495,6 +2493,12 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
     if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(_bx, _by, _badgeW, 12, 3); ctx.fill(); }
     else { ctx.fillRect(_bx, _by, _badgeW, 12); }
     ctx.fillStyle = '#1a1205'; ctx.fillText(_badge, _bx + 5, _by + 9);
+    // One line of guidance, BELOW the pill (badge is 12px tall from _by), so nothing
+    // overlaps. It says what to do; the badge already says what is wrong.
+    ctx.font = '8px -apple-system,system-ui,sans-serif';
+    ctx.fillStyle = '#e0a030bb';
+    ctx.fillText('Not your levels — add a dated blood test',
+                 _bx + 1, _by + 23);
   }
 
   // "Now" vertical line + TODAY'S free-T level (Y-axis label) — shown in EVERY
