@@ -1788,6 +1788,14 @@ function _tcFreeTSeries(sorted, hooks) {
       var _adB = new Date(firstDate.getTime() + _anchorDay * 86400000);
       _anchorCutoffDate = _adB.getFullYear() + '-' + String(_adB.getMonth() + 1).padStart(2, '0') + '-' + String(_adB.getDate()).padStart(2, '0');
     }
+  } else if (_ftIsDefault) {
+    // Population average for the user's age. That describes an UNTREATED man, so it is a
+    // pre-cycle baseline by definition and anchors at day 0 — the curve starts there and
+    // the drug accumulates on top. Anchoring a population baseline at "today" would claim
+    // the user is at the untreated average despite whatever they have already injected.
+    _anchorDay = 0;
+    var _adP = new Date(firstDate.getTime());
+    _anchorCutoffDate = _adP.getFullYear() + '-' + String(_adP.getMonth() + 1).padStart(2, '0') + '-' + String(_adP.getDate()).padStart(2, '0');
   } else {
     // No bloodwork at all — anchor at "today" when it falls within the injection span
     // (the measured/estimated level describes the user now), otherwise day 0 (an all-future
@@ -1889,7 +1897,18 @@ function _tcFreeTSeries(sorted, hooks) {
       if (_c0 && _c0.date && (parseDec(_c0.free_t) > 0 || parseDec(_c0.total_t) > 0)) { _bwCal = _c0; break; }
     }
   }
+  // NO DATED LAB -> POPULATION AVERAGE FOR THE USER'S AGE, clearly labelled an estimate.
+  // The curve is always drawn and always in pmol/L. What changes without a lab is the
+  // CONFIDENCE, not the unit and not whether a curve appears at all.
+  // A user's own free T typed in with no date still cannot anchor the curve — the anchor
+  // DAY sets the whole scale, and guessing it is what made a pre-cycle baseline get read
+  // as an accumulated mid-cycle level. So we fall back to the age-based population value,
+  // which is unambiguously an UNTREATED baseline and therefore anchors at day 0.
   var _mftUndated = !_ftIsDefault && !_bwCal;   // user's own number, no date anywhere
+  if (_mftUndated || _ftIsDefault) {
+    var _popFT = _tcDefaultFT(parseInt(_tcp.birthYear, 10) || 0);
+    if (_popFT > 0) { _mftNum = _popFT; _ftIsDefault = true; }
+  }
   var _shbgForInv = _shbgMeas0 > 0 ? _shbgMeas0 : _tcShbgBaselineForAge(
     (parseInt(_tcp.birthYear, 10) > 0) ? (new Date().getFullYear() - parseInt(_tcp.birthYear, 10)) : 0);
   // Inverting free T needs SOME SHBG. With no measurement and no population table (no age
@@ -1901,7 +1920,7 @@ function _tcFreeTSeries(sorted, hooks) {
   var _ttAtDraw = null;
   if (_mftNum > 0 && _shbgForInv > 0) _ttAtDraw = _tcInvVermeulenTT(_mftNum, _shbgForInv);
   if (!(_ttAtDraw > 0) && _ttMeas0 > 0) _ttAtDraw = _ttMeas0;
-  var _ttBase = (_ttAtDraw > 0 && _endogP > 0 && !_mftUndated) ? (_ttAtDraw * _endogP / _anchRate) : 0;
+  var _ttBase = (_ttAtDraw > 0 && _endogP > 0) ? (_ttAtDraw * _endogP / _anchRate) : 0;
 
   // calFT is retained ONLY as "is the curve expressed in pmol/L" for existing callers and
   // for the unit label. It is no longer a fitted scale factor and nothing multiplies by it.
@@ -1909,7 +1928,11 @@ function _tcFreeTSeries(sorted, hooks) {
   var _calFTPkLo = calFT, _calFTPkHi = calFT;
   if (hooks.calFT) hooks.calFT(calFT);
   var scale     = calFT || 1;
-  var unitLabel = calFT ? 'pmol/L' : 'mg';
+  // ALWAYS pmol/L. There is no other unit and there must never be one — see the
+  // "NEVER SWITCH UNITS" rule in CLAUDE.md. A curve that silently became mg/day when it
+  // could not calibrate was never a requested feature; it rendered a y-axis of 0-35 where
+  // the user expected 217+ and read as a broken chart.
+  var unitLabel = 'pmol/L';
 
   // Time-varying SHBG → free-T model.  Two drivers, both anchored at the bloodwork draw so the
   // curve passes exactly through the measured free T / SHBG (no double-counting):
@@ -2298,26 +2321,23 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
     ctx.fillText(calFT ? Math.round(tv) : (tv >= 100 ? Math.round(tv) : tv >= 10 ? tv.toFixed(1) : tv.toFixed(2)), PAD.left - 4, ty + 3);
   }
   ctx.save(); ctx.translate(10, PAD.top + cH / 2); ctx.rotate(-Math.PI / 2);
-  ctx.textAlign = 'center'; ctx.fillStyle = calFT ? '#444' : '#e0a030';
+  ctx.textAlign = 'center'; ctx.fillStyle = '#444';
   ctx.font = '8px -apple-system,system-ui,sans-serif';
-  ctx.fillText(unitLabel + (calFT ? '' : '/day'), 0, 0); ctx.restore();
+  ctx.fillText(unitLabel, 0, 0); ctx.restore();
 
-  // ── UNCALIBRATED STATE — say so loudly. ──
-  // Without a DATED lab the model cannot place the curve on a pmol/L scale (the anchor
-  // day sets the whole scale, and guessing it is what produced wildly wrong levels
-  // before). It falls back to plotting the modelled drug appearance rate in mg/day.
-  // That is a completely different quantity from free T, so it must never be left to
-  // look like a free-T chart with an odd axis: a y-axis reading 0-35 where the user
-  // expects ~217+ pmol/L reads as a broken scale, not as "this is a different unit".
-  if (!calFT) {
+  // ── ESTIMATE STATE — an educated guess, labelled as one. ──
+  // Without a dated lab the curve is calibrated to the POPULATION AVERAGE for the user's
+  // age. It is still a real pmol/L curve — units never change — but the level it is
+  // pinned to is a population figure, not this user's. Say so plainly and ask for a test.
+  if (_tier === 'estimate') {
     var _ucY = PAD.top + 10;
     ctx.textAlign = 'left'; ctx.font = 'bold 9px -apple-system,system-ui,sans-serif';
     ctx.fillStyle = '#e0a030';
-    ctx.fillText('NOT CALIBRATED — mg/day, not pmol/L', PAD.left + 4, _ucY);
+    ctx.fillText('ESTIMATE — population average for your age', PAD.left + 4, _ucY);
     ctx.font = '8px -apple-system,system-ui,sans-serif';
     ctx.fillStyle = '#e0a03099';
-    ctx.fillText('Add a dated blood test (free T or total T)', PAD.left + 4, _ucY + 11);
-    ctx.fillText('to see your actual levels.', PAD.left + 4, _ucY + 21);
+    ctx.fillText('Educated guess, not your levels. Add a dated', PAD.left + 4, _ucY + 11);
+    ctx.fillText('blood test (free T or total T) for the real curve.', PAD.left + 4, _ucY + 21);
   }
 
   // SHBG suppression + β-source annotation (top-right of chart)
@@ -2864,7 +2884,11 @@ function _tcDrawChart(canvasId, total, stats, plan, sched, calFT, measuredFT) {
   var lineColor = (plan.compounds && plan.compounds.length > 0) ? plan.compounds[0].cd.dot : '#e8a020';
   var cycleDays = plan.cycleDays;
   var scale     = calFT || 1;
-  var unitLabel = calFT ? 'pmol/L' : 'mg';
+  // ALWAYS pmol/L. There is no other unit and there must never be one — see the
+  // "NEVER SWITCH UNITS" rule in CLAUDE.md. A curve that silently became mg/day when it
+  // could not calibrate was never a requested feature; it rendered a y-axis of 0-35 where
+  // the user expected 217+ and read as a broken chart.
+  var unitLabel = 'pmol/L';
 
   var dpr  = window.devicePixelRatio || 1;
   var cssW = canvas.offsetWidth || 300;

@@ -4643,37 +4643,64 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcVermeulenFT === 'funct
   G._tcp=_amS.tp; G._tcBwEntries=_amS.bw; G._tcGhStack=_amS.gh;
 }
 
-// ── Uncalibrated state must ANNOUNCE itself ──
-// A y-axis reading 0-35 where the user expects 217+ pmol/L looks like a broken scale,
-// not like "this is mg/day". Henrik hit exactly that. Without a dated lab the curve is a
-// drug appearance rate, which is a different quantity from free T — the chart must say so.
-console.log('\n── T-calc: uncalibrated state is announced ──');
+// ── UNITS ARE ALWAYS pmol/L + missing labs fall back to the population average ──
+// A curve that silently became mg/day when it could not calibrate was never a requested
+// feature. It rendered a y-axis of 0-35 where the user expected 217+ pmol/L and read as a
+// broken chart. Missing bloodwork changes the CONFIDENCE, never the unit.
+console.log('\n── T-calc: always pmol/L, population estimate when no lab ──');
 {
-  var _ucSrc = require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
-  check('uncalibrated: chart states it is NOT calibrated', /NOT CALIBRATED/.test(_ucSrc));
-  check('uncalibrated: chart names the actual unit (mg/day, not pmol/L)',
-    /mg\/day, not pmol\/L/.test(_ucSrc));
-  check('uncalibrated: chart tells the user what to do about it',
-    /Add a dated blood test/.test(_ucSrc));
-  check('uncalibrated: the notice is gated on calFT being absent',
-    /if \(!calFT\) \{[\s\S]{0,600}NOT CALIBRATED/.test(_ucSrc),
-    'the notice must only show when the curve really is uncalibrated');
-  // And the state it announces must actually be reachable: an undated reading.
+  var _puSrc = require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
+  check('units: no mg fallback anywhere in the unit label',
+    !/unitLabel\s*=\s*calFT\s*\?/.test(_puSrc), 'a conditional unit label is back');
+  check('units: unitLabel is assigned the literal pmol/L',
+    (_puSrc.match(/var unitLabel = 'pmol\/L';/g) || []).length >= 2);
+  // Targeted: unitLabel itself must never be assigned mg. (Bare 'mg' elsewhere is a DOSE
+  // unit — mg of drug injected — which is correct and unrelated to the chart's y-axis.)
+  check('units: unitLabel is never assigned mg',
+    !/unitLabel\s*=\s*[^;\n]*'mg'/.test(_puSrc), 'unitLabel can still become mg');
+  check('units: the free-T axis cannot render a non-pmol/L unit',
+    !/unitLabel\s*=\s*(?!'pmol\/L')/.test(_puSrc) || /var unitLabel = 'pmol\/L';/.test(_puSrc));
+  check('estimate: chart labels it an ESTIMATE', /ESTIMATE — population average/.test(_puSrc));
+  check('estimate: chart says it is not the user\'s levels', /not your levels/.test(_puSrc));
+  check('estimate: chart asks for a dated blood test', /Add a dated/.test(_puSrc));
+
   if (typeof G._tcFreeTSeries === 'function') {
-    var _ucSave = {tp:G._tcp, bw:G._tcBwEntries, gh:G._tcGhStack};
-    var _ucLog = [{compId:'nebido', doseMg:'100', date:'2026-06-26'},
-                  {compId:'nebido', doseMg:'100', date:'2026-06-28'}];
-    G._tcp = {measuredFT:'217', currentDoseMgWk:'0', totalT:'', shbg:'', birthYear:'1985', manualLog:_ucLog};
+    var _puSave = {tp:G._tcp, bw:G._tcBwEntries, gh:G._tcGhStack};
+    var _puLog = [{compId:'nebido', doseMg:'100', date:'2026-06-26'},
+                  {compId:'nebido', doseMg:'100', date:'2026-06-28'},
+                  {compId:'nebido', doseMg:'100', date:'2026-06-30'}];
+    // No bloodwork at all -> population average for age, still pmol/L.
+    G._tcp = {measuredFT:'', currentDoseMgWk:'0', totalT:'', shbg:'', birthYear:'1985', manualLog:_puLog};
     G._tcBwEntries = null; G._tcGhStack = [];
-    var _ucS = G._tcFreeTSeries(_ucLog.slice(), {});
-    check('uncalibrated: an undated reading really does yield the mg unit',
-      _ucS.calFT == null && _ucS.unitLabel === 'mg', 'calFT='+_ucS.calFT+' unit='+_ucS.unitLabel);
-    // …and a dated one calibrates, so the notice disappears for real users with labs.
+    var _puA = G._tcFreeTSeries(_puLog.slice(), {});
+    var _puFt = function(S,i){ return S.total[i]*(S.calFT_arr?S.calFT_arr[i]:S.scale); };
+    check('no lab: unit is STILL pmol/L (never mg)', _puA.unitLabel === 'pmol/L', 'got '+_puA.unitLabel);
+    check('no lab: curve is calibrated, not blank', _puA.calFT != null);
+    check('no lab: tier reports it as an estimate', _puA.tier === 'estimate', 'tier='+_puA.tier);
+    var _popFT = G._tcDefaultFT(1985);
+    check('no lab: day 0 sits at the population average for the age',
+      Math.abs(_puFt(_puA,0) - _popFT) < Math.max(1, _popFT*0.02),
+      'day0='+_puFt(_puA,0).toFixed(1)+' population='+_popFT);
+    check('no lab: the curve still rises with the drug', _puFt(_puA,_puA.totalDays-1) > _puFt(_puA,0));
+
+    // An UNDATED personal reading must not anchor the curve — the anchor day sets the
+    // whole scale. It falls back to the same population estimate rather than to no curve.
+    G._tcp = {measuredFT:'900', currentDoseMgWk:'0', totalT:'', shbg:'', birthYear:'1985', manualLog:_puLog};
+    G._tcBwEntries = null;
+    var _puB = G._tcFreeTSeries(_puLog.slice(), {});
+    check('undated personal value does not anchor the curve (population used instead)',
+      _puB.tier === 'estimate' && Math.abs(_puFt(_puB,0) - _popFT) < Math.max(1, _popFT*0.02),
+      'day0='+_puFt(_puB,0).toFixed(1));
+    check('undated personal value: unit is still pmol/L', _puB.unitLabel === 'pmol/L');
+
+    // A DATED lab wins and drops the estimate labelling.
+    G._tcp = {measuredFT:'217', currentDoseMgWk:'0', totalT:'', shbg:'45', birthYear:'1985', manualLog:_puLog};
     G._tcBwEntries = [{date:'2026-06-25', free_t:217, shbg:45}];
-    var _ucS2 = G._tcFreeTSeries(_ucLog.slice(), {});
-    check('uncalibrated: a dated reading calibrates (notice would not show)',
-      _ucS2.calFT != null && _ucS2.unitLabel === 'pmol/L');
-    G._tcp = _ucSave.tp; G._tcBwEntries = _ucSave.bw; G._tcGhStack = _ucSave.gh;
+    var _puC = G._tcFreeTSeries(_puLog.slice(), {});
+    check('dated lab: anchors on the user\'s own value, not the population',
+      Math.abs(_puFt(_puC,0) - 217) < 1.0, 'day0='+_puFt(_puC,0).toFixed(1));
+    check('dated lab: no longer flagged as an estimate', _puC.tier !== 'estimate', 'tier='+_puC.tier);
+    G._tcp = _puSave.tp; G._tcBwEntries = _puSave.bw; G._tcGhStack = _puSave.gh;
   }
 }
 
@@ -5292,8 +5319,10 @@ if (typeof G._tcDrawManualChart === 'function') {
   }
   G._tcBwEntries = _nbSavedBw;
   check('no-bloodwork anchor: no crash', !_nbThrew);
-  check('undated reading does NOT calibrate (refuses to guess the draw date)',
-    !_nbThrew && _nbUncal && _nbUncal.calFT == null,
+  // Undated no longer means UNCALIBRATED — it means the population estimate is used.
+  // The curve is always drawn and always pmol/L; only the confidence changes.
+  check('undated reading still yields a calibrated pmol/L curve (population estimate)',
+    !_nbThrew && _nbUncal && _nbUncal.calFT != null,
     'calFT=' + (_nbUncal && _nbUncal.calFT));
   check('dated draw: calFT captured (short & extended)', !_nbThrew && _nbR1 && _nbR2 && _nbR1.calFT != null && _nbR2.calFT != null);
   if (!_nbThrew && _nbR1 && _nbR2 && _nbR1.calFT != null && _nbR2.calFT != null) {
