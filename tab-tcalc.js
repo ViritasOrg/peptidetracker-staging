@@ -1736,7 +1736,16 @@ function _tcFreeTSeries(sorted, hooks) {
   // the end.  This is what makes calFT immune to appended future injections in BOTH the
   // bloodwork and no-bloodwork cases (previously only the bloodwork case was anchored,
   // so a no-bloodwork schedule re-scaled — and its peak dropped — as injections grew).
-  var _bwAnchorDate = _tcBwEntries && _tcBwEntries.length ? _tcBwEntries[0].date : null;
+  // Anchor on the entry that actually carries a dated measurement (see _bwCal below) —
+  // the newest entry may be a partial one with no usable value.
+  var _bwAnchorDate = null;
+  if (_tcBwEntries && _tcBwEntries.length) {
+    for (var _ba = 0; _ba < _tcBwEntries.length; _ba++) {
+      var _bae = _tcBwEntries[_ba];
+      if (_bae && _bae.date && (parseDec(_bae.free_t) > 0 || parseDec(_bae.total_t) > 0)) { _bwAnchorDate = _bae.date; break; }
+    }
+    if (!_bwAnchorDate) _bwAnchorDate = _tcBwEntries[0].date || null;
+  }
   var _anchorDay, _anchorCutoffDate;
   var _bwAnchorDay = _bwAnchorDate
     ? Math.round((new Date(_bwAnchorDate + 'T12:00:00') - firstDate) / 86400000)
@@ -1838,6 +1847,24 @@ function _tcFreeTSeries(sorted, hooks) {
   // the measured free T through Vermeulen to get the total T consistent WITH IT, and use
   // the measured total T only when no free T was recorded. The discrepancy is reported
   // rather than hidden (see _bfAnnot / tier), never silently averaged away.
+  // ── CALIBRATION NEEDS A DATE. Do not guess when a reading was taken. ──
+  // TT_base is solved as TT_at_draw * P/total[anchorDay], so the anchor DAY is load
+  // bearing: the same number means very different things on day 0 and on day 200. An
+  // undated value used to default to "today", so a PRE-CYCLE baseline typed in by someone
+  // already weeks into a protocol was treated as their accumulated level and the whole
+  // projection was scaled down to fit it.
+  // A value typed into the T-Calc profile carries no date and therefore cannot calibrate;
+  // only a bloodwork entry (which does) can. The age-based population default is exempt:
+  // it is not a measurement of this user at an unknown time, it is an explicit estimate
+  // for "now", already surfaced as the 'estimate' tier with a wide band.
+  var _bwCal = null;
+  if (_tcBwEntries && _tcBwEntries.length) {
+    for (var _bi0 = 0; _bi0 < _tcBwEntries.length; _bi0++) {
+      var _c0 = _tcBwEntries[_bi0];
+      if (_c0 && _c0.date && (parseDec(_c0.free_t) > 0 || parseDec(_c0.total_t) > 0)) { _bwCal = _c0; break; }
+    }
+  }
+  var _mftUndated = !_ftIsDefault && !_bwCal;   // user's own number, no date anywhere
   var _shbgForInv = _shbgMeas0 > 0 ? _shbgMeas0 : _tcShbgBaselineForAge(
     (parseInt(_tcp.birthYear, 10) > 0) ? (new Date().getFullYear() - parseInt(_tcp.birthYear, 10)) : 0);
   // Inverting free T needs SOME SHBG. With no measurement and no population table (no age
@@ -1849,7 +1876,7 @@ function _tcFreeTSeries(sorted, hooks) {
   var _ttAtDraw = null;
   if (_mftNum > 0 && _shbgForInv > 0) _ttAtDraw = _tcInvVermeulenTT(_mftNum, _shbgForInv);
   if (!(_ttAtDraw > 0) && _ttMeas0 > 0) _ttAtDraw = _ttMeas0;
-  var _ttBase = (_ttAtDraw > 0 && _endogP > 0) ? (_ttAtDraw * _endogP / _anchRate) : 0;
+  var _ttBase = (_ttAtDraw > 0 && _endogP > 0 && !_mftUndated) ? (_ttAtDraw * _endogP / _anchRate) : 0;
 
   // calFT is retained ONLY as "is the curve expressed in pmol/L" for existing callers and
   // for the unit label. It is no longer a fitted scale factor and nothing multiplies by it.

@@ -4359,7 +4359,11 @@ if (typeof G._tcDrawManualChart === 'function') {
 // day-indexed series and (pre-cycle-baseline case) start at the measured baseline.
 if (typeof G._tcFreeTSeries === 'function') {
   var _fsFT = G._tcp.measuredFT, _fsDose = G._tcp.currentDoseMgWk, _fsBw = G._tcBwEntries;
-  G._tcp.measuredFT = '217'; G._tcp.currentDoseMgWk = ''; G._tcBwEntries = null;
+  // Calibration now requires a DATED reading (an undated value cannot say WHEN the user
+  // was at that level, and the anchor day is load-bearing). Same intent, expressed with a
+  // pre-cycle draw.
+  G._tcp.measuredFT = '217'; G._tcp.currentDoseMgWk = '';
+  G._tcBwEntries = [{date:'2026-06-20', free_t:217}];
   var _fsLog = [
     {compId:'testoviron', doseMg:'125', date:'2026-06-24'},
     {compId:'testoviron', doseMg:'125', date:'2026-06-28'},
@@ -4411,6 +4415,7 @@ if (typeof G._tcFreeTSeries === 'function') {
 
   // partial: a measured FT but no SHBG/total-T → medium band, no SHBG dynamics
   G._tcp = {measuredFT:'300', currentDoseMgWk:'', totalT:'', shbg:'', birthYear:'1985', manualLog:_t3Log};
+  G._tcBwEntries = [{date:'2026-06-20', free_t:300}];   // dated: calibration requires it
   var _t3pt = G._tcFreeTSeries(_t3Log, {});
   check('tier: measured FT but no SHBG/TT → "partial"', _t3pt.tier === 'partial');
   check('tier: partial band (~±20%) is narrower than the no-bloodwork estimate band',
@@ -5224,16 +5229,29 @@ if (typeof G._tcDrawManualChart === 'function') {
 
   function _nbRun(offsets){ _nbCalFT = null; _nbFillNums = []; G._tcDrawManualChart('tc-manual-chart', _nbSeries(offsets)); return {calFT:_nbCalFT, peak:Math.max.apply(null, _nbFillNums.concat([0]))}; }
 
-  var _nbThrew = false, _nbR1 = null, _nbR2 = null;
+  var _nbThrew = false, _nbR1 = null, _nbR2 = null, _nbUncal = null;
+  var _nbSavedBw = G._tcBwEntries;
   try {
+    // NEW CONTRACT: with no dated reading the curve is not calibrated at all — the model
+    // refuses to guess WHEN an undated free T was taken, because the anchor day sets the
+    // whole scale. Captured first, before a dated draw is supplied below.
+    G._tcBwEntries = null;
+    _nbUncal = _nbRun(_nbOff1);
+    // The invariant this block exists for — appending FUTURE injections must not rescale
+    // the curve — is unchanged and still worth testing, so give it a dated draw.
+    G._tcBwEntries = [{date:_nbDate(-7), free_t:217}];
     _nbR1 = _nbRun(_nbOff1);
     _nbR2 = _nbRun(_nbOff2);
   } catch(e) {
     _nbThrew = true;
     console.error('  no-bloodwork anchor test threw:', e.message);
   }
+  G._tcBwEntries = _nbSavedBw;
   check('no-bloodwork anchor: no crash', !_nbThrew);
-  check('no-bloodwork anchor: calFT captured (short & extended)', !_nbThrew && _nbR1 && _nbR2 && _nbR1.calFT != null && _nbR2.calFT != null);
+  check('undated reading does NOT calibrate (refuses to guess the draw date)',
+    !_nbThrew && _nbUncal && _nbUncal.calFT == null,
+    'calFT=' + (_nbUncal && _nbUncal.calFT));
+  check('dated draw: calFT captured (short & extended)', !_nbThrew && _nbR1 && _nbR2 && _nbR1.calFT != null && _nbR2.calFT != null);
   if (!_nbThrew && _nbR1 && _nbR2 && _nbR1.calFT != null && _nbR2.calFT != null) {
     check(
       'no-bloodwork anchor: calFT must not change when future injections are appended',
@@ -5773,7 +5791,7 @@ if (typeof G._tcDrawManualChart === 'function' && typeof G._tcFreeTSeries === 'f
   var _awLog = [];
   for (var _awi=0; _awi<40; _awi++){ var _awd=new Date(new Date('2026-04-01').getTime()+_awi*3.5*86400000); _awLog.push({compId:'enanthate', doseMg:'100', date:_awd.getFullYear()+'-'+String(_awd.getMonth()+1).padStart(2,'0')+'-'+String(_awd.getDate()).padStart(2,'0')}); }
   G._tcp = {measuredFT:'500', currentDoseMgWk:'', totalT:'', shbg:'', birthYear:'1985', manualLog:_awLog};
-  G._tcBwEntries = null; G._tcGhStack = [];
+  G._tcBwEntries = [{date:'2026-06-20', free_t:500}]; G._tcGhStack = [];
   var _awS = G._tcFreeTSeries(_awLog.slice(), {});
   function _awWinMean(a,b){ var s=0,n=0; for(var t=a;t<=b;t++){ s+=_awS.total[t]*(_awS.calFT_arr?_awS.calFT_arr[t]:_awS.scale); n++; } return n?s/n:0; }
   try { localStorage.removeItem('tc-avg-line'); } catch(e){}
