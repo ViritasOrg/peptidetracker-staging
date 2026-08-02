@@ -4855,6 +4855,29 @@ console.log('\n\u2500\u2500 T-calc: a dated draw calibrates \u2500\u2500');
   }
 }
 
+// ── Promotion gates on THIS repo's CI, not on every check on the commit ──
+// Moving to the ViritasOrg org enabled CodeQL by default. It flagged three pre-existing
+// findings in code already live in prod, and because the gate failed on ANY failed or
+// cancelled check, a scanner the repo does not control blocked the deploy. A cancelled
+// pages-build-deployment (which a visibility change causes) did the same. Security
+// findings get triaged in the Security tab; they are not a reason to refuse to ship.
+// Test failures still block — that part must never be relaxed.
+console.log('\n\u2500\u2500 Promotion: CI gate scope \u2500\u2500');
+{
+  var _pgSrc = require('fs').readFileSync(
+    require('path').join(dir, '.github/workflows/promote-to-prod.yml'), 'utf8');
+  check('gate selects the test check by name',
+    /select\(\.name == "test"\)/.test(_pgSrc));
+  check('failure count is computed over the CI subset, not all checks',
+    /FAILED=\$\(echo "\$CI"/.test(_pgSrc));
+  check('pending count is computed over the CI subset, not all checks',
+    /PENDING=\$\(echo "\$CI"/.test(_pgSrc));
+  check('a failing test still blocks the merge',
+    /if \[ "\$FAILED" -gt "0" \]/.test(_pgSrc));
+  check('non-blocking failures are reported, not swallowed',
+    /non-blocking checks not passing/.test(_pgSrc));
+}
+
 // ── P0 (endogenous T production) is 5 mg/day, sourced ──
 // Changed from 6.5 on 2026-08-02 at Henrik's request, on retrieved evidence:
 // Handelsman/Endotext sources a 3-10 mg/day tracer-derived range and anchors it at
