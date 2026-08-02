@@ -4798,6 +4798,43 @@ console.log('\n── T-calc: DST-proof schedule generation ──');
   }
 }
 
+// ── Every draw path uses the LIVE planner's log; plus the 3-month zoom ──
+// The pan handler redrew from _tcp.manualLog, which is empty when the simple planner is
+// live, so dragging the chart redrew an EMPTY series and the curve would not scroll at
+// all. Identical mistake to the buildTCalc curve gate — hence a guard that covers every
+// draw path rather than the one that happened to be reported.
+console.log('\n── T-calc: pan + zoom levels ──');
+{
+  var _pzSrc = require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
+  check('no draw path filters _tcp.manualLog for the curve',
+    !/_tcp\.manualLog\.filter\(function\(e2\)/.test(_pzSrc),
+    'a draw path still builds its series from the manual log');
+  check('pan handler redraws from _tcCurveLog()',
+    /_tcDrawManualChart\(canvas\.id, _tcCurveLog\(\), _tcChartZoom\)/.test(_pzSrc));
+  // every _tcDrawManualChart call must be handed _tcCurveLog() or a var derived from it
+  var _pzCalls = _pzSrc.match(/_tcDrawManualChart\([^)]*\)/g) || [];
+  var _pzBad = _pzCalls.filter(function(c){ return /manualLog/.test(c); });
+  check('no _tcDrawManualChart call is passed the manual log directly',
+    _pzBad.length === 0, _pzBad.join(' | '));
+
+  check('3-month zoom is offered', /'today','week','month','3mo','whole'/.test(_pzSrc));
+  check('3-month zoom has a window (±45 days)',
+    /_zoom === '3mo'[\s\S]{0,140}nowDay - 45[\s\S]{0,60}nowDay \+ 45/.test(_pzSrc));
+  // the zoom levels must be ordered shortest → longest, so the strip reads sensibly
+  var _pzM = _pzSrc.match(/\['today','week','month','3mo','whole'\]/);
+  check('zoom levels ordered shortest to longest', !!_pzM);
+  if (typeof G._tcSetChartZoom === 'function') {
+    var _pzSave = G._tcChartZoom;
+    G.requestAnimationFrame = G.requestAnimationFrame || function(){};
+    var _pzThrew = false;
+    try { G._tcSetChartZoom('3mo'); } catch(e){ _pzThrew = true; }
+    check('selecting the 3-month zoom does not throw', !_pzThrew);
+    check('3-month zoom becomes the active level', G._tcChartZoom === '3mo');
+    check('pan offset resets when the zoom changes', G._tcChartPanOffset === 0);
+    try { G._tcSetChartZoom(_pzSave || 'whole'); } catch(e){}
+  }
+}
+
 // Regression: warm-start ke for curDose=0 must use slowest compound ke (not weighted avg).
 // Bug: weighted ke was dominated by TE (short HL=4.5d), causing the prior-protocol
 // baseline to wash out in ~7 days. By Day 30 it was <6% of initial, leaving total
