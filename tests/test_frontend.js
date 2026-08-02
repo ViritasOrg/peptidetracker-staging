@@ -4663,9 +4663,21 @@ console.log('\n── T-calc: always pmol/L, population estimate when no lab ─
     !/unitLabel\s*=\s*[^;\n]*'mg'/.test(_puSrc), 'unitLabel can still become mg');
   check('units: the free-T axis cannot render a non-pmol/L unit',
     !/unitLabel\s*=\s*(?!'pmol\/L')/.test(_puSrc) || /var unitLabel = 'pmol\/L';/.test(_puSrc));
-  check('estimate: chart labels it an ESTIMATE', /ESTIMATE — population average/.test(_puSrc));
-  check('estimate: chart says it is not the user\'s levels', /not your levels/.test(_puSrc));
-  check('estimate: chart asks for a dated blood test', /Add a dated/.test(_puSrc));
+  // The CLAUDE.md rule is that a no-bloodwork curve is drawn in pmol/L but LABELLED an
+  // estimate with a prompt for a blood test. All three guarantees still hold; the wording
+  // moved on 2026-08-02 because the old copy was rendered TWICE — a pill badge and a
+  // 3-line text block at overlapping coordinates, which painted over each other and over
+  // the curve. One block now carries it. Assert the guarantees, not the old duplication.
+  check('estimate: chart labels it an ESTIMATE',
+    /⚠ ESTIMATE · NO BLOODWORK/.test(_puSrc));
+  check('estimate: chart says it is not the user\'s levels', /Not your levels/.test(_puSrc));
+  check('estimate: chart asks for a dated blood test', /add a dated blood test/i.test(_puSrc));
+  // and the population-average calibration itself is untouched by the copy change
+  check('estimate: still calibrated to the age population average',
+    /POPULATION AVERAGE FOR THE USER'S AGE/.test(_puSrc));
+  // the curve is solid at every tier — dashes made an estimate look like a broken chart
+  check('plasma curve is never dashed for estimate tiers',
+    !/_tier !== 'measured'\) ctx\.setLineDash/.test(_puSrc));
 
   if (typeof G._tcFreeTSeries === 'function') {
     var _puSave = {tp:G._tcp, bw:G._tcBwEntries, gh:G._tcGhStack};
