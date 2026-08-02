@@ -1929,10 +1929,24 @@ function _tcFreeTSeries(sorted, hooks) {
   // as an accumulated mid-cycle level. So we fall back to the age-based population value,
   // which is unambiguously an UNTREATED baseline and therefore anchors at day 0.
   var _mftUndated = !_ftIsDefault && !_bwCal;   // user's own number, no date anywhere
-  if (_mftUndated || _ftIsDefault) {
+  // READ THE CALIBRATING ENTRY ITSELF — not the _tcp mirrors.
+  // _ftIsDefault is derived from _tcp.measuredFT alone, and _tcFetchBwEntries only mirrors
+  // free_t/total_t/shbg when the NEWEST entry happens to carry them. So a dated draw with a
+  // total T but no free T (a perfectly normal TRT panel) left _ftIsDefault true, and the
+  // block below then REPLACED the user's measured value with the age population average.
+  // The result: bloodwork entered, bloodwork ignored, and a chart captioned
+  // "ESTIMATE - NO BLOODWORK" over it. Take the values from _bwCal, the entry that was
+  // already selected as the one carrying a dated measurement.
+  var _bwFT   = _bwCal ? (parseDec(_bwCal.free_t)  || 0) : 0;
+  var _bwTT   = _bwCal ? (parseDec(_bwCal.total_t) || 0) : 0;
+  var _bwSHBG = _bwCal ? (parseDec(_bwCal.shbg)    || 0) : 0;
+  if (_bwFT > 0) { _mftNum = _bwFT; _ftIsDefault = false; }
+  // Population fallback ONLY when no dated draw can calibrate at all.
+  if ((_mftUndated || _ftIsDefault) && !(_bwFT > 0) && !(_bwTT > 0)) {
     var _popFT = _tcDefaultFT(parseInt(_tcp.birthYear, 10) || 0);
     if (_popFT > 0) { _mftNum = _popFT; _ftIsDefault = true; }
   }
+  if (_bwSHBG > 0) _shbgMeas0 = _bwSHBG;
   var _shbgForInv = _shbgMeas0 > 0 ? _shbgMeas0 : _tcShbgBaselineForAge(
     (parseInt(_tcp.birthYear, 10) > 0) ? (new Date().getFullYear() - parseInt(_tcp.birthYear, 10)) : 0);
   // Inverting free T needs SOME SHBG. With no measurement and no population table (no age
@@ -1942,7 +1956,11 @@ function _tcFreeTSeries(sorted, hooks) {
   // uncertainty; it must not change the UNITS of the answer.
   if (!(_shbgForInv > 0)) _shbgForInv = 35;
   var _ttAtDraw = null;
-  if (_mftNum > 0 && _shbgForInv > 0) _ttAtDraw = _tcInvVermeulenTT(_mftNum, _shbgForInv);
+  // A measured total T from the dated draw is used directly. Inverting a free T the user
+  // did not provide - worst of all a POPULATION free T - to guess a total they actually
+  // measured is strictly worse than reading the number they gave us.
+  if (_bwTT > 0 && !(_bwFT > 0)) _ttAtDraw = _bwTT;
+  if (!(_ttAtDraw > 0) && _mftNum > 0 && _shbgForInv > 0) _ttAtDraw = _tcInvVermeulenTT(_mftNum, _shbgForInv);
   if (!(_ttAtDraw > 0) && _ttMeas0 > 0) _ttAtDraw = _ttMeas0;
   var _ttBase = (_ttAtDraw > 0 && _endogP > 0) ? (_ttAtDraw * _endogP / _anchRate) : 0;
 
@@ -1979,7 +1997,11 @@ function _tcFreeTSeries(sorted, hooks) {
   //   measured : total-T + SHBG bloodwork    → full model incl. T-driven β, β-band
   //   partial  : only a measured free T        → GH/Boron suppression on a population SHBG base
   //   estimate : no bloodwork (age-default FT) → same, wide band
-  var _tier = (_shbgMeas > 0 && _ttMeas > 0) ? 'measured' : (_ftIsDefault ? 'estimate' : 'partial');
+  // 'estimate' means NO DATED BLOODWORK AT ALL. It must be decided by whether a calibrating
+  // entry exists (_bwCal), never by whether that entry happened to include a free T -
+  // claiming "NO BLOODWORK" to a user who just entered some is the bug this fixes.
+  var _tier = (_shbgMeas > 0 && _ttMeas > 0) ? 'measured'
+            : (_bwCal ? 'partial' : (_ftIsDefault ? 'estimate' : 'partial'));
   // Baseline SHBG: measured when present, else a population value for the user's age. The
   // SHBG suppression model runs whenever we have one — so GH/Boron move the curve even with
   // no bloodwork (population averages) or only a partial / mid-cycle test.

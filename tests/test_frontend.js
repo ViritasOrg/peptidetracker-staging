@@ -4810,6 +4810,51 @@ console.log('\n── T-calc: DST-proof schedule generation ──');
   }
 }
 
+// ── A DATED draw calibrates even with no free T ──
+// Reported 2026-08-02: bloodwork entered on 26 Jun, chart still captioned
+// "ESTIMATE · NO BLOODWORK". _ftIsDefault was derived from _tcp.measuredFT alone, and
+// _tcFetchBwEntries only mirrors free_t when the NEWEST entry carries one. A normal TRT
+// panel (total T + SHBG, no free T) therefore left _ftIsDefault true, which BOTH mislabelled
+// the chart AND replaced the measured total T with the age population average — the user's
+// bloodwork was ignored, not merely uncredited.
+console.log('\n\u2500\u2500 T-calc: a dated draw calibrates \u2500\u2500');
+{
+  var _dcSrc = require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
+  check('tier is decided by the calibrating entry, not by free-T presence',
+    /_bwCal \? 'partial' : \(_ftIsDefault \? 'estimate' : 'partial'\)/.test(_dcSrc));
+  check('a measured total T is used directly, not re-derived',
+    /_bwTT > 0 && !\(_bwFT > 0\)\) _ttAtDraw = _bwTT/.test(_dcSrc));
+  check('population fallback is gated on having no dated draw',
+    /!\(_bwFT > 0\) && !\(_bwTT > 0\)/.test(_dcSrc));
+
+  if (typeof G._tcFreeTSeries === 'function') {
+    var _dcSave = {tp:G._tcp, bw:G._tcBwEntries, gh:G._tcGhStack};
+    G._tcGhStack = [];
+    var _dcLog = [{compId:'testoviron', doseMg:'100', date:'2026-06-01'},
+                  {compId:'testoviron', doseMg:'100', date:'2026-06-15'},
+                  {compId:'testoviron', doseMg:'100', date:'2026-06-29'}];
+    // total T + SHBG, NO free T — exactly the panel that triggered the report
+    G._tcp = {measuredFT:'', currentDoseMgWk:'', totalT:'', shbg:'', birthYear:'1980',
+              manualLog:_dcLog};
+    G._tcBwEntries = [{date:'2026-06-26', total_t:25, shbg:40, free_t:null}];
+    function _dcRun() {
+      var _t = null;
+      try { G._tcFreeTSeries(_dcLog, { shbg: function(o){ if (o && o.tier) _t = o.tier; } }); }
+      catch(e) { _t = 'THREW:' + e.message; }
+      return _t;
+    }
+    var _dcTier = _dcRun();
+    check('total-T-only draw is NOT reported as "no bloodwork"',
+      _dcTier !== null && _dcTier !== 'estimate', 'tier=' + _dcTier);
+    // and with nothing at all it still IS an estimate — the label must stay honest
+    G._tcBwEntries = [];
+    var _dcTier2 = _dcRun();
+    check('no bloodwork at all is still reported as an estimate',
+      _dcTier2 === 'estimate', 'tier=' + _dcTier2);
+    G._tcp = _dcSave.tp; G._tcBwEntries = _dcSave.bw; G._tcGhStack = _dcSave.gh;
+  }
+}
+
 // ── P0 (endogenous T production) is 5 mg/day, sourced ──
 // Changed from 6.5 on 2026-08-02 at Henrik's request, on retrieved evidence:
 // Handelsman/Endotext sources a 3-10 mg/day tracer-derived range and anchors it at
