@@ -4584,11 +4584,21 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcVermeulenFT === 'funct
     Math.abs(_amA.s.total[0] - G.TCALC_ENDOG_T_MGD) < 1e-6, 'total[0]='+_amA.s.total[0]);
   // 2. Steady-state appearance rate == the dose rate. Mass balance: every injected mg
   //    appears. 100mg TU q2d = 100*0.6315/2 mg testosterone/day, + endogenous.
+  // Endogenous production is SUPPRESSED by the exogenous dose (HPTA shutdown), so the
+  // steady-state appearance rate is the dose rate plus whatever survives suppression —
+  // which at this dose is ~0.8% of baseline, i.e. essentially the dose rate alone.
   var _amRate=100*0.6315/2, _amSS=0;
   for(var i=Math.floor(_amA.s.totalDays*0.6);i<=Math.floor(_amA.s.totalDays*0.7);i++) _amSS=Math.max(_amSS,_amA.s.total[i]);
-  check('absolute model: steady-state rate == dose rate + endogenous (mass balance)',
-    Math.abs(_amSS-(_amRate+G.TCALC_ENDOG_T_MGD))/(_amRate+G.TCALC_ENDOG_T_MGD) < 0.03,
-    'got '+_amSS.toFixed(2)+' want '+(_amRate+G.TCALC_ENDOG_T_MGD).toFixed(2));
+  var _amPsup=G._tcEndogAt(_amRate, G.TCALC_ENDOG_T_MGD);
+  check('absolute model: steady-state rate == dose rate + SUPPRESSED endogenous (mass balance)',
+    Math.abs(_amSS-(_amRate+_amPsup))/(_amRate+_amPsup) < 0.03,
+    'got '+_amSS.toFixed(2)+' want '+(_amRate+_amPsup).toFixed(2));
+  check('absolute model: a supraphysiological dose shuts endogenous production down',
+    _amPsup < G.TCALC_ENDOG_T_MGD*0.05, 'P still '+_amPsup.toFixed(3)+' mg/d');
+  check('absolute model: no dose leaves endogenous production untouched',
+    Math.abs(G._tcEndogAt(0, G.TCALC_ENDOG_T_MGD) - G.TCALC_ENDOG_T_MGD) < 1e-9);
+  check('absolute model: suppression is monotone in dose',
+    G._tcEndogAt(1,6.5) > G._tcEndogAt(5,6.5) && G._tcEndogAt(5,6.5) > G._tcEndogAt(20,6.5));
   // 3. The curve starts at the user's own measured baseline (pre-cycle draw).
   check('absolute model: day-0 free T == the measured baseline',
     Math.abs(_amA.ft(0)-217) < 1.0, 'day0='+_amA.ft(0).toFixed(1));
@@ -4604,9 +4614,9 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcVermeulenFT === 'funct
   // No measured total T in this scenario -> 'partial' tier -> the beta power-law is OFF,
   // so SHBG stays at the measured 45. (Applying beta here would be testing a different
   // tier than the one the scenario configures.)
-  var _amTT0=G._tcInvVermeulenTT(217,45), _amMult=(_amRate+G.TCALC_ENDOG_T_MGD)/G.TCALC_ENDOG_T_MGD;
+  var _amTT0=G._tcInvVermeulenTT(217,45), _amMult=(_amRate+_amPsup)/G.TCALC_ENDOG_T_MGD;
   var _amWant=G._tcVermeulenFT(_amTT0*_amMult, 45);
-  check('absolute model: plateau matches (rate+P)/P then Vermeulen, within 5%',
+  check('absolute model: plateau matches (rate+P_suppressed)/P0 then Vermeulen, within 5%',
     Math.abs(_amA.peak-_amWant)/_amWant < 0.05,
     'model '+_amA.peak.toFixed(0)+' vs first-principles '+_amWant.toFixed(0));
   // 6. Binding must stay SATURABLE. A linearised form pins the free fraction at a
