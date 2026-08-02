@@ -1532,8 +1532,11 @@ function _tcAttachPanListeners(canvas) {
     if (e.preventDefault) e.preventDefault();
     var s = canvas._tcPanState || state;
     _tcChartPanOffset = _pOff - dx * ((s.xEnd - s.xStart) / (s.cW || 250));
-    var vl = (_tcp && _tcp.manualLog) ? _tcp.manualLog.filter(function(e2){ return e2.date && e2.doseMg && parseDec(e2.doseMg) > 0; }) : [];
-    _tcDrawManualChart(canvas.id, vl, _tcChartZoom);
+    // Redraw from the LIVE planner's schedule. This used to filter _tcp.manualLog, which
+    // is empty whenever the simple planner is the live one — so dragging redrew an empty
+    // chart and the curve simply would not pan. Same mistake as the curve gate in
+    // buildTCalc; _tcCurveLog() is the single source both must use.
+    _tcDrawManualChart(canvas.id, _tcCurveLog(), _tcChartZoom);
   };
   canvas._tcTouchEnd = function() { _pDX = null; };
   canvas._tcMouseDown = canvas._tcTouchStart;
@@ -2294,6 +2297,9 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   if (_zoom === 'today')       { xStart = Math.max(0, nowDay - 2 + panDays); xEnd = Math.min(xDays, nowDay + 2 + panDays); }
   else if (_zoom === 'week')   { xStart = Math.max(0, nowDay - 3 + panDays); xEnd = Math.min(xDays, nowDay + 4 + panDays); }
   else if (_zoom === 'month')  { xStart = Math.max(0, nowDay - 15 + panDays); xEnd = Math.min(xDays, nowDay + 15 + panDays); }
+  // 3 months: the span a titration decision actually plays out over — long enough to see
+  // accumulation trend, short enough to still resolve individual injections.
+  else if (_zoom === '3mo')    { xStart = Math.max(0, nowDay - 45 + panDays); xEnd = Math.min(xDays, nowDay + 45 + panDays); }
   // Whole view: make sure "today" is inside the window so its marker/level show
   // even when the curve has already washed back to baseline before today.
   if (_zoom === 'whole' && nowDay > xEnd && nowDay <= totalDays) xEnd = nowDay;
@@ -3169,7 +3175,7 @@ function buildTCalc() {
   if (validLog.length > 0) {
     html += '<div style="padding:2px 16px 10px">';
     html += '<div style="display:flex;gap:4px;margin-bottom:8px">';
-    ['today','week','month','whole'].forEach(function(z) {
+    ['today','week','month','3mo','whole'].forEach(function(z) {
       var isA = _tcChartZoom === z;
       html += '<button id="tc-zoom-' + z + '" onclick="_tcSetChartZoom(\'' + z + '\')" style="flex:1;background:' + (isA ? 'rgba(102,136,204,0.25)' : 'none') + ';border:1px solid ' + (isA ? '#6688cc66' : 'var(--border)') + ';border-radius:6px;color:' + (isA ? '#6688cc' : 'var(--muted2)') + ';font-size:9px;font-weight:700;letter-spacing:0.8px;cursor:pointer;padding:5px 2px;font-family:inherit">' + z.toUpperCase() + '</button>';
     });
