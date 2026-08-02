@@ -196,7 +196,7 @@ Violating this has caused repeated data loss incidents.
 Each app owns its localStorage keys exclusively. **NEVER read another app's
 localStorage keys** (e.g., peptidetracker must not read `bf_log` which belongs
 to workout; workout must not read `proto-bodycomp-v2` which belongs to
-peptidetracker). Both apps run on the same origin (`henrikschaub.github.io`)
+peptidetracker). Both apps run on the same origin (`viritas.github.io`)
 and can technically read each other's keys, but doing so is categorically
 forbidden.
 
@@ -283,7 +283,7 @@ Use them. Every time. No exceptions. Asking Henrik to touch GitHub is a failure.
 6. **After merging, you must confirm BOTH of these before telling the user it's live:**
    - `mcp__github__actions_list` (method: list_workflow_runs, resource_id: version-bump.yml) → confirm `conclusion: success` and read the bumped version from the commit message
    - `mcp__github__actions_list` (method: list_workflow_runs, resource_id: pages-build-deployment) → confirm the latest run has `conclusion: success` and its `head_sha` matches the bump commit SHA
-   Only once pages-build-deployment is complete say "live as vX.XXX — test now". DO NOT say "live" after just the version-bump — that only commits the bump, it does not deploy. DO NOT attempt to curl or WebFetch `henrikschaub.github.io` — outbound network access to that host is blocked in this remote environment and will always fail.
+   Only once pages-build-deployment is complete say "live as vX.XXX — test now". DO NOT say "live" after just the version-bump — that only commits the bump, it does not deploy. DO NOT attempt to curl or WebFetch `viritas.github.io` — outbound network access to that host is blocked in this remote environment and will always fail.
 
 ## Promotion to prod — Claude must NOT trigger this
 Promotion only happens via **Henrik clicking "Push to Prod"** in the staging
@@ -338,7 +338,7 @@ tooling, never by end-user-facing apps.
 
 ## Deployment
 - GitHub Pages (staging URL) — deploys automatically on push to `main`
-- Monitor live version: `https://henrikschaub.github.io/peptidetracker-staging/version.json` — **CANNOT be fetched by Claude** (outbound network to `henrikschaub.github.io` is blocked in this remote environment). Use GitHub Actions status to confirm deployment instead.
+- Monitor live version: `https://viritas.github.io/peptidetracker-staging/version.json` — **CANNOT be fetched by Claude** (outbound network to `viritas.github.io` is blocked in this remote environment). Use GitHub Actions status to confirm deployment instead.
 
 ## Environment-aware code — NEVER hardcode staging/prod URLs
 `index.html` is a single file that gets promoted from staging to prod verbatim.
