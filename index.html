@@ -345,7 +345,7 @@ function _logErr(ctx,e){var msg='[pep:'+ctx+'] '+(e&&e.message?e.message:String(
 function _logHttp(ctx,status,url){var msg='[pep:'+ctx+'] HTTP '+status+' — '+url;console.warn(msg);if(!window._pepErrors)window._pepErrors=[];window._pepErrors.push({t:Date.now(),ctx:ctx,status:status,url:url});if(window._pepErrors.length>50)window._pepErrors.shift();}
 async function checkAgentStatus(){const dot=document.getElementById('agent-dot');if(!dot)return;try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+"/weights",{headers:authHeaders(),signal:ctrl.signal});dot.className='agent-dot '+(r.ok?'up':'down');}catch(e){dot.className='agent-dot down';}}
 async function syncWeightsFromAgent(){try{const r=await fetch(AGENT_URL+"/weights",{headers:authHeaders()});if(!r.ok){_logHttp('syncWeights',r.status,'/weights');return;}const remote=await r.json();weights=remote.map(function(w){return{date:_normDt(w.date),weight:w.weight};}).sort(function(a,b){return a.date.localeCompare(b.date);});setData('weight_log',weights);}catch(e){_logErr('syncWeights',e);weights=getData('weight_log',[]);}}
-async function syncPeptideLogFromAgent(){try{const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders()});if(!r.ok){_logHttp('syncPepLog',r.status,'/peptide-log');return;}const remote=await r.json();remote.forEach(function(entry){var key='proto-chk-'+_normDt(entry.date);try{var local=JSON.parse(localStorage.getItem(key)||'[]');if(!Array.isArray(local))local=[];var merged=local.slice();entry.doses.forEach(function(d){if(!merged.includes(d))merged.push(d);});if(merged.length!==local.length)localStorage.setItem(key,JSON.stringify(merged));}catch(e){}});_syncPending=false;buildToday();}catch(e){_logErr('syncPepLog',e);}}
+async function syncPeptideLogFromAgent(){try{const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders()});if(!r.ok){_logHttp('syncPepLog',r.status,'/peptide-log');return;}const remote=await r.json();remote.forEach(function(entry){var key='proto-chk-'+_normDt(entry.date);try{var local=JSON.parse(localStorage.getItem(key)||'[]');if(!Array.isArray(local))local=[];var merged=local.slice();entry.doses.forEach(function(d){if(!merged.includes(d))merged.push(d);});if(merged.length!==local.length)localStorage.setItem(key,JSON.stringify(merged));}catch(e){}});}catch(e){_logErr('syncPepLog',e);}finally{_syncPending=false;buildToday();}}
 async function syncBodyCompFromAgent(){try{const r=await fetch(AGENT_URL+"/bodycomp",{headers:authHeaders()});if(!r.ok){_logHttp('syncBodyComp',r.status,'/bodycomp');return;}const remote=await r.json();const local=bcLoad();const remoteDates=new Set(remote.map(e=>e.date));const merged=[...remote];for(const e of local){if(!remoteDates.has(e.date))merged.push(e);}merged.sort((a,b)=>a.date.localeCompare(b.date));bcSave(merged);bcRender();await Promise.all(local.map(e=>{const[y,m,d]=e.date.split('-');return pushBodyCompToAgent({...e,date:y+'-'+m.padStart(2,'0')+'-'+d.padStart(2,'0')});}));}catch(e){_logErr('syncBodyComp',e);}}
 var _userTier=1;var _userFeatures={tier:1,trt:false,enhanced:false,peptides:true};var _featuresLoaded=false;
 async function syncFeaturesFromAgent(){try{const r=await fetch(AGENT_URL+'/user/features',{headers:authHeaders()});if(!r.ok){_logHttp('syncFeatures',r.status,'/user/features');return;}const d=await r.json();_userTier=d.tier||1;_userFeatures=d;_featuresLoaded=true;}catch(e){_logErr('syncFeatures',e);_userTier=1;_userFeatures={tier:1,trt:false,enhanced:false,peptides:true};}}
@@ -781,6 +781,11 @@ async function fetchInjectionsForRange(dateFrom,dateTo){
   }catch(e){_logErr('fetchInj',e);return[];}
 }
 async function refreshInjectionsCache(){
+  // A throw anywhere below used to leave _injCacheReady false forever, and Today
+  // gates its spinner on it — so one failed backend call hung the tab until a
+  // reload, even after the backend recovered. The flag is now set on every exit
+  // path: an empty cache renders the honest empty state instead of a spinner.
+  try{
   var activeCycleIds=_activeStackIndices.reduce(function(set,si){
     var st=_userStacks[si];
     if(st&&st.cycle_start)set.add(_stackCycleId(st));
@@ -840,7 +845,8 @@ async function refreshInjectionsCache(){
       catch(e){_logErr('delOrphanInj',e);}
     }
   }
-  _injCacheReady=true;
+  }catch(_e){_logErr('refreshInjCache',_e);}
+  finally{ _injCacheReady=true; }
 }
 // ── Stack conflict detection & safety modal ──────────────────────────────────
 var _pendingConflictData=null;
