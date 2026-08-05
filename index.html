@@ -288,6 +288,15 @@ let _protocolLoaded=false;
 let _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compounds:[]},editMode:false};
 var _wizOverlay=null;
 let _userStacks=[];let _activeStackIndices=[0];let _stacksLoaded=false;
+// True only when stack normalisation ran to completion. The orphan-injection DELETE
+// in refreshInjectionsCache trusts _getProtocolCompoundIds to be the FULL list of a
+// protocol's compounds — anything missing from it is treated as an orphan and deleted
+// from today forward. If normalisation threw part-way that list is partial, and the
+// delete would destroy live injections. Before 2026-08-05 a throw aborted
+// loadUserStacks before the cache ever refreshed, so this could not happen; hardening
+// loadUserStacks to always render removed that accidental protection. Deleting is now
+// gated on this flag explicitly.
+let _stacksNormalized=false;
 var _protocolTemplates=getData('proto-templates',[]);
 var _safetyNotes=getData('proto-safety-notes',null); // per-tier watch/test/stop, from the backend
 // Pre-cycle body-fat readiness guidance (backend /safety-notes → readiness). Frontend
@@ -808,7 +817,8 @@ async function loadUserStacks(){
   // Persist any freshly-assigned stable stack ids (one-time backfill, idempotent).
   if(_needIdSave&&typeof saveStacksToBackend==='function'){try{saveStacksToBackend();}catch(_e){}}
   updateWEEKLY();
-  }catch(_e){_logErr('loadStacks:normalize',_e);}
+    _stacksNormalized=true;
+  }catch(_e){_stacksNormalized=false;_logErr('loadStacks:normalize',_e);}
   finally{ _stacksLoaded=true; buildStackStore(); }
   try{
   // Fetch injection cache; regenerate if backend has no entries, or if this is the
@@ -927,7 +937,11 @@ async function refreshInjectionsCache(){
     if(!_injectionsCache[e.date])_injectionsCache[e.date]=[];
     _injectionsCache[e.date].push(e);
   });
-  var _ockeys=Object.keys(_orphanBulkDel);
+  // Never delete on a partial compound list — see _stacksNormalized. The entries stay
+  // hidden this pass (the filter above already returned) but nothing is destroyed, and
+  // the next clean load re-evaluates them.
+  var _ockeys=_stacksNormalized?Object.keys(_orphanBulkDel):[];
+  if(!_stacksNormalized&&Object.keys(_orphanBulkDel).length)_logErr('orphanDelSkipped','normalisation failed — '+Object.keys(_orphanBulkDel).length+' cycle(s) not pruned');
   for(var _ci=0;_ci<_ockeys.length;_ci++){
     var _cid=_ockeys[_ci];
     var _cmpIds=Object.keys(_orphanBulkDel[_cid]);

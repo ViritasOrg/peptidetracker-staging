@@ -8396,7 +8396,7 @@ console.log('\n─────────────────────�
   check('_stacksLoaded is set in a finally (Plan can never stay on its spinner)',
     /finally\{\s*_stacksLoaded=true;\s*buildStackStore\(\);\s*\}/.test(body));
   check('normalization throws are caught, not fatal',
-    /catch\(_e\)\{_logErr\('loadStacks:normalize',_e\);\}/.test(body));
+    /catch\(_e\)\{[^}]*_logErr\('loadStacks:normalize',_e\);\}/.test(body));
   check('injection-cache throws are caught, not fatal',
     /catch\(_e\)\{_logErr\('loadStacks:injections',_e\);\}/.test(body));
   check('buildToday still runs even if the injection cache blew up',
@@ -8495,6 +8495,36 @@ console.log('\n─────────────────────�
     '\nreturn _bcLabel;')();
   check('degrades to the raw date when the date helpers are unavailable',
     bare({date: '2026-08-05'}) === '2026-08-05', `got ${bare({date:'2026-08-05'})}`);
+}
+
+
+// ── Orphan injections are never deleted on a partial compound list ──────────
+// Regression, 2026-08-05, INTRODUCED BY THE loadUserStacks HARDENING EARLIER THAT
+// SAME DAY. refreshInjectionsCache treats any injection whose compound_id is not in
+// _getProtocolCompoundIds(stack) as an orphan and DELETEs it from today forward.
+// That is only safe when the compound list is complete. Before the hardening, a throw
+// during normalisation aborted loadUserStacks before the cache ever refreshed, so a
+// partial list could not reach the delete. Making loadUserStacks always render removed
+// that accidental protection: a normalisation throw then let the delete run against a
+// half-built list and destroy live peptide injections. (TRT survived because
+// cycle_id 'tcalc' bypasses the orphan check entirely.)
+{
+  check('_stacksNormalized flag exists', /let _stacksNormalized=false;/.test(rawScript));
+  check('it is set true only when normalisation completes',
+    /_stacksNormalized=true;\s*\}catch\(_e\)\{_stacksNormalized=false;_logErr\('loadStacks:normalize'/.test(rawScript));
+  check('the orphan DELETE is gated on it',
+    /var _ockeys=_stacksNormalized\?Object\.keys\(_orphanBulkDel\):\[\];/.test(rawScript));
+  check('skipping the prune is recorded, not silent',
+    /_logErr\('orphanDelSkipped'/.test(rawScript));
+
+  // The delete must remain reachable on a healthy load — this guard must not become
+  // a permanent disable.
+  const ref = rawScript.slice(rawScript.indexOf('async function refreshInjectionsCache()'),
+                              rawScript.indexOf('_injCacheReady=true'));
+  check('the DELETE call still exists for the healthy path',
+    /method:'DELETE'/.test(ref) && /from_date='\+_todayKey/.test(ref));
+  check('  …and still only targets today onward, never the past',
+    !/from_date='\+dateKey\(from\)/.test(ref));
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
