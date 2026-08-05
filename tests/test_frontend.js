@@ -8458,6 +8458,45 @@ console.log('\n─────────────────────�
   G.localStorage.removeItem('pep-diag-log');
 }
 
+
+// ── Body-comp labels survive a backend round-trip (regression, 2026-08-05) ──
+// Reported by the new diagnostics log, first real use:
+//   [syncBodyComp] null is not an object (evaluating 'labels[i].split')
+// dateLabel is a DISPLAY string derived from date, but it was stored, and
+// /bodycomp carries only {date, bf}. syncBodyCompFromAgent rebuilds from the remote
+// records (`merged=[...remote]`), so every synced entry came back without a label;
+// arr.map(e=>e.dateLabel) then yielded undefined and labels[i].split(' ') threw
+// inside syncBodyComp, taking out the whole Body Comp view.
+{
+  const body = fs.readFileSync(path.join(__dirname, '../tab-body.js'), 'utf8');
+  check('_bcLabel helper exists', /function _bcLabel\(e\)\{/.test(body));
+  check('the BF chart derives its labels', /arr\.map\(e=>_bcLabel\(e\)\)/.test(body));
+  check('the BMI chart derives its labels', /bmiLabels=bmiData\.map\(e=>_bcLabel\(e\)\)/.test(body));
+  check('no raw e.dateLabel read remains in a render path', !/\be\.dateLabel\b(?!\)return)/.test(
+    body.replace(/function _bcLabel\(e\)\{[\s\S]*?\n\}/, '')));
+  check('bcDrawChart cannot throw on a missing label',
+    /String\(labels\[i\]\|\|''\)\.split\(' '\)/.test(body));
+
+  // Exercise the real helper against the exact shape the backend returns.
+  const mk = new Function('fmtDate', 'parseLocalDate',
+    body.slice(body.indexOf('function _bcLabel(e){'), body.indexOf('function bcDrawChart(')) +
+    '\nreturn _bcLabel;');
+  const lbl = mk(d => 'FMT:' + d, d => d);
+  check('a remote entry with no dateLabel still gets a label',
+    lbl({date: '2026-08-05'}) === 'FMT:2026-08-05', `got ${lbl({date:'2026-08-05'})}`);
+  check('a local entry keeps the label it already had',
+    lbl({date: '2026-08-05', dateLabel: '5 Aug'}) === '5 Aug');
+  check('a null entry yields a string, never null', lbl(null) === '');
+  check('an entry with no date at all yields a string',
+    typeof lbl({}) === 'string');
+  // Without the fallback helpers present it must degrade, not throw.
+  const bare = new Function(
+    body.slice(body.indexOf('function _bcLabel(e){'), body.indexOf('function bcDrawChart(')) +
+    '\nreturn _bcLabel;')();
+  check('degrades to the raw date when the date helpers are unavailable',
+    bare({date: '2026-08-05'}) === '2026-08-05', `got ${bare({date:'2026-08-05'})}`);
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
