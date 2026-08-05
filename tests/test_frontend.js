@@ -8350,6 +8350,36 @@ console.log('\n── T-History: read-only view ──────────�
 }
 
 console.log('\n───────────────────────────────────────────────────────────');
+
+// ── Today never hangs on a failed backend call (regression, 2026-08-05) ──────
+// A backend outage left Today spinning forever, and it did NOT recover when the
+// backend came back: _syncPending was cleared only on the success path of
+// syncPeptideLogFromAgent, and _injCacheReady only on a clean run of
+// refreshInjectionsCache. buildToday() gates its spinner on both. Settings showed
+// "Online" the whole time because checkAgentStatus polls separately.
+{
+  const sync = rawScript.slice(
+    rawScript.indexOf('async function syncPeptideLogFromAgent()'),
+    rawScript.indexOf('async function syncPeptideLogFromAgent()') + 900);
+  check('syncPeptideLogFromAgent clears _syncPending in a finally',
+    /finally\{_syncPending=false;buildToday\(\);\}/.test(sync));
+  check('  …and no longer clears it only on the success path',
+    !/_syncPending=false;buildToday\(\);\}catch/.test(sync));
+  check('  …the !r.ok early return still exists (failure is still logged)',
+    /if\(!r\.ok\)\{_logHttp\('syncPepLog'/.test(sync));
+
+  const refIdx = rawScript.indexOf('async function refreshInjectionsCache()');
+  const ref = rawScript.slice(refIdx, rawScript.indexOf('\n}', rawScript.indexOf('_injCacheReady=true', refIdx)));
+  check('refreshInjectionsCache sets _injCacheReady in a finally',
+    /finally\{\s*_injCacheReady=true;\s*\}/.test(ref));
+  check('  …and catches its own throws', /catch\(_e\)\{_logErr\('refreshInjCache',_e\);\}/.test(ref));
+
+  // The gate itself must stay — the fix is that the flags always resolve, not that
+  // the spinner was removed.
+  check('buildToday still gates on both flags (spinner kept for the real loading case)',
+    /_syncPending\|\|!_injCacheReady/.test(fs.readFileSync(path.join(__dirname,'../tab-today.js'),'utf8')));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
