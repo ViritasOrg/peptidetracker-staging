@@ -8410,6 +8410,54 @@ console.log('\n─────────────────────�
     /localStorage\.getItem\('stacks_cache'\)/.test(body));
 }
 
+
+// ── Diagnostics log persists failures (added 2026-08-05) ────────────────────
+// _pepErrors is window-only: wiped on reload, invisible on an iOS PWA. Two hangs
+// that day had to be diagnosed from screenshots because the exception was
+// unreadable. The log now survives a reload and can be copied out of Storage.
+{
+  check('_diagPush defined',        typeof G._diagPush === 'function');
+  check('_diagAll defined',         typeof G._diagAll === 'function');
+  check('copyDiagnostics defined',  typeof G.copyDiagnostics === 'function');
+  check('clearDiagnostics defined', typeof G.clearDiagnostics === 'function');
+
+  check('_logErr persists, not just window._pepErrors',
+    /_diagPush\(\{t:Date\.now\(\),ctx:ctx,msg:/.test(rawScript));
+  check('_logHttp persists status and url',
+    /_diagPush\(\{t:Date\.now\(\),ctx:ctx,status:status,url:url\}\)/.test(rawScript));
+  check('the Storage page renders the card', /_diagRenderInto\(_el\);/.test(rawScript));
+
+  // Must never throw: it is called from inside the error handlers themselves.
+  const push = rawScript.slice(rawScript.indexOf('function _diagPush('),
+                               rawScript.indexOf('function _diagAll('));
+  check('_diagPush wraps its whole body so it can never throw',
+    /catch\(e\)\{\}\s*$/.test(push.trim().replace(/\}\s*$/, '')) || /\}catch\(e\)\{\}/.test(push));
+  check('  …and a corrupt stored value degrades to an empty list, not a throw',
+    /catch\(e\)\{a=\[\];\}/.test(push));
+  check('_diagPush caps the ring buffer', /while\(a\.length>DIAG_MAX\)a\.shift\(\)/.test(push));
+
+  // Entries are exception text and URLs — never inject them as HTML. The apps
+  // already carry deferred CodeQL findings of exactly this shape.
+  const render = rawScript.slice(rawScript.indexOf('function _diagRenderInto('),
+                                 rawScript.indexOf('function buildStoragePage('));
+  check('the diagnostics view adds no innerHTML sink', !/innerHTML/.test(render));
+  check('  …it uses textContent for entry text', /pre\.textContent=/.test(render));
+
+  // Round-trip the real functions.
+  G.localStorage.removeItem('pep-diag-log');
+  check('empty store reads as an empty list', G._diagAll().length === 0);
+  G._diagPush({t: 1, ctx: 'unit', msg: 'boom'});
+  G._diagPush({t: 2, ctx: 'unit', status: 500, url: '/x'});
+  const all = G._diagAll();
+  check('entries round-trip through localStorage', all.length === 2, `got ${all.length}`);
+  check('  …preserving the HTTP status', all[1].status === 500);
+  for (let i = 0; i < 200; i++) G._diagPush({t: i, ctx: 'flood', msg: String(i)});
+  check('the buffer is capped, oldest dropped first', G._diagAll().length === 60,
+    `got ${G._diagAll().length}`);
+  check('  …and the newest entry survives', G._diagAll().slice(-1)[0].msg === '199');
+  G.localStorage.removeItem('pep-diag-log');
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
