@@ -785,11 +785,20 @@ async function loadUserStacks(){
   // back. Each stage now renders in a finally: bad data degrades one section rather
   // than hanging the whole app.
   try{
-  if(!_userStacks.length){
-    _userStacks=[_synthesizeProtocol(WEEKLY_DEFAULT)];
-    _userStacks[0].name='My Stack';
-    _activeStackIndices=[0];
-  }
+  // An empty stack list means the user deleted their protocols — NOT that the app
+  // should invent one. This used to synthesise a stack from WEEKLY_DEFAULT and then
+  // persist it via saveStacksToBackend, so deleting every stack silently recreated
+  // one on the next load and wrote it back to the backend. Deleting must stick.
+  //
+  // WEEKLY_DEFAULT is also one specific person's real protocol (Retatrutide Sun/Wed,
+  // CJC-1295/IPA AM+PM, GLOW daily), so seeding it was handing that protocol to
+  // whoever had an empty stack — the same class of issue as _DEFAULT_PEPTIDES in
+  // protocol.py (2026-06-24). Neutral empty state only.
+  //
+  // buildToday already renders the correct empty state for this case: "No protocol
+  // yet" with Start-from-a-template / Build-your-own. The synthesis was preventing
+  // that screen from ever being reachable.
+  if(!_userStacks.length)_activeStackIndices=[];
   _normalizeActiveStack();
   var _needIdSave=_userStacks.some(function(s){return s&&!s.id;});
   _userStacks.forEach(function(stack){
