@@ -689,6 +689,12 @@ async function loadUserStacks(){
       else{_userStacks=[];_activeStackIndices=[0];}
     }catch(e2){_userStacks=[];_activeStackIndices=[0];}
   }
+  // Everything below is normalization and rendering. A throw anywhere in it used to
+  // leave _stacksLoaded false AND skip refreshInjectionsCache entirely, so Plan and
+  // Today both spun forever — and a reload hit the same throw, so there was no way
+  // back. Each stage now renders in a finally: bad data degrades one section rather
+  // than hanging the whole app.
+  try{
   if(!_userStacks.length){
     _userStacks=[_synthesizeProtocol(WEEKLY_DEFAULT)];
     _userStacks[0].name='My Stack';
@@ -721,8 +727,9 @@ async function loadUserStacks(){
   // Persist any freshly-assigned stable stack ids (one-time backfill, idempotent).
   if(_needIdSave&&typeof saveStacksToBackend==='function'){try{saveStacksToBackend();}catch(_e){}}
   updateWEEKLY();
-  _stacksLoaded=true;
-  buildStackStore();
+  }catch(_e){_logErr('loadStacks:normalize',_e);}
+  finally{ _stacksLoaded=true; buildStackStore(); }
+  try{
   // Fetch injection cache; regenerate if backend has no entries, or if this is the
   // first load since the Nebido/orphan fix (v1.384) to replace stale daily entries
   await refreshInjectionsCache();
@@ -734,10 +741,13 @@ async function loadUserStacks(){
     setData('proto-inj-regen','1.384');
     await refreshInjectionsCache();
   }
-  buildWeekStrip();
-  buildToday();
-  buildSchedule();
-  _scanAndShowStartupConflicts();
+  }catch(_e){_logErr('loadStacks:injections',_e);}
+  finally{
+    try{buildWeekStrip();}catch(_e){_logErr('buildWeekStrip',_e);}
+    try{buildToday();}catch(_e){_logErr('buildToday',_e);}
+    try{buildSchedule();}catch(_e){_logErr('buildSchedule',_e);}
+    try{_scanAndShowStartupConflicts();}catch(_e){_logErr('startupConflicts',_e);}
+  }
 }
 // ── Update WEEKLY from active stack ──────────────────────────────────────────
 function updateWEEKLY(){

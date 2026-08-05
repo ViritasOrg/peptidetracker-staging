@@ -8380,6 +8380,36 @@ console.log('\n─────────────────────�
     /_syncPending\|\|!_injCacheReady/.test(fs.readFileSync(path.join(__dirname,'../tab-today.js'),'utf8')));
 }
 
+
+// ── loadUserStacks always reaches a rendered state (regression, 2026-08-05) ──
+// Plan AND Today both spun forever after a backend outage. loadUserStacks handled
+// the fetch failure, but the normalization after it (_synthesizeProtocol,
+// _normalizeActiveStack, _ensureStackId, date parsing, PEPTIDE_CAT.find,
+// updateWEEKLY) ran unguarded before `_stacksLoaded=true`. One throw there left
+// _stacksLoaded false (Plan spinner) and skipped refreshInjectionsCache entirely,
+// so _injCacheReady never resolved either (Today spinner) and buildToday/
+// buildSchedule never ran. A reload hit the same throw, so it never recovered.
+{
+  const i = rawScript.indexOf('async function loadUserStacks()');
+  const body = rawScript.slice(i, rawScript.indexOf('function updateWEEKLY()', i));
+  check('loadUserStacks found', i >= 0);
+  check('_stacksLoaded is set in a finally (Plan can never stay on its spinner)',
+    /finally\{\s*_stacksLoaded=true;\s*buildStackStore\(\);\s*\}/.test(body));
+  check('normalization throws are caught, not fatal',
+    /catch\(_e\)\{_logErr\('loadStacks:normalize',_e\);\}/.test(body));
+  check('injection-cache throws are caught, not fatal',
+    /catch\(_e\)\{_logErr\('loadStacks:injections',_e\);\}/.test(body));
+  check('buildToday still runs even if the injection cache blew up',
+    /finally\{[\s\S]*try\{buildToday\(\);\}catch/.test(body));
+  check('buildSchedule still runs too', /try\{buildSchedule\(\);\}catch/.test(body));
+  check('buildWeekStrip still runs too', /try\{buildWeekStrip\(\);\}catch/.test(body));
+  check('one failing renderer cannot take out the others (each wrapped separately)',
+    (body.match(/try\{build(WeekStrip|Today|Schedule)\(\);\}catch/g) || []).length === 3);
+  // The offline fallback must survive: a dead backend still renders cached stacks.
+  check('cached stacks are still used when the endpoint fails',
+    /localStorage\.getItem\('stacks_cache'\)/.test(body));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
