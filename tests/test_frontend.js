@@ -4864,6 +4864,20 @@ console.log('\n\u2500\u2500 T-calc: a dated draw calibrates \u2500\u2500');
 // Test failures still block — that part must never be relaxed.
 console.log('\n\u2500\u2500 Promotion: CI gate scope \u2500\u2500');
 {
+  // These assert THIS repo's promote-to-prod.yml — a staging-repo workflow. The
+  // promotion copies index.html, tab-*.js, ci.yml and tests/ into prod, but not the
+  // promote workflow (prod must not run staging's). So on prod these tests would
+  // assert a file that legitimately differs there, and they failed every promotion
+  // after they were added on 2026-08-02 — which is what pinned prod at v1.271 while
+  // the promote PRs piled up unmerged.
+  //
+  // Scoped to the repo they are about, not weakened: with no GITHUB_REPOSITORY (local
+  // runs) or on any -staging/-stage repo they run in full and still fail loudly.
+  var _pgRepo = process.env.GITHUB_REPOSITORY || '';
+  var _pgIsProd = _pgRepo && !/-(staging|stage)$/.test(_pgRepo);
+  if (_pgIsProd) {
+    console.log('  – skipped on ' + _pgRepo + ' (staging-only workflow)');
+  } else {
   var _pgSrc = require('fs').readFileSync(
     require('path').join(dir, '.github/workflows/promote-to-prod.yml'), 'utf8');
   check('gate selects the test check by name',
@@ -4876,6 +4890,7 @@ console.log('\n\u2500\u2500 Promotion: CI gate scope \u2500\u2500');
     /if \[ "\$FAILED" -gt "0" \]/.test(_pgSrc));
   check('non-blocking failures are reported, not swallowed',
     /non-blocking checks not passing/.test(_pgSrc));
+  }
 }
 
 // ── P0 (endogenous T production) is 5 mg/day, sourced ──
