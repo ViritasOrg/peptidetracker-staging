@@ -8542,6 +8542,33 @@ console.log('\n─────────────────────�
     !/from_date='\+dateKey\(from\)/.test(ref));
 }
 
+
+// ── Deleting every stack must stick (regression, 2026-08-05) ───────────────
+// Reported: "when I delete all stacks my old peptide stack reappears".
+// loadUserStacks synthesised a stack from WEEKLY_DEFAULT whenever the list came back
+// empty, then persisted it via saveStacksToBackend — so deleting every protocol
+// recreated one on the next load AND wrote it to the backend.
+//
+// WEEKLY_DEFAULT is also one specific person's real protocol, so seeding it handed
+// that protocol to anyone with an empty stack — the same class of issue as
+// _DEFAULT_PEPTIDES in protocol.py (2026-06-24).
+{
+  const i = rawScript.indexOf('async function loadUserStacks()');
+  const body = rawScript.slice(i, rawScript.indexOf('function updateWEEKLY()', i));
+  check('an empty stack list no longer synthesises one',
+    !/_userStacks=\[_synthesizeProtocol\(WEEKLY_DEFAULT\)\]/.test(body));
+  check('  …and no longer names it "My Stack"', !/_userStacks\[0\]\.name='My Stack'/.test(body));
+  check('an empty list clears the active selection', /if\(!_userStacks\.length\)_activeStackIndices=\[\]/.test(body));
+  // The offline path must still work: a dead backend falls back to cached stacks.
+  check('cached stacks are still restored when the endpoint fails',
+    /localStorage\.getItem\('stacks_cache'\)/.test(body));
+  // buildToday already renders the correct empty state — the synthesis was what kept
+  // that screen unreachable.
+  const today = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+  check('the empty state offers a template or a build-your-own', /No protocol yet/.test(today));
+  check('  …rather than a silently invented protocol', /Build your first protocol|openTemplatePicker/.test(today));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
