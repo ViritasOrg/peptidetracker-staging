@@ -2011,7 +2011,7 @@ function wizAdviseSetExperience(v){
   var st=_wizAdviseState();st.experience=v;st.result=null;st.fetched=false;st._seeded=false;
   // Persist the correction so it isn't stale here or elsewhere in the app.
   try{var p=(typeof getData==='function'&&getData('pep-profile',null))||{};p.experience=v;if(typeof setData==='function')setData('pep-profile',p);
-      if(typeof pushPepSettingsToAgent==='function')pushPepSettingsToAgent({'pep-experience':v});}catch(e){}
+      if(typeof pushPepSettingsToAgent==='function')pushPepSettingsToAgent({'pep-experience':v,'pep-profile':p});}catch(e){}
   wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 async function enhancedAdvisorFromAgent(inp){
