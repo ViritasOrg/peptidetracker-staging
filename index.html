@@ -893,9 +893,14 @@ async function refreshInjectionsCache(){
   // reload, even after the backend recovered. The flag is now set on every exit
   // path: an empty cache renders the honest empty state instead of a spinner.
   try{
+  // An ACTIVE protocol renders, full stop (Henrik 2026-08-06). Requiring a
+  // cycle_start here meant an active protocol without one contributed no cycle id,
+  // so every dose it owned was filtered out and Today looked empty. Activation now
+  // backfills the start date (_ensureCycleStart), but the render must not depend on
+  // that having happened.
   var activeCycleIds=_activeStackIndices.reduce(function(set,si){
     var st=_userStacks[si];
-    if(st&&st.cycle_start)set.add(_stackCycleId(st));
+    if(st)set.add(_stackCycleId(st));
     return set;
   },new Set());
   // Why an entry was dropped, so Today can say so instead of claiming there is
@@ -1099,6 +1104,23 @@ function _scanAndShowStartupConflicts(){
     _showConflictModal(idx,det.conflicts);
   }
 }
+// ── Activating a protocol starts its cycle ───────────────────────────────────
+// "stack creation needs to make start date the date it is activated if not set
+// prior to" (Henrik 2026-08-06). A protocol with no cycle_start has no calendar to
+// place its doses on, which is how one ended up active and showing nothing.
+//
+// ORDER MATTERS. _deriveStackCycleId() includes the start date, so setting one on a
+// stack whose id is not yet frozen would MOVE its cycle id and orphan every
+// injection already stored against 'name_nostart'. Freeze the id first — that is
+// exactly what _ensureStackId is for — then set the date.
+function _ensureCycleStart(idx){
+  var st=_userStacks[idx];
+  if(!st)return false;
+  if(typeof _ensureStackId==='function')_ensureStackId(st);
+  if(st.cycle_start)return false;
+  st.cycle_start=dateKey(NOW);
+  return true;
+}
 // ── Toggle a stack active/inactive ───────────────────────────────────────────
 // Only one protocol may be active. Switching one on switches every other one off,
 // so this is a radio, not a set of checkboxes; switching the active one off leaves
@@ -1108,6 +1130,7 @@ async function toggleStack(idx){
   var pos=_activeStackIndices.indexOf(idx);
   if(pos===-1){
     _activeStackIndices=[idx];
+    _ensureCycleStart(idx);
     var det=_detectStackConflicts(idx);
     if(det.conflicts.length>0){
       _pendingConflictData={newIdx:idx,conflicts:det.conflicts};
@@ -1129,6 +1152,7 @@ async function toggleStack(idx){
 async function useStack(idx){
   if(idx>=0&&idx<_userStacks.length){
     _activeStackIndices=[idx];
+    _ensureCycleStart(idx);
     updateWEEKLY();
     await saveStacksToBackend();
     if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();

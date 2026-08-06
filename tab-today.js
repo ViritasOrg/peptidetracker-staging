@@ -10,9 +10,15 @@ if(_hid&&_hid.count){
   // Never claim there is nothing scheduled when stored doses exist and were
   // filtered out. Name the protocol and say what to do about it.
   var _names=Object.keys(_hid.stacks||{});
-  var _why=_hid.noStart&&_hid.noStart.length
-    ?'“'+_esc(_hid.noStart[0])+'” is active but has no start date, so its schedule cannot be placed on a calendar.'
-    :'They belong to '+(_names.length?_names.map(function(n){return '“'+_esc(n)+'”';}).join(' and '):'a protocol')+', which '+(_names.length>1?'are':'is')+' not active.';
+  // Owner first. An ACTIVE protocol now always contributes its cycle id, so a
+  // missing start date no longer hides anything — the only reason left is that the
+  // owning protocol is switched off. The no-start wording stays as a fallback for a
+  // stack whose owner cannot be identified at all.
+  var _why=_names.length
+    ?'They belong to '+_names.map(function(n){return '“'+_esc(n)+'”';}).join(' and ')+', which '+(_names.length>1?'are':'is')+' not active.'
+    :(_hid.noStart&&_hid.noStart.length
+      ?'“'+_esc(_hid.noStart[0])+'” has no start date, so its schedule cannot be placed on a calendar.'
+      :'They belong to a protocol that is not active.');
   list.innerHTML='<div class="empty"><div class="empty-icon">🔕</div>'
     +'<div style="font-weight:600;color:var(--text);margin-bottom:4px">'+_hid.count+' dose'+(_hid.count===1?'':'s')+' hidden</div>'
     +'<div style="font-size:13px;color:var(--muted2);margin-bottom:16px;line-height:1.5">'+_why+'</div>'

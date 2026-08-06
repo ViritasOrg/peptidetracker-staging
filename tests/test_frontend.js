@@ -1282,8 +1282,8 @@ console.log(`\n${'─'.repeat(59)}`);
   check('Today reports hidden doses instead of "nothing scheduled"',
     /_hid&&_hid\.count/.test(today));
   check('  …says how many are hidden', /\+' dose'\+\(_hid\.count===1\?'':'s'\)\+' hidden/.test(today));
-  check('  …explains the missing start date', /is active but has no start date/.test(today));
-  check('  …or names the inactive protocol', /which '\+\(_names\.length>1\?'are':'is'\)\+' not active/.test(today));
+  check('  …names the inactive protocol first', /which '\+\(_names\.length>1\?'are':'is'\)\+' not active/.test(today));
+  check('  …with a no-start fallback when the owner is unknown', /has no start date, so its schedule/.test(today));
   check('  …and offers a way to fix it', /Open Plan<\/button>/.test(today));
   check('  …via the real tab switcher',
     /switchTab\(\\'stacks\\',document\.getElementById\(\\'tab-btn-stacks\\'\)\)/.test(today));
@@ -1292,6 +1292,36 @@ console.log(`\n${'─'.repeat(59)}`);
   check('"Nothing scheduled today" still shows when nothing IS scheduled',
     /_hid&&_hid\.count\)\{[\s\S]*?\}else\{[\s\S]*?Nothing scheduled today/.test(today));
   check('protocol names are escaped', /_esc\(_hid\.noStart\[0\]\)/.test(today));
+}
+
+
+// ── An active protocol renders, and activating one starts its cycle ─────────
+// Henrik 2026-08-06: "An active protocol must render, but stack creation needs to
+// make start date the date it is activated if not set prior to."
+{
+  const stackJs = require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+
+  check('an active protocol contributes its cycle id with or without a start date',
+    /var activeCycleIds=_activeStackIndices\.reduce\(function\(set,si\)\{\s*var st=_userStacks\[si\];\s*if\(st\)set\.add\(_stackCycleId\(st\)\);/.test(rawScript));
+  check('  …the old cycle_start requirement is gone',
+    !/if\(st&&st\.cycle_start\)set\.add\(_stackCycleId\(st\)\)/.test(rawScript));
+
+  check('activation backfills the start date', /function _ensureCycleStart\(idx\)\{/.test(rawScript));
+  check('  …to today', /st\.cycle_start=dateKey\(NOW\);/.test(rawScript));
+  check('  …and never overwrites one already set', /if\(st\.cycle_start\)return false;/.test(rawScript));
+
+  // _deriveStackCycleId includes the start date. Setting one before the id is
+  // frozen would move the cycle id and orphan every stored injection.
+  check('the stack id is frozen BEFORE the start date is set',
+    /_ensureStackId==='function'\)_ensureStackId\(st\);\s*if\(st\.cycle_start\)return false;/.test(rawScript));
+
+  check('toggling a protocol on starts it', /_activeStackIndices=\[idx\];\s*_ensureCycleStart\(idx\);/.test(rawScript));
+  check('useStack starts it too',
+    (rawScript.match(/_activeStackIndices=\[idx\];\s*_ensureCycleStart\(idx\);/g) || []).length === 2);
+  check('a first protocol from the wizard starts it',
+    /if\(_userStacks\.length===1\)\{_activeStackIndices=\[0\];if\(typeof _ensureCycleStart==='function'\)_ensureCycleStart\(0\);\}/.test(stackJs));
+  check('starting from a template starts it',
+    /_activeStackIndices=\[_idx\];\s*if\(typeof _ensureCycleStart==='function'\)_ensureCycleStart\(_idx\);/.test(stackJs));
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
@@ -2157,8 +2187,11 @@ console.log('\n── dose dedup migration ────────────�
   check('_scanAndShowStartupConflicts called in loadUserStacks',rawScript.includes('_scanAndShowStartupConflicts()'));
   check('the startup scan checks the one active protocol',
     /var idx=_activeStackIndices\.length\?_activeStackIndices\[0\]:null;/.test(rawScript));
+  // The activation branch also backfills cycle_start (2026-08-06), so these are no
+  // longer adjacent lines. What matters is that the conflict check still runs on
+  // activation, before anything is saved.
   check('activating a protocol runs the duplicate check',
-    /_activeStackIndices=\[idx\];\s*\n\s*var det=_detectStackConflicts\(idx\);/.test(rawScript));
+    /_activeStackIndices=\[idx\];[\s\S]{0,120}?var det=_detectStackConflicts\(idx\);/.test(rawScript));
   check('_resolveConflict defined in index.html',rawScript.includes('async function _resolveConflict('));
 
   // "Keep the first entry only" drops the later copy and leaves everything else
