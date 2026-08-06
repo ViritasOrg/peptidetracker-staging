@@ -103,7 +103,7 @@ async function wizSave(){
   } else {
     _userStacks.push(proto);
     _wiz.stackIndex=_userStacks.length-1; // prevent double-push on retry
-    if(_userStacks.length===1)_activeStackIndices=[0];
+    if(_userStacks.length===1){_activeStackIndices=[0];if(typeof _ensureCycleStart==='function')_ensureCycleStart(0);}
   }
   _userStacks=_userStacks.slice(0,4);
   // Single-source guard: if this stack now has its own TRT config AND a T-Calc plan
@@ -204,6 +204,7 @@ async function useTemplate(tid){
   // Only one protocol may be active — starting one from a template makes it THE
   // active one rather than adding it alongside whatever was already running.
   _activeStackIndices=[_idx];
+  if(typeof _ensureCycleStart==='function')_ensureCycleStart(_idx);
   _closeTemplatePicker();
   await saveStacksToBackend();
   if(typeof updateWEEKLY==='function')updateWEEKLY();

@@ -1258,6 +1258,113 @@ console.log(`\n${'─'.repeat(59)}`);
       .test(rawScript + labs + supp + stack));
 }
 
+
+// ── Today must not claim "nothing scheduled" while doses exist (2026-08-06) ──
+// Henrik: "Today never renders with any injections at all except teato from
+// t-calc????" — with 679 injections stored. refreshInjectionsCache drops every
+// non-tcalc entry whose cycle_id is not in activeCycleIds, and a stack only
+// contributes one when it is BOTH toggled active AND has a cycle_start. His only
+// active protocol had no start date, so the set was empty and everything was
+// filtered — then Today rendered "✓ Nothing scheduled today", which is the one
+// thing that was not true.
+{
+  const today = require('fs').readFileSync(require('path').join(__dirname,'../tab-today.js'),'utf8');
+
+  check('the filter records why an entry was dropped',
+    /_injHidden\.count\+\+;/.test(rawScript));
+  check('  …and which protocol it belonged to',
+    /_injHidden\.stacks\[_nm\]=\(_injHidden\.stacks\[_nm\]\|\|0\)\+1;/.test(rawScript));
+  check('  …and names an active protocol that has no start date',
+    /noStart:\(_activeStackIndices\|\|\[\]\)\.reduce/.test(rawScript));
+  check('_injHidden is declared alongside the injection cache',
+    /var _injHidden=\{count:0,stacks:\{\},noStart:\[\]\};/.test(rawScript));
+
+  check('Today reports hidden doses instead of "nothing scheduled"',
+    /_hid&&_hid\.count/.test(today));
+  check('  …says how many are hidden', /\+' dose'\+\(_hid\.count===1\?'':'s'\)\+' hidden/.test(today));
+  check('  …names the inactive protocol first', /which '\+\(_names\.length>1\?'are':'is'\)\+' not active/.test(today));
+  check('  …with a no-start fallback when the owner is unknown', /has no start date, so its schedule/.test(today));
+  check('  …and offers a way to fix it', /Open Plan<\/button>/.test(today));
+  check('  …via the real tab switcher',
+    /switchTab\(\\'stacks\\',document\.getElementById\(\\'tab-btn-stacks\\'\)\)/.test(today));
+
+  // The cheerful message must survive for the case it is actually true.
+  check('"Nothing scheduled today" still shows when nothing IS scheduled',
+    /_hid&&_hid\.count\)\{[\s\S]*?\}else\{[\s\S]*?Nothing scheduled today/.test(today));
+  check('protocol names are escaped', /_esc\(_hid\.noStart\[0\]\)/.test(today));
+}
+
+
+// ── An active protocol renders, and activating one starts its cycle ─────────
+// Henrik 2026-08-06: "An active protocol must render, but stack creation needs to
+// make start date the date it is activated if not set prior to."
+{
+  const stackJs = require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+
+  check('an active protocol contributes its cycle id with or without a start date',
+    /var activeCycleIds=_activeStackIndices\.reduce\(function\(set,si\)\{\s*var st=_userStacks\[si\];\s*if\(st\)set\.add\(_stackCycleId\(st\)\);/.test(rawScript));
+  check('  …the old cycle_start requirement is gone',
+    !/if\(st&&st\.cycle_start\)set\.add\(_stackCycleId\(st\)\)/.test(rawScript));
+
+  check('activation backfills the start date', /function _ensureCycleStart\(idx\)\{/.test(rawScript));
+  check('  …to today', /st\.cycle_start=dateKey\(NOW\);/.test(rawScript));
+  check('  …and never overwrites one already set', /if\(st\.cycle_start\)return false;/.test(rawScript));
+
+  // _deriveStackCycleId includes the start date. Setting one before the id is
+  // frozen would move the cycle id and orphan every stored injection.
+  check('the stack id is frozen BEFORE the start date is set',
+    /_ensureStackId==='function'\)_ensureStackId\(st\);\s*if\(st\.cycle_start\)return false;/.test(rawScript));
+
+  check('toggling a protocol on starts it', /_activeStackIndices=\[idx\];\s*_ensureCycleStart\(idx\);/.test(rawScript));
+  check('useStack starts it too',
+    (rawScript.match(/_activeStackIndices=\[idx\];\s*_ensureCycleStart\(idx\);/g) || []).length === 2);
+  check('a first protocol from the wizard starts it',
+    /if\(_userStacks\.length===1\)\{_activeStackIndices=\[0\];if\(typeof _ensureCycleStart==='function'\)_ensureCycleStart\(0\);\}/.test(stackJs));
+  check('starting from a template starts it',
+    /_activeStackIndices=\[_idx\];\s*if\(typeof _ensureCycleStart==='function'\)_ensureCycleStart\(_idx\);/.test(stackJs));
+}
+
+
+// ── T-Calc saves to a stack, never outside one (2026-08-06) ────────────────
+// Henrik: "T-calc should be used in the stack wizard, and testosterone injections
+// should be part of a stack. No injections can exist outside of a stack object."
+// The double-dose came straight from the global bucket: 'tcalc' rendered
+// unconditionally, so an unassigned plan sat next to an Enhanced stack's own
+// testosterone and nothing reconciled them.
+{
+  const tc = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+
+  check('the sync writes nothing without a stack',
+    /if\(!_cid\)return;/.test(tc));
+  check('pushing opens Save to protocol when no stack is chosen',
+    /if\(!_tcHasTargetStack\(\)\)\{_tcOpenSaveToStack\(\);return;\}/.test(tc));
+  check('the picker no longer offers "Unassigned"', !/>Unassigned</.test(tc));
+
+  check('Save to protocol lists existing protocols', /_tcSaveToExistingStack\(/.test(tc));
+  check('  …and offers a new TRT one', /newBtn\('trt','TRT',true\)/.test(tc));
+  check('  …and a new Enhanced one', /newBtn\('enhanced','Enhanced',enhOk\)/.test(tc));
+  check('  …both wired to the creator', /_tcCreateStackForTesto\(\\''\+tier\+'\\'\)/.test(tc));
+
+  check('Enhanced is gated on tier 3', /_userTier>=3/.test(tc));
+  check('  …and refuses on the action, not just the button',
+    /if\(tier==='enhanced'&&!_tcEnhancedAllowed\(\)\)return;/.test(tc));
+  check('  …failing open while the tier is still loading',
+    /if\(typeof _featuresLoaded!=='undefined'&&!_featuresLoaded\)return true;/.test(tc));
+
+  check('a new protocol respects the 4-protocol cap', /if\(stacks\.length>=4\)return;/.test(tc));
+  check('a new protocol is activated and started',
+    /_activeStackIndices=\[idx\];[\s\S]{0,120}?_ensureCycleStart\(idx\)/.test(tc));
+  // Same trap as the stack wizard: _deriveStackCycleId includes cycle_start.
+  check('  …with its id frozen BEFORE the start date',
+    /_ensureStackId\(proto\);[\s\S]{0,200}?_ensureCycleStart\(idx\)/.test(tc));
+  check('an Enhanced protocol carries the enhanced flag',
+    /enhanced:\(tier==='enhanced'\)\?\{enabled:true,compounds:\[\]\}:\{\}/.test(tc));
+
+  // Already-stored 'tcalc' entries must keep rendering — refusing to write a new one
+  // must never make existing injections disappear.
+  check('existing global entries still render', /if\(cyc==='tcalc'\)return true;/.test(rawScript));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -2121,8 +2228,11 @@ console.log('\n── dose dedup migration ────────────�
   check('_scanAndShowStartupConflicts called in loadUserStacks',rawScript.includes('_scanAndShowStartupConflicts()'));
   check('the startup scan checks the one active protocol',
     /var idx=_activeStackIndices\.length\?_activeStackIndices\[0\]:null;/.test(rawScript));
+  // The activation branch also backfills cycle_start (2026-08-06), so these are no
+  // longer adjacent lines. What matters is that the conflict check still runs on
+  // activation, before anything is saved.
   check('activating a protocol runs the duplicate check',
-    /_activeStackIndices=\[idx\];\s*\n\s*var det=_detectStackConflicts\(idx\);/.test(rawScript));
+    /_activeStackIndices=\[idx\];[\s\S]{0,120}?var det=_detectStackConflicts\(idx\);/.test(rawScript));
   check('_resolveConflict defined in index.html',rawScript.includes('async function _resolveConflict('));
 
   // "Keep the first entry only" drops the later copy and leaves everything else
@@ -6984,9 +7094,15 @@ if (typeof G._injOwnerStackId === 'function' && typeof G._stackHasScheduledTrt =
 if (typeof G._tcTargetCycleId === 'function') {
   var _svT = G._tcp.targetStackId, _svS = G._userStacks;
   G._userStacks = [{id:'cyc_a'},{id:'cyc_b'}];
-  G._tcp.targetStackId = '';       check('targetCycleId: unassigned → tcalc',        G._tcTargetCycleId() === 'tcalc');
+  // No stack, no cycle id (2026-08-06). The global 'tcalc' bucket is what let an
+  // unassigned plan render alongside a stack's own testosterone — two injections on
+  // the same day, and the single-source guard never fired because it requires the
+  // plan to BE assigned. Nothing is written outside a stack now.
+  G._tcp.targetStackId = '';       check('targetCycleId: no stack → empty',          G._tcTargetCycleId() === '');
   G._tcp.targetStackId = 'cyc_b';  check('targetCycleId: assigned → tcalc:<id>',     G._tcTargetCycleId() === 'tcalc:cyc_b');
-  G._tcp.targetStackId = 'ghost';  check('targetCycleId: unknown stack → tcalc',     G._tcTargetCycleId() === 'tcalc');
+  G._tcp.targetStackId = 'ghost';  check('targetCycleId: unknown stack → empty',     G._tcTargetCycleId() === '');
+  check('_tcHasTargetStack follows it', G._tcHasTargetStack() === false);
+  G._tcp.targetStackId = 'cyc_a';  check('  …and is true once a stack is chosen',    G._tcHasTargetStack() === true);
   G._tcp.targetStackId = _svT; G._userStacks = _svS;
 }
 {
