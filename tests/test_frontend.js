@@ -1191,7 +1191,32 @@ console.log('\n── Card header overflow regressions ────────�
 }
 
 console.log(`\n${'─'.repeat(59)}`);
-  console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
+  
+// ── The profile must survive a cache wipe (2026-08-05) ─────────────────────
+// localStorage is a cache, never the source of truth. pep-profile carried the
+// onboarded flag, the experience tier and the goals, and only the four shared
+// user_* fields were ever pushed — so wiping the cache lost all three and the app
+// replayed onboarding as if the account were new.
+{
+  const _tsProf = require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+
+  check('onboarding pushes the profile object itself',
+    /kv\['pep-profile'\]=profile;/.test(rawScript));
+  check('the profile carries the onboarded flag',
+    /goals:\(_obData\.goals\|\|\[\]\)\.slice\(\),onboarded:true\}/.test(rawScript));
+  check('the startup sync restores it', /if\(s\['pep-profile'\]/.test(rawScript));
+  check('the restored profile is merged, not swapped in whole',
+    /setData\('pep-profile',Object\.assign\(\{\},getData\('pep-profile',\{\}\),s\['pep-profile'\]\)\)/.test(rawScript));
+  check('correcting the experience tier pushes the profile too',
+    /pushPepSettingsToAgent\(\{'pep-experience':v,'pep-profile':p\}\)/.test(_tsProf));
+
+  // applyTheme pushes as well as stores, so re-applying an unchanged theme sent the
+  // same value back to the backend on every single load. Same guard as workout.
+  check('the theme is only re-applied when it differs',
+    /s\['pep-theme'\]&&getData\('pep-theme',null\)!==s\['pep-theme'\]/.test(rawScript));
+}
+
+console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
 
