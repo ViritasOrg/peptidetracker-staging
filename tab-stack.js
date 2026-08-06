@@ -1418,7 +1418,7 @@ async function stackConfirmAddAAS(){
 async function stackRemoveAASCompound(idx){
   var c=_cycle;if(!c||!c.id)return;
   var name=(c.compounds&&c.compounds[idx])?c.compounds[idx].name:'this compound';
-  if(!confirm('Remove '+name+'?'))return;
+  if(!confirmGlobalDelete(name))return;
   c.compounds=(c.compounds||[]).filter(function(_,i){return i!==idx;});
   cycleCacheSave(c);renderStackEditor();
   try{var _rcr=await fetch(AGENT_URL+'/cycles/'+c.id,{method:'PATCH',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({compounds:c.compounds})});if(!_rcr.ok)_logHttp('cyclePatchCompounds',_rcr.status,'/cycles/'+c.id);}catch(e){_logErr('cyclePatchCompounds',e);}

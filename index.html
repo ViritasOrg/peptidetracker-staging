@@ -272,11 +272,6 @@ const MILESTONES=[
   {date:new Date(2026,5,29),name:'Trough Blood Panel',desc:'Urologist — E2, TT, hematocrit, LH, FSH'},
   {date:new Date(2026,6,4), name:'HGH Start / Nebido #2',desc:'1 IU/day 5-on/2-off. CJC/IPA stops.'},
 ];
-const BC_SEED=[
-  {date:"2026-3-23",dateLabel:"23 Mar 2026",neck:42,belly:99,bf:23.0},
-  {date:"2026-5-2", dateLabel:"2 May 2026", neck:42,belly:96,bf:21.0},
-  {date:"2026-5-3", dateLabel:"3 May 2026", neck:42,belly:94,bf:19.6},
-];
 const BC_KEY='proto-bodycomp-v2';
 let weights=[];
 let _viewDate=null;
@@ -373,7 +368,6 @@ function _bfEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</
 function _latestBodyFat(){
   var arr=[];try{arr=JSON.parse(localStorage.getItem(BC_KEY)||'[]')||[];}catch(e){arr=[];}
   var seen={};arr.forEach(function(e){if(e&&e.date)seen[e.date]=1;});
-  if(typeof BC_SEED!=='undefined'&&BC_SEED)BC_SEED.forEach(function(s){if(s&&s.date&&!seen[s.date])arr.push(s);});
   arr=arr.filter(function(e){return e&&e.date&&typeof e.bf==='number'&&isFinite(e.bf);});
   if(!arr.length)return null;
   arr.sort(function(a,b){return new Date(String(a.date).replace(/-/g,'/'))-new Date(String(b.date).replace(/-/g,'/'));});
@@ -1122,7 +1116,7 @@ async function useStack(idx){
 }
 // ── Delete a stack ───────────────────────────────────────────────────────────
 async function deleteStack(idx){
-  if(!confirm('Delete this protocol? This cannot be undone.'))return;
+  if(!confirmGlobalDelete('this protocol'))return;
   if(idx>=0&&idx<_userStacks.length){
     _userStacks.splice(idx,1);
     _activeStackIndices=_activeStackIndices.filter(function(i){return i!==idx;}).map(function(i){return i>idx?i-1:i;});
@@ -1448,7 +1442,13 @@ async function saveUserWeight(weight){
 }
 async function pushWeightToAgent(date,weightVal){try{const r=await fetch(AGENT_URL+'/weights',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date:date,weight:weightVal})});if(!r.ok)_logHttp('pushWeight',r.status,'/weights');}catch(e){_logErr('pushWeight',e);}}
 async function deleteWeightFromAgent(date){try{const r=await fetch(AGENT_URL+'/weights/'+date,{method:'DELETE',headers:authHeaders()});if(!r.ok)_logHttp('deleteWeight',r.status,'/weights/'+date);}catch(e){_logErr('deleteWeight',e);}}
-function deleteWeight(date){weights=weights.filter(function(w){return w.date!==date;});setData('weight_log',weights);bcRender();deleteWeightFromAgent(date);}
+// Deleting a record removes it from the backend, not just this device — it is gone
+// from every device signed into this account, and there is no undo. Every delete of
+// a stored record asks with those words, so nobody learns it the hard way.
+function confirmGlobalDelete(what){
+  return confirm('Delete '+what+'?\n\nThis deletes it from your account on the backend, so it disappears from every device you are signed in on — not just this one. It cannot be undone.');
+}
+function deleteWeight(date){if(!confirmGlobalDelete('the weight logged on '+date))return;weights=weights.filter(function(w){return w.date!==date;});setData('weight_log',weights);bcRender();deleteWeightFromAgent(date);}
 
 function saveBodyMeasurement(type){
   var inp=document.getElementById('bc-'+type+'-in');

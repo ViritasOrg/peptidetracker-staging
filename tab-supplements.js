@@ -564,7 +564,7 @@ async function _suppConfirmAdd(editId){
 
 async function _suppDelete(id){
   if(!id) return;
-  if(typeof confirm==='function' && !confirm('Remove this supplement?')) return;
+  if(typeof confirmGlobalDelete==='function' && !confirmGlobalDelete('this supplement')) return;
   _supplements = (_supplements||[]).filter(function(s){ return s.id!==id; });
   _suppSaveCache();
   buildSupplements();
