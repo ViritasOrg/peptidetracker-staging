@@ -277,6 +277,9 @@ let weights=[];
 let _viewDate=null;
 let _syncPending=true;
 var _injectionsCache={};
+// Set by refreshInjectionsCache: how many stored injections were filtered out and
+// which protocol each belonged to. Read by buildToday's empty state.
+var _injHidden={count:0,stacks:{},noStart:[]};
 var _injCacheReady=false;
 let _userProtocol=null;
 let _protocolLoaded=false;
@@ -895,6 +898,21 @@ async function refreshInjectionsCache(){
     if(st&&st.cycle_start)set.add(_stackCycleId(st));
     return set;
   },new Set());
+  // Why an entry was dropped, so Today can say so instead of claiming there is
+  // nothing scheduled. A stack that is toggled off, or an active one with no start
+  // date, contributes no cycle id — and then EVERY non-tcalc injection is filtered
+  // out. That looked identical to having no doses at all: 679 stored injections and
+  // a cheerful "Nothing scheduled today" (2026-08-06).
+  var _ownerOf={};
+  (_userStacks||[]).forEach(function(st,i){
+    if(!st)return;
+    if(st.cycle_start)_ownerOf[_stackCycleId(st)]={name:st.name||('Protocol '+(i+1)),active:_activeStackIndices.indexOf(i)>=0};
+  });
+  _injHidden={count:0,stacks:{},noStart:(_activeStackIndices||[]).reduce(function(a,si){
+    var st=_userStacks[si];
+    if(st&&!st.cycle_start)a.push(st.name||('Protocol '+(si+1)));
+    return a;
+  },[])};
   var _validCids={};
   _activeStackIndices.forEach(function(si){
     var st=_userStacks[si];
@@ -928,7 +946,13 @@ async function refreshInjectionsCache(){
       _injectionsCache[e.date].push(e);
       return;
     }
-    if(!activeCycleIds.has(e.cycle_id))return;
+    if(!activeCycleIds.has(e.cycle_id)){
+      _injHidden.count++;
+      var _ow=_ownerOf[e.cycle_id];
+      var _nm=_ow?_ow.name:'a protocol that no longer exists';
+      _injHidden.stacks[_nm]=(_injHidden.stacks[_nm]||0)+1;
+      return;
+    }
     var _vids=_validCids[e.cycle_id]||[];
     if(_vids.length&&!_vids.includes(e.compound_id)){
       if(e.date>=_todayKey){

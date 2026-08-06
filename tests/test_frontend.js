@@ -1258,6 +1258,42 @@ console.log(`\n${'─'.repeat(59)}`);
       .test(rawScript + labs + supp + stack));
 }
 
+
+// ── Today must not claim "nothing scheduled" while doses exist (2026-08-06) ──
+// Henrik: "Today never renders with any injections at all except teato from
+// t-calc????" — with 679 injections stored. refreshInjectionsCache drops every
+// non-tcalc entry whose cycle_id is not in activeCycleIds, and a stack only
+// contributes one when it is BOTH toggled active AND has a cycle_start. His only
+// active protocol had no start date, so the set was empty and everything was
+// filtered — then Today rendered "✓ Nothing scheduled today", which is the one
+// thing that was not true.
+{
+  const today = require('fs').readFileSync(require('path').join(__dirname,'../tab-today.js'),'utf8');
+
+  check('the filter records why an entry was dropped',
+    /_injHidden\.count\+\+;/.test(rawScript));
+  check('  …and which protocol it belonged to',
+    /_injHidden\.stacks\[_nm\]=\(_injHidden\.stacks\[_nm\]\|\|0\)\+1;/.test(rawScript));
+  check('  …and names an active protocol that has no start date',
+    /noStart:\(_activeStackIndices\|\|\[\]\)\.reduce/.test(rawScript));
+  check('_injHidden is declared alongside the injection cache',
+    /var _injHidden=\{count:0,stacks:\{\},noStart:\[\]\};/.test(rawScript));
+
+  check('Today reports hidden doses instead of "nothing scheduled"',
+    /_hid&&_hid\.count/.test(today));
+  check('  …says how many are hidden', /\+' dose'\+\(_hid\.count===1\?'':'s'\)\+' hidden/.test(today));
+  check('  …explains the missing start date', /is active but has no start date/.test(today));
+  check('  …or names the inactive protocol', /which '\+\(_names\.length>1\?'are':'is'\)\+' not active/.test(today));
+  check('  …and offers a way to fix it', /Open Plan<\/button>/.test(today));
+  check('  …via the real tab switcher',
+    /switchTab\(\\'stacks\\',document\.getElementById\(\\'tab-btn-stacks\\'\)\)/.test(today));
+
+  // The cheerful message must survive for the case it is actually true.
+  check('"Nothing scheduled today" still shows when nothing IS scheduled',
+    /_hid&&_hid\.count\)\{[\s\S]*?\}else\{[\s\S]*?Nothing scheduled today/.test(today));
+  check('protocol names are escaped', /_esc\(_hid\.noStart\[0\]\)/.test(today));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
