@@ -1324,6 +1324,47 @@ console.log(`\n${'─'.repeat(59)}`);
     /_activeStackIndices=\[_idx\];\s*if\(typeof _ensureCycleStart==='function'\)_ensureCycleStart\(_idx\);/.test(stackJs));
 }
 
+
+// ── T-Calc saves to a stack, never outside one (2026-08-06) ────────────────
+// Henrik: "T-calc should be used in the stack wizard, and testosterone injections
+// should be part of a stack. No injections can exist outside of a stack object."
+// The double-dose came straight from the global bucket: 'tcalc' rendered
+// unconditionally, so an unassigned plan sat next to an Enhanced stack's own
+// testosterone and nothing reconciled them.
+{
+  const tc = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+
+  check('the sync writes nothing without a stack',
+    /if\(!_cid\)return;/.test(tc));
+  check('pushing opens Save to protocol when no stack is chosen',
+    /if\(!_tcHasTargetStack\(\)\)\{_tcOpenSaveToStack\(\);return;\}/.test(tc));
+  check('the picker no longer offers "Unassigned"', !/>Unassigned</.test(tc));
+
+  check('Save to protocol lists existing protocols', /_tcSaveToExistingStack\(/.test(tc));
+  check('  …and offers a new TRT one', /newBtn\('trt','TRT',true\)/.test(tc));
+  check('  …and a new Enhanced one', /newBtn\('enhanced','Enhanced',enhOk\)/.test(tc));
+  check('  …both wired to the creator', /_tcCreateStackForTesto\(\\''\+tier\+'\\'\)/.test(tc));
+
+  check('Enhanced is gated on tier 3', /_userTier>=3/.test(tc));
+  check('  …and refuses on the action, not just the button',
+    /if\(tier==='enhanced'&&!_tcEnhancedAllowed\(\)\)return;/.test(tc));
+  check('  …failing open while the tier is still loading',
+    /if\(typeof _featuresLoaded!=='undefined'&&!_featuresLoaded\)return true;/.test(tc));
+
+  check('a new protocol respects the 4-protocol cap', /if\(stacks\.length>=4\)return;/.test(tc));
+  check('a new protocol is activated and started',
+    /_activeStackIndices=\[idx\];[\s\S]{0,120}?_ensureCycleStart\(idx\)/.test(tc));
+  // Same trap as the stack wizard: _deriveStackCycleId includes cycle_start.
+  check('  …with its id frozen BEFORE the start date',
+    /_ensureStackId\(proto\);[\s\S]{0,200}?_ensureCycleStart\(idx\)/.test(tc));
+  check('an Enhanced protocol carries the enhanced flag',
+    /enhanced:\(tier==='enhanced'\)\?\{enabled:true,compounds:\[\]\}:\{\}/.test(tc));
+
+  // Already-stored 'tcalc' entries must keep rendering — refusing to write a new one
+  // must never make existing injections disappear.
+  check('existing global entries still render', /if\(cyc==='tcalc'\)return true;/.test(rawScript));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -7053,9 +7094,15 @@ if (typeof G._injOwnerStackId === 'function' && typeof G._stackHasScheduledTrt =
 if (typeof G._tcTargetCycleId === 'function') {
   var _svT = G._tcp.targetStackId, _svS = G._userStacks;
   G._userStacks = [{id:'cyc_a'},{id:'cyc_b'}];
-  G._tcp.targetStackId = '';       check('targetCycleId: unassigned → tcalc',        G._tcTargetCycleId() === 'tcalc');
+  // No stack, no cycle id (2026-08-06). The global 'tcalc' bucket is what let an
+  // unassigned plan render alongside a stack's own testosterone — two injections on
+  // the same day, and the single-source guard never fired because it requires the
+  // plan to BE assigned. Nothing is written outside a stack now.
+  G._tcp.targetStackId = '';       check('targetCycleId: no stack → empty',          G._tcTargetCycleId() === '');
   G._tcp.targetStackId = 'cyc_b';  check('targetCycleId: assigned → tcalc:<id>',     G._tcTargetCycleId() === 'tcalc:cyc_b');
-  G._tcp.targetStackId = 'ghost';  check('targetCycleId: unknown stack → tcalc',     G._tcTargetCycleId() === 'tcalc');
+  G._tcp.targetStackId = 'ghost';  check('targetCycleId: unknown stack → empty',     G._tcTargetCycleId() === '');
+  check('_tcHasTargetStack follows it', G._tcHasTargetStack() === false);
+  G._tcp.targetStackId = 'cyc_a';  check('  …and is true once a stack is chosen',    G._tcHasTargetStack() === true);
   G._tcp.targetStackId = _svT; G._userStacks = _svS;
 }
 {

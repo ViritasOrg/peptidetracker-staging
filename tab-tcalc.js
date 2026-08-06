@@ -3036,8 +3036,18 @@ function _tcDrawChart(canvasId, total, stats, plan, sched, calFT, measuredFT) {
 function _tcTargetCycleId(){
   var tid=_tcp&&_tcp.targetStackId;
   if(tid&&typeof _userStacks!=='undefined'&&_userStacks&&_userStacks.some(function(s){return s&&s.id===tid;}))return 'tcalc:'+tid;
-  return 'tcalc';
+  // No stack, no cycle id. "No injections can exist outside of a stack object"
+  // (Henrik 2026-08-06). The old global 'tcalc' bucket rendered unconditionally —
+  // _tcalcEntryVisible returns true for it without checking any stack — so an
+  // unassigned plan sat alongside a stack's own testosterone and the user got two
+  // injections on the same day, with the single-source guard never firing because
+  // its precondition is that the plan IS assigned. Returning '' means the sync
+  // writes nothing until the user picks a stack.
+  return '';
 }
+// Existing 'tcalc' entries are still RENDERED (see _tcalcEntryVisible) — refusing to
+// write a new one must never make already-stored injections vanish.
+function _tcHasTargetStack(){ return !!_tcTargetCycleId(); }
 // Disable a stack's OWN TRT-config testosterone and delete the injections it
 // generated (cycle_id '<stackId>', per testo compound, from today). Leaves the
 // stack's peptides/enhanced injections untouched. Used when the user switches a
@@ -3093,7 +3103,9 @@ async function _tcSetTargetStack(stackId){
 function _tcStackPickerHtml(){
   var stacks=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks:[];
   var cur=(_tcp&&_tcp.targetStackId)||'';
-  var opts='<option value=""'+(cur?'':' selected')+'>Unassigned</option>';
+  // No "Unassigned" option: testosterone belongs to a protocol. Picking none is how
+  // the global bucket used to get written.
+  var opts=cur?'':'<option value="" selected disabled>Choose a protocol…</option>';
   stacks.forEach(function(s,i){
     if(!s)return;
     var act=(typeof _isActiveStack==='function'&&_isActiveStack(i))?' ●':'';
@@ -3106,6 +3118,7 @@ async function _tcSyncLogToBackend() {
   var h=(typeof authHeaders==='function')?authHeaders():null;
   if(!h)return;
   var _cid=_tcTargetCycleId();
+  if(!_cid)return;   // no stack chosen yet — Save to stack is where that happens
   var _now=new Date();_now.setHours(0,0,0,0);
   var todayStr=_now.getFullYear()+'-'+String(_now.getMonth()+1).padStart(2,'0')+'-'+String(_now.getDate()).padStart(2,'0');
 
@@ -3150,11 +3163,114 @@ async function _tcSyncLogToBackend() {
   if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
 }
 
+
+// ── Save to stack ─────────────────────────────────────────────────────────────
+// "Using t-calc to create a new schedule needs a 'save to stack' user flow, where
+// one chose an existing stack or create a new one (and choose if it is TRT or
+// Enhanced, but only a tier 3 user will have the option of creating a new Enhanced
+// stack, for tier 2 'enhanced' is greyed out)" — Henrik 2026-08-06.
+
+// Fail-open on an unloaded tier, matching _cyclesAllowed: a flaky /user/features
+// fetch must not lock an entitled user out of their own tier.
+function _tcEnhancedAllowed(){
+  if(typeof _featuresLoaded!=='undefined'&&!_featuresLoaded)return true;
+  return (typeof _userTier!=='undefined'&&_userTier>=3);
+}
+
+function _tcCloseSaveToStack(){
+  var ov=document.getElementById('tc-save-stack-overlay');
+  if(ov&&ov.parentNode)ov.parentNode.removeChild(ov);
+}
+
+function _tcOpenSaveToStack(){
+  _tcCloseSaveToStack();
+  var stacks=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks:[];
+  var full=stacks.length>=4;
+  var enhOk=_tcEnhancedAllowed();
+
+  var rows=stacks.map(function(st,i){
+    if(!st)return '';
+    var act=(typeof _isActiveStack==='function'&&_isActiveStack(i))?' ●':'';
+    return '<button onclick="_tcSaveToExistingStack(\''+_esc(st.id||'')+'\')" style="display:block;width:100%;text-align:left;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;color:var(--text);font-size:14px;font-family:inherit;cursor:pointer">'
+      +_esc(st.name||('Protocol '+(i+1)))+act+'</button>';
+  }).join('');
+
+  var newBtn=function(tier,label,ok){
+    var dis=!ok||full;
+    return '<button '+(dis?'disabled ':'')+'onclick="_tcCreateStackForTesto(\''+tier+'\')" '
+      +'title="'+(full?'You already have 4 protocols':(ok?'':'Enhanced requires tier 3'))+'" '
+      +'style="flex:1;background:'+(dis?'var(--surface2)':'var(--accent)')+';color:'+(dis?'var(--muted2)':'#000')+';border:1px solid var(--border);border-radius:10px;padding:12px;font-size:13px;font-weight:700;font-family:inherit;cursor:'+(dis?'default':'pointer')+';opacity:'+(dis?'0.5':'1')+'">'
+      +label+'</button>';
+  };
+
+  var ov=document.createElement('div');
+  ov.id='tc-save-stack-overlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:600;display:flex;align-items:flex-end;justify-content:center';
+  ov.onclick=function(e){if(e.target===ov)_tcCloseSaveToStack();};
+  ov.innerHTML='<div style="background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:20px 18px calc(20px + env(safe-area-inset-bottom,0px));max-height:80vh;overflow:auto">'
+    +'<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">Save to protocol</div>'
+    +'<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;line-height:1.5">Testosterone belongs to a protocol, so its doses show on Today alongside everything else you are running.</div>'
+    +(rows?('<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Existing</div>'+rows):'')
+    +'<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px">New protocol</div>'
+    +'<div style="display:flex;gap:8px">'+newBtn('trt','TRT',true)+newBtn('enhanced','Enhanced',enhOk)+'</div>'
+    +(enhOk?'':'<div style="font-size:11px;color:var(--muted2);margin-top:8px">Enhanced protocols need tier 3.</div>')
+    +(full?'<div style="font-size:11px;color:var(--muted2);margin-top:8px">You already have 4 protocols — pick one above.</div>':'')
+    +'<button onclick="_tcCloseSaveToStack()" style="width:100%;background:none;border:none;color:var(--muted2);font-size:13px;font-family:inherit;cursor:pointer;margin-top:16px;padding:8px">Cancel</button>'
+    +'</div>';
+  document.body.appendChild(ov);
+}
+
+async function _tcSaveToExistingStack(id){
+  _tcCloseSaveToStack();
+  if(!id)return;
+  await _tcSetTargetStack(id);            // handles the single-source guard + re-sync
+  await _tcAfterSavedToStack();
+}
+
+// A protocol created here carries no compounds of its own — the testosterone comes
+// from the T-Calc plan that is about to be assigned to it. Enhanced differs from TRT
+// only in the tier flag, which is what the badges and the wizard read.
+async function _tcCreateStackForTesto(tier){
+  if(tier==='enhanced'&&!_tcEnhancedAllowed())return;
+  var stacks=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks:[];
+  if(stacks.length>=4)return;
+  _tcCloseSaveToStack();
+
+  var base=(tier==='enhanced')?'Enhanced':'TRT';
+  var name=base, n=2;
+  while(stacks.some(function(s){return s&&s.name===name;})){name=base+' '+n;n++;}
+
+  var proto={name:name,cycle_length:12,peptides:[],trt:{},
+             enhanced:(tier==='enhanced')?{enabled:true,compounds:[]}:{}};
+  // Freeze the id BEFORE the start date — _deriveStackCycleId includes cycle_start,
+  // so setting one first would move the id this stack's injections get written under.
+  if(typeof _ensureStackId==='function')_ensureStackId(proto);
+  _userStacks.push(proto);
+  var idx=_userStacks.length-1;
+  if(typeof _activeStackIndices!=='undefined')_activeStackIndices=[idx];
+  if(typeof _ensureCycleStart==='function')_ensureCycleStart(idx);
+  if(typeof saveStacksToBackend==='function')await saveStacksToBackend();
+  await _tcSetTargetStack(proto.id);
+  await _tcAfterSavedToStack();
+}
+
+async function _tcAfterSavedToStack(){
+  if(typeof updateWEEKLY==='function')updateWEEKLY();
+  if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
+  if(typeof buildWeekStrip==='function')buildWeekStrip();
+  if(typeof buildToday==='function')buildToday();
+  if(typeof buildSchedule==='function')buildSchedule();
+  if(typeof buildStackStore==='function')buildStackStore();
+  if(typeof buildTCalc==='function')buildTCalc();
+}
+
 async function _tcPushLogToSchedule() {
   var log=_tcp.manualLog||[];
   if(!log.length){alert('No injections logged yet.');return;}
   var h=(typeof authHeaders==='function')?authHeaders():null;
   if(!h){alert('Sign in required.');return;}
+  // Nothing is scheduled outside a protocol. Ask which one first.
+  if(!_tcHasTargetStack()){_tcOpenSaveToStack();return;}
   var _now=new Date();_now.setHours(0,0,0,0);
   var todayStr=_now.getFullYear()+'-'+String(_now.getMonth()+1).padStart(2,'0')+'-'+String(_now.getDate()).padStart(2,'0');
   await _tcSyncLogToBackend();
