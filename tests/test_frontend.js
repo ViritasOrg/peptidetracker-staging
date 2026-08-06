@@ -1086,7 +1086,11 @@ G.wizSave().then(async ()=>{
 
   // deleteWeight removes entry from weights array
   G.weights = [{ date: '2026-06-01', weight: 90 }, { date: '2026-06-05', weight: 89 }];
+  // The sandbox stubs confirm() to false, and deleteWeight now asks before deleting
+  // (it used to delete silently). Say yes for this behavioural check.
+  const _cfWas = G.confirm; G.confirm = () => true;
   G.deleteWeight('2026-06-01');
+  G.confirm = _cfWas;
   check('deleteWeight removes correct entry', G.weights.length === 1 && G.weights[0].date === '2026-06-05',
     `got ${JSON.stringify(G.weights)}`);
   check('deleteWeight preserves other entries', G.weights[0].weight === 89, `got ${G.weights[0].weight}`);
@@ -1214,6 +1218,44 @@ console.log(`\n${'─'.repeat(59)}`);
   // same value back to the backend on every single load. Same guard as workout.
   check('the theme is only re-applied when it differs',
     /s\['pep-theme'\]&&getData\('pep-theme',null\)!==s\['pep-theme'\]/.test(rawScript));
+}
+
+
+// ── No hardcoded personal data, and deletes say they are global (2026-08-05) ─
+// BC_SEED held one person's real neck/belly/body-fat measurements, in a public
+// repo, merged into every user's body-comp history at four separate call sites.
+// Henrik: remove anything hardcoded, and "delete entries need an extra
+// confirmation step explaining that the delete is global."
+{
+  const fsx = require('fs'), pathx = require('path');
+  const rd = f => fsx.readFileSync(pathx.join(__dirname, '..', f), 'utf8');
+  const body = rd('tab-body.js'), labs = rd('tab-labs.js');
+  const supp = rd('tab-supplements.js'), stack = rd('tab-stack.js');
+
+  check('no BC_SEED constant', !/BC_SEED/.test(rawScript));
+  check('  …and no merge sites left in tab-body.js', !/BC_SEED/.test(body));
+  check('no hardcoded measurements anywhere in the app',
+    ![rawScript, body].some(src => /neck:42,belly:9[0-9]/.test(src)));
+
+  check('there is one shared confirm helper', /function confirmGlobalDelete\(what\)\{/.test(rawScript));
+  check('  …and it says the record leaves the backend',
+    /deletes it from your account on the backend/.test(rawScript));
+  check('  …and that every device is affected, not just this one',
+    /every device you are signed in on — not just this one/.test(rawScript));
+  check('  …and that it cannot be undone', /It cannot be undone\./.test(rawScript));
+
+  check('deleting a weight asks (it used to delete silently)',
+    /function deleteWeight\(date\)\{if\(!confirmGlobalDelete\(/.test(rawScript));
+  check('deleting a protocol asks', /confirmGlobalDelete\('this protocol'\)/.test(rawScript));
+  check('deleting a blood test asks', /confirmGlobalDelete\('this blood test'\)/.test(labs));
+  check('removing a supplement asks', /confirmGlobalDelete\('this supplement'\)/.test(supp));
+  check('removing a compound from a cycle asks', /confirmGlobalDelete\(name\)/.test(stack));
+
+  // Every one of those writes through to the backend, so none may keep the old
+  // wording that implied a local-only change.
+  check('no delete still uses the old local-sounding prompt',
+    !/confirm\('Delete this protocol\?|confirm\('Delete this blood test\?|confirm\('Remove this supplement\?/
+      .test(rawScript + labs + supp + stack));
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);

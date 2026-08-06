@@ -487,7 +487,7 @@ async function _labConfirmAdd() {
 
 async function _labDeleteEntry(id) {
   if (!id) return;
-  if (typeof confirm === 'function' && !confirm('Delete this blood test?')) return;
+  if (typeof confirmGlobalDelete === 'function' && !confirmGlobalDelete('this blood test')) return;
   var h = (typeof authHeaders === 'function') ? authHeaders() : null;
   if (!h) return;
   try {
