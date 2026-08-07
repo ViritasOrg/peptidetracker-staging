@@ -1459,6 +1459,39 @@ console.log(`\n${'─'.repeat(59)}`);
   check('the free-T log applies the same one-stream rule',
     /_trtOwnsTesto/.test(bloodJs) && /st\.enhanced\.enabled && !_trtOwnsTesto/.test(bloodJs));
 
+  // ── The blood/free-T curves use the SAME conversion, not a second copy ──────
+  // tab-blood.js kept its own rate maths and only ever understood "mg/week" on a
+  // weekday schedule. Anything else — mg/day, mg/EOD, an interval cadence — fell
+  // through to the raw configured number and was plotted as if the whole period's
+  // dose went in at every injection.
+  check('the blood curves route through one shared conversion',
+    /function _blDosePerInjection\(/.test(bloodJs) &&
+    /_enhDosePerInjection\(/.test(bloodJs));
+  check('  …and keep no second copy of the rate maths',
+    !/injsPerWeek/.test(bloodJs), 'the local mg/week-only division is still there');
+
+  const bdpi = (c) => Number(G._blDosePerInjection(c, null));
+  check('mg/week on an interval cadence converts',            // 350/wk E5D = 250
+    bdpi({dose:'350', unit:'mg/week', cadence:'interval', freqVal:5, freqUnit:'days'}) === 250);
+  check('  …mg/day injected twice a week is a DAILY rate',    // 70/d over 3.5 d = 245
+    bdpi({dose:'70', unit:'mg/day', days:[1,4]}) === 245);
+  check('  …mg/EOD injected weekly likewise',                 // 50/2d over 7 d = 175
+    bdpi({dose:'50', unit:'mg/EOD', days:[1]}) === 175);
+  check('  …and a cadence that matches its unit is unchanged',
+    bdpi({dose:'10', unit:'mg/day', days:[0,1,2,3,4,5,6]}) === 10 &&
+    bdpi({dose:'50', unit:'mg/EOD', cadence:'interval', freqVal:2, freqUnit:'days'}) === 50);
+
+  // Placement, not just amount: switching a compound to "every N days" leaves the old
+  // weekday list behind, and _enhHitsDay ignores it. This did not, so the curve put
+  // doses on days nothing is injected on.
+  const idays = G._pkInjectionDays({cadence:'interval', freqVal:5, freqUnit:'days', days:[1,4]}, 21, 1);
+  check('an interval cadence beats a stale weekday list',
+    JSON.stringify(idays) === JSON.stringify([0,5,10,15,20]), JSON.stringify(idays));
+  check('  …while a weekday compound is untouched',
+    JSON.stringify(G._pkInjectionDays({days:[1,4]}, 14, 1)) === JSON.stringify([0,3,7,10]));
+  check('  …and so is a compound with neither (TRT/peptide precedence)',
+    JSON.stringify(G._pkInjectionDays({freqVal:2, freqUnit:'weeks'}, 42, 1)) === JSON.stringify([0,14,28]));
+
   // ── C. the plan lives in the stack it is assigned to ────────────────────────
   // T-Calc showed Testoviron Depot 75 mg E2D while the protocol held Nebido 100 mg,
   // and _tcCurveLog's "the plan owns this day" rule suppressed the protocol's real

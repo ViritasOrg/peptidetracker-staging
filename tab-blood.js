@@ -19,6 +19,20 @@ function _parseHalfLifeDays(str) {
 }
 
 function _pkInjectionDays(c, cycleLen, cycleStartDow) {
+  // An enhanced entry with cadence:'interval' injects on an interval, and its `days`
+  // array is stale leftovers from the weekday mode — switching mode does not clear it.
+  // _enhHitsDay (the generator) checks the cadence FIRST and ignores days entirely,
+  // so this must too. Without the check the blood curve placed doses on weekdays
+  // nothing is actually injected on, while Today showed the real interval schedule.
+  // Only entries that carry a `cadence` field are affected: peptides and TRT
+  // compounds have none and keep the original days-then-interval precedence.
+  if (c && c.cadence === 'interval') {
+    var iDays = [], iStep = (typeof _enhIntervalDays === 'function') ? _enhIntervalDays(c)
+                          : (c.freqUnit === 'weeks' ? (c.freqVal || 1) * 7 : (c.freqVal || 1));
+    if (!(iStep > 0)) iStep = 1;
+    for (var di = 0; di < cycleLen; di += iStep) iDays.push(Math.round(di));
+    return iDays;
+  }
   if (!c.days || !c.days.length) {
     // Nebido-style: every freqVal weeks (or days)
     var freqDays = c.freqUnit === 'weeks' ? (c.freqVal || 1) * 7 : (c.freqVal || 1);
@@ -238,6 +252,23 @@ var _BL_SUPP_COLORS = ['#7bd88f','#5ec8d8','#c084fc','#f0a860','#e879b0','#8ab4f
 function _blLoadHidden(){ if(_blHidden===null) _blHidden = getData('proto-blood-hidden', {}) || {}; return _blHidden; }
 
 function _blFmtDateKey(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+// Per-injection amount for an enhanced-tier compound, via the one helper that owns
+// that conversion (_enhDosePerInjection, tab-stack.js — the same call the injection
+// generator makes). Keeping a second copy of the maths here is what let this file
+// drift: it only ever understood "mg/week" on a weekday schedule.
+//
+// `ec` is the catalogue entry, used only to supply a unit when the stack entry has
+// none. The fallback below runs only if tab-stack.js somehow has not loaded, and is
+// deliberately the plain per-period division rather than a second cadence model.
+function _blDosePerInjection(c, ec){
+  var unit = c.unit || (ec && ec.unit) || 'mg/week';
+  if (typeof _enhDosePerInjection === 'function')
+    return _enhDosePerInjection({dose:c.dose, unit:unit, cadence:c.cadence, days:c.days,
+                                 freqVal:c.freqVal, freqUnit:c.freqUnit}).dose;
+  var amt = parseDec(c.dose) || 0;
+  var per = String(unit).split('/')[1];
+  return String(per === 'week' ? amt / 7 : per === 'EOD' ? amt / 2 : amt);
+}
 // Gather EVERY testosterone injection across all sources — stack TRT esters,
 // enhanced-tier testosterone, and the T-Calc plan — into one dated log. This
 // feeds the shared free-T model (_tcFreeTSeries) so the chart shows a single
@@ -269,11 +300,13 @@ function _blTestosteroneLog(){
       (st.enhanced.compounds||[]).forEach(function(c){
         if((c.name||'').toLowerCase().indexOf('testosterone')===-1) return;
         var ec = (typeof ENHANCEMENT_COMPOUNDS!=='undefined') ? ENHANCEMENT_COMPOUNDS.find(function(x){return x.id===c.id;}) : null;
-        var doseNum=parseDec(c.dose)||0; if(!doseNum) return;
-        var unit=c.unit||(ec&&ec.unit)||'mg/week';
-        var injDays=_pkInjectionDays(c, cycleLen, startDow);
-        var injsPerWeek=injDays.filter(function(d){return d<7;}).length||1;
-        pushSched(c, unit==='mg/week'?doseNum/injsPerWeek:doseNum);
+        if(!(parseDec(c.dose)>0)) return;
+        // The SAME conversion the injection generator uses (_enhDosePerInjection in
+        // tab-stack.js), so this curve is built from the amount actually injected.
+        // The local version handled only mg/week on a weekday schedule: a compound on
+        // mg/day, mg/EOD or an interval cadence fell through to `doseNum` and was
+        // plotted as if the whole weekly rate went in at every single injection.
+        pushSched(c, parseDec(_blDosePerInjection(c, ec)) || 0);
       });
     }
   });
@@ -325,8 +358,8 @@ function _blBuildLines(){
         var doseNum = parseDec(c.dose)||0; if(!doseNum) return;
         var unit = c.unit || ec.unit || 'mg/week';
         var injDays = _pkInjectionDays(c, cycleLen, startDow); if(!injDays.length) return;
-        var injsPerWeek = injDays.filter(function(d){ return d<7; }).length || 1;
-        var dpi = unit==='mg/week' ? doseNum/injsPerWeek : doseNum;
+        // Same shared conversion as the free-T log above — see _blDosePerInjection.
+        var dpi = parseDec(_blDosePerInjection(c, ec)) || 0; if(!dpi) return;
         lines.push({ id:'enh_'+si+'_'+c.id, pkId:c.id, name:c.name, color:c.dot||ec.dot||'#a855f7',
           kind:'enhanced', unit:((unit||'mg/week').split('/')[0]||'mg'), startDate:startDate, cycleLen:cycleLen, sub:stackLabel,
           lastInjDay:injDays[injDays.length-1], tmaxPad:_blTmax(hl), curve:_pkCurveFineAbs(injDays, dpi, hl, cycleLen) });
