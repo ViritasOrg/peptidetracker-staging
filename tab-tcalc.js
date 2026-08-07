@@ -1089,6 +1089,40 @@ function _tcIsTcalcOwned(cycleId){
 // round-tripped entries, inactive entries, and any dose whose unit is not mg — a
 // silent unit mix-up here would corrupt the curve, so unknown units are dropped
 // rather than assumed.
+// The schedule T-Calc shows is the stack's stored injections — not a private copy.
+//
+// _tcp.manualLog used to be a SECOND store: T-Calc wrote it to tcalc_profiles.json
+// and pushed a copy into injections.json, one way, never reading back. When the two
+// diverged you got the exact report of 2026-08-06 — "t-calc is empty ie has nothing
+// in it, even though the t-calc injections are in the today view". Nothing could
+// reconcile them because nothing ever read back.
+//
+// manualLog is now a CACHE of those rows, refilled from the stack on load. The
+// stored injections are the source of truth; simplePlan stays in the profile because
+// it is the plan's INPUT (compound, dose, cadence, start), not a derived schedule.
+function _tcLoadLogFromStack(){
+  if(!_tcp)return false;
+  var cid=_tcTargetCycleId();
+  if(!cid)return false;                       // no stack → nothing to read
+  if(typeof _injectionsCache==='undefined'||!_injectionsCache)return false;
+  var rows=[];
+  Object.keys(_injectionsCache).forEach(function(dk){
+    (_injectionsCache[dk]||[]).forEach(function(e){
+      if(!e||e.tier!=='trt')return;
+      if(e.active===false)return;
+      if(String(e.cycle_id||'')!==cid)return;  // this stack's testosterone only
+      var unit=(e.unit||'mg').toLowerCase();
+      if(unit!=='mg')return;                   // a unit mix-up would corrupt the curve
+      var mg=parseDec(e.dose);
+      if(!(mg>0))return;
+      rows.push({compId:e.compound_id,doseMg:String(mg),date:e.date,seriesId:e.series_id||undefined});
+    });
+  });
+  rows.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
+  _tcp.manualLog=rows;
+  return true;
+}
+
 function _tcProtocolInjections(){
   if (typeof _injectionsCache === 'undefined' || !_injectionsCache) return [];
   var out = [];
@@ -3035,7 +3069,11 @@ function _tcDrawChart(canvasId, total, stats, plan, sched, calFT, measuredFT) {
 // below stays scoped to T-Calc testosterone only.
 function _tcTargetCycleId(){
   var tid=_tcp&&_tcp.targetStackId;
-  if(tid&&typeof _userStacks!=='undefined'&&_userStacks&&_userStacks.some(function(s){return s&&s.id===tid;}))return 'tcalc:'+tid;
+  // The STACK's own cycle id — not a 'tcalc:<id>' namespace of its own. That
+  // namespace existed so T-Calc's writes could not collide with the stack's, which
+  // is precisely what produced two testosterone injections on the same day: same
+  // compound, two cycle ids, both rendering. One container, one series.
+  if(tid&&typeof _userStacks!=='undefined'&&_userStacks&&_userStacks.some(function(s){return s&&s.id===tid;}))return tid;
   // No stack, no cycle id. "No injections can exist outside of a stack object"
   // (Henrik 2026-08-06). The old global 'tcalc' bucket rendered unconditionally —
   // _tcalcEntryVisible returns true for it without checking any stack — so an
@@ -3289,6 +3327,11 @@ function buildTCalc() {
     _tcpSessionLoaded = true;
     _tcLoadProfile();
   }
+
+  // Read the schedule out of the stack every time this tab is built. The profile
+  // supplies the plan's inputs; the stack supplies the injections. T-Calc showing
+  // something different from what is stored is the failure this removes.
+  _tcLoadLogFromStack();
 
   if (_tcBwEntries === null && !_tcBwLoading) {
     _tcBwLoading = true;

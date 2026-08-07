@@ -57,6 +57,65 @@ Every compound tier (Peptides, TRT, Enhanced) must have **exactly the same UI fe
 
 When a new compound tier feature is added, check all other tiers before closing the PR.
 
+## ⚠️ THE STACK IS THE CONTAINER — NO INJECTIONS OUTSIDE ONE ⚠️
+Henrik, 2026-08-06: *"T-calc should be used in the stack wizard, and testosterone
+injections should be part of a stack. No injections can exist outside of a stack
+'object'."* And: *"T-calc needs to save and read injections to a stack."*
+
+**The model:**
+1. A **stack (protocol)** owns its compounds and its cycle — `id` (frozen) and
+   `cycle_start`. It is the only container.
+2. **`injections.json` is the single source of truth** for the schedule. Every
+   injection carries `cycle_id = <stack id>`.
+3. **T-Calc is a planner over one stack's testosterone**, not a parallel store. It
+   READS that stack's injections (`_tcLoadLogFromStack`, on every build) and WRITES
+   edits back under the same stack `cycle_id`. `_tcp.simplePlan` stays in the profile
+   because it is the plan's *input* — compound, dose, cadence, start — never the
+   derived dated schedule.
+
+**What triggered this (2026-08-06):** `_tcp.manualLog` lived in `tcalc_profiles.json`
+and was pushed ONE WAY into `injections.json` under its own `tcalc` / `tcalc:<id>`
+cycle namespace. Two stores for the same facts, and nothing ever read back. Two
+symptoms, one cause:
+- **T-Calc rendered empty while its injections still showed in Today** — the profile
+  lost its log; the pushed injections were still stored, and nothing could reconcile
+  them.
+- **Two testosterone injections on the same day** — T-Calc wrote under `tcalc*` while
+  the stack wrote its own testosterone under the stack's `cycle_id`. Same compound,
+  two cycle ids, both rendering. `_reconcileStackTestoSource` never fired, because it
+  begins `if(_tcp.targetStackId!==stack.id)return;` — its precondition is exactly the
+  case that was going wrong.
+
+**The rules:**
+- Never reintroduce a `tcalc`, `manual`, or any other cycle id that is not a stack id.
+  Legacy rows still RENDER (refusing to write a new one must never make stored
+  injections vanish) but nothing new is written outside a stack.
+- Never store a dated schedule anywhere but `injections.json`. A second copy is what
+  this section exists to prevent — plan *parameters* are fine, plan *output* is not.
+- T-Calc must read on open. A planner that only writes cannot detect that it has
+  drifted from what is stored.
+- Saving a T-Calc schedule goes through **Save to protocol**: pick an existing stack
+  or create one (TRT, or Enhanced for tier 3 only — greyed out below that, and
+  refused in the action, not just the button).
+
+## ⚠️ AN ACTIVE PROTOCOL RENDERS — AND ACTIVATION STARTS ITS CYCLE ⚠️
+Henrik, 2026-08-06: *"An active protocol must render, but stack creation needs to
+make start date the date it is activated if not set prior to."*
+
+- `refreshInjectionsCache` adds a cycle id for **every active stack**, with or without
+  a `cycle_start`. Requiring one meant an active protocol with no start date
+  contributed nothing and every dose it owned was filtered out — 679 stored
+  injections and a Today showing only the T-Calc entry.
+- `_ensureCycleStart(idx)` sets `cycle_start` to today when unset, on all four
+  activation paths: toggling on, `useStack`, the wizard's first protocol, and starting
+  from a template. An existing date is never overwritten.
+- **ORDER MATTERS.** `_deriveStackCycleId()` includes the start date, so setting one
+  on a stack whose id is not yet frozen MOVES its cycle id and orphans every injection
+  already stored against `name_nostart`. `_ensureStackId` runs first — that is what it
+  is for — then the date is set. Tests assert this ordering.
+- Today never claims "Nothing scheduled today" while stored doses were filtered out.
+  It says how many are hidden, names the protocol, and offers a way through to Plan.
+
 ## ⚠️ RESEARCH SCOPE — ALWAYS THE FULL CATALOGUE ⚠️
 When conducting research, building databases, or compiling reference data for these apps:
 - **Never** scope research to only the compounds Henrik is currently using
