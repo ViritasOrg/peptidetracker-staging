@@ -1352,36 +1352,142 @@ function _tcIsTcalcOwned(cycleId){
 // manualLog is now a CACHE of those rows, refilled from the stack on load. The
 // stored injections are the source of truth; simplePlan stays in the profile because
 // it is the plan's INPUT (compound, dose, cadence, start), not a derived schedule.
+// ── A CHECKED INJECTION IS THE PAST. FULL STOP. ──────────────────────────────
+// Henrik, 2026-08-07: "any checked injection needs to be counted regardless of which
+// stack it actually belonged to. Also the Stack concept might be changed or updated
+// in the future, so the checked injections is the only source of truth to the past."
+//
+// This does NOT contradict "the stack is the container". That rule governs WRITING:
+// nothing new is ever written outside a stack. This one governs READING the past:
+// when reconstructing what is already in the body, the stack an injection was filed
+// under is irrelevant history. Ticking the box is the assertion that it went in.
+//
+// So the past is selected on `logged`, and on nothing else:
+//   * NOT on cycle_id      — a protocol can be renamed, restored, replaced or deleted
+//                            and its derived cycle id moves with it. The dose does not
+//                            un-happen.
+//   * NOT on the stack being active — switching a protocol off is not a retraction.
+//   * NOT on `active`      — that flag retires a SCHEDULE, not a recorded event.
+//   * NOT on a date window — see _TC_HISTORY_FROM below.
+// A past-dated dose that was never ticked is a plan the user did not confirm taking,
+// and is deliberately excluded: the curve shows what went in, not what was intended.
+//
+// What triggered this (2026-08-07): six weeks of logged TRT — two Testoviron Depot
+// then 100 mg Nebido E2D from 26 June — rendered as roughly 40% of the real
+// accumulated level. Three filters compounded: refreshInjectionsCache fetches only
+// today-14d, drops any cycle id whose stack is inactive, and this function then kept
+// only the bound stack's id. With Nebido's 56-day half-life essentially nothing from
+// June had cleared, so two thirds of the accumulated dose was simply invisible.
+
+// How far back the history reaches. 400 days, confirmed by Henrik 2026-08-07 against
+// the real-world washout of the longest-acting ester in the catalogue. It is a
+// generous bound however you measure that: at the app's settled Nebido half-life of
+// 56 days it is ~7.1 half-lives, leaving under 1% of a dose contributing.
+//
+// This is a PHARMACOLOGICAL bound, not a convenience one, and that is the whole
+// difference from the 14-day cache window this replaces. Anything dropped by it has
+// decayed to nothing; the 14-day window dropped doses that were still most of the
+// level in the body.
+var _TC_HISTORY_LOOKBACK_DAYS = 400;
+var _TC_HISTORY_HORIZON_DAYS  = 400;
+var _tcHistory       = null;   // logged TRT injections in that window — null until fetched
+var _tcHistoryState  = 'idle'; // idle | loading | ready | error
+
+// The injections T-Calc treats as the past. Read from _tcHistory (all time), never
+// from _injectionsCache — that cache is scoped to what Today needs and is the reason
+// this was broken.
+function _tcLoggedHistory(){
+  return (_tcHistory || []).slice();
+}
+
+async function _tcFetchHistory(force){
+  if (_tcHistoryState === 'loading') return;
+  if (_tcHistory && !force) return;
+  if (typeof authHeaders !== 'function') return;
+  _tcHistoryState = 'loading';
+  try{
+    var from = new Date(NOW.getTime() - _TC_HISTORY_LOOKBACK_DAYS * 86400000);
+    var to   = new Date(NOW.getTime() + _TC_HISTORY_HORIZON_DAYS  * 86400000);
+    var r  = await fetch(AGENT_URL + '/injections?date_from=' + dateKey(from) +
+                         '&date_to=' + dateKey(to) + '&active_only=false',
+                         {headers: authHeaders()});
+    if (!r.ok){ _logHttp('tcHistory', r.status, '/injections'); _tcHistoryState = 'error'; return; }
+    var all = await r.json();
+    var rows = [];
+    (Array.isArray(all) ? all : []).forEach(function(e){
+      if (!e || e.tier !== 'trt') return;
+      if (!e.logged) return;                        // checked, or it is not the past
+      var unit = (e.unit || 'mg').toLowerCase();
+      if (unit !== 'mg') return;                    // a unit mix-up would corrupt the curve
+      var mg = parseDec(e.dose);
+      if (!(mg > 0)) return;
+      rows.push({compId: e.compound_id, doseMg: String(mg), date: e.date,
+                 seriesId: e.series_id || undefined, source: 'logged'});
+    });
+    rows.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
+    _tcHistory      = rows;
+    _tcHistoryState = 'ready';
+  }catch(e){
+    _logErr('tcHistory', e);
+    _tcHistoryState = 'error';
+  }
+  buildTCalc();
+}
+
+// manualLog is the ADVANCED planner's editable list. It is filled from the logged
+// history (the past) plus this stack's own future rows, so opening the tab shows
+// everything that has actually happened rather than a fortnight of it.
+//
+// ⚠️ It must never be narrowed from an incomplete source. Before 2026-08-07 this read
+// _injectionsCache — a 14-day window — and assigned the result over manualLog; the
+// next _tcSaveProfile() then persisted that truncated list into tcalc_profiles.json.
+// Bail out rather than write a partial list.
 function _tcLoadLogFromStack(){
   if(!_tcp)return false;
+  if(_tcHistoryState!=='ready')return false;   // incomplete source → do not touch manualLog
   var cid=_tcTargetCycleId();
-  if(!cid)return false;                       // no stack → nothing to read
-  if(typeof _injectionsCache==='undefined'||!_injectionsCache)return false;
-  var rows=[];
-  Object.keys(_injectionsCache).forEach(function(dk){
-    (_injectionsCache[dk]||[]).forEach(function(e){
-      if(!e||e.tier!=='trt')return;
-      if(e.active===false)return;
-      if(String(e.cycle_id||'')!==cid)return;  // this stack's testosterone only
-      var unit=(e.unit||'mg').toLowerCase();
-      if(unit!=='mg')return;                   // a unit mix-up would corrupt the curve
-      var mg=parseDec(e.dose);
-      if(!(mg>0))return;
-      rows.push({compId:e.compound_id,doseMg:String(mg),date:e.date,seriesId:e.series_id||undefined});
+  var rows=_tcLoggedHistory();
+  var seen={};
+  rows.forEach(function(e){seen[e.compId+'|'+e.date]=true;});
+  // This stack's own FUTURE rows: planned, not yet taken, so they are not in the
+  // logged history but they are what the user is editing.
+  if(cid&&typeof _injectionsCache!=='undefined'&&_injectionsCache){
+    var todayKey=dateKey(NOW);
+    Object.keys(_injectionsCache).forEach(function(dk){
+      (_injectionsCache[dk]||[]).forEach(function(e){
+        if(!e||e.tier!=='trt')return;
+        if(e.logged)return;                       // already covered by the history above
+        if(e.active===false)return;
+        if((e.date||'')<todayKey)return;          // past + unticked is not the past
+        if(String(e.cycle_id||'')!==cid)return;   // this stack's plan only
+        var unit=(e.unit||'mg').toLowerCase();
+        if(unit!=='mg')return;
+        var mg=parseDec(e.dose);
+        if(!(mg>0))return;
+        if(seen[e.compound_id+'|'+e.date])return;
+        seen[e.compound_id+'|'+e.date]=true;
+        rows.push({compId:e.compound_id,doseMg:String(mg),date:e.date,seriesId:e.series_id||undefined});
+      });
     });
-  });
+  }
   rows.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
   _tcp.manualLog=rows;
   return true;
 }
 
+// PLANNED protocol injections — the future. The past comes from _tcLoggedHistory()
+// and nothing else, so this deliberately excludes anything already ticked (that row
+// is in the history, and counting both would double it) and anything past-dated but
+// unticked (a plan the user never confirmed taking).
 function _tcProtocolInjections(){
   if (typeof _injectionsCache === 'undefined' || !_injectionsCache) return [];
-  var out = [];
+  var out = [], todayKey = dateKey(NOW);
   Object.keys(_injectionsCache).forEach(function(dateKeyStr){
     (_injectionsCache[dateKeyStr] || []).forEach(function(e){
       if (!e || e.tier !== 'trt') return;
       if (e.active === false) return;
+      if (e.logged) return;                       // the history owns every checked dose
+      if ((e.date || '') < todayKey) return;      // past + unticked ≠ the past
       if (_tcIsTcalcOwned(e.cycle_id)) return;
       var unit = (e.unit || 'mg').toLowerCase();
       if (unit !== 'mg') return;
@@ -1404,19 +1510,37 @@ function _tcCurveLog(){
   // The greyed-out planner does not contribute. Its data is untouched and comes
   // straight back when the switch is flipped, but a planner that is visibly
   // disabled must not be silently driving the curve.
-  var manual;
-  if (_tcPlannerMode() === 'simple') {
-    manual = _tcSimplePlanInjections();
-  } else {
-    manual = ((_tcp && _tcp.manualLog) || []).filter(function(e){
-      return e && e.date && e.doseMg && parseDec(e.doseMg) > 0;
-    }).map(function(e){
-      return (e.source === 'manual') ? e : Object.assign({}, e, { source: 'manual' });
+  var seen = {}, merged = [];
+  function _add(list){
+    (list || []).forEach(function(e){
+      if (!e || !e.date || !(parseDec(e.doseMg) > 0)) return;
+      var k = e.compId + '|' + e.date;
+      if (seen[k]) return;
+      seen[k] = true;
+      merged.push(e);
     });
   }
-  var seen = {};
-  manual.forEach(function(e){ seen[e.compId + '|' + e.date] = true; });
-  var merged = manual.slice();
+
+  // ── 1. THE PAST, first and outranking everything ───────────────────────────
+  // Every checked injection, whatever stack it was filed under. Added before the
+  // planners so a recorded event always beats a plan for the same day — including a
+  // draft preview, which must be able to change the future without rewriting what
+  // already went in. This layer is what was missing entirely in simple mode: the
+  // curve was built from the plan and the protocol's future rows, so six weeks of
+  // logged TRT contributed nothing (2026-08-07).
+  _add(_tcLoggedHistory());
+
+  // ── 2. the live planner ────────────────────────────────────────────────────
+  // The greyed-out planner does not contribute. Its data is untouched and comes
+  // straight back when the switch is flipped, but a planner that is visibly
+  // disabled must not be silently driving the curve.
+  if (_tcPlannerMode() === 'simple') {
+    _add(_tcSimplePlanInjections());
+  } else {
+    _add(((_tcp && _tcp.manualLog) || []).map(function(e){
+      return (e.source === 'manual') ? e : Object.assign({}, e, { source: 'manual' });
+    }));
+  }
   // From the day the simple plan starts, the plan IS the testosterone schedule —
   // T-Calc is the single place one is built, so a stack's own TRT protocol covering
   // the same days is the same injections described twice. De-duplicating only on an
@@ -1442,15 +1566,32 @@ function _tcCurveLog(){
     var _sp = _tcSimplePlan();
     if (_tcSimplePlanComplete()) planFrom = _sp.startDate || '';
   }
-  _tcProtocolInjections().forEach(function(e){
-    if (planFrom && e.date >= planFrom) return;   // the plan owns this day
-    var k = e.compId + '|' + e.date;
-    if (seen[k]) return;              // manual wins
-    seen[k] = true;
-    merged.push(e);
-  });
+  // ── 3. the protocol's remaining planned future ─────────────────────────────
+  _add(_tcProtocolInjections().filter(function(e){
+    return !(planFrom && e.date >= planFrom);     // the plan owns this day
+  }));
   merged.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
   return merged;
+}
+
+// One line under the chart naming the history it rests on: how many checked
+// injections, and since when. Loading and failure are stated rather than rendered as
+// a quietly-too-low curve.
+function _tcHistoryNoteHtml(){
+  var box = 'padding:8px 16px 0;font-size:11px;line-height:1.5;';
+  if (_tcHistoryState === 'loading' || _tcHistoryState === 'idle')
+    return '<div style="' + box + 'color:var(--muted2)">Loading your logged injections…</div>';
+  if (_tcHistoryState === 'error')
+    return '<div style="' + box + 'color:#e8a020">Could not load your logged injections, so this curve is missing everything you have already taken. ' +
+           '<button onclick="_tcFetchHistory(true)" style="background:none;border:none;color:#e8a020;text-decoration:underline;font-size:11px;cursor:pointer;font-family:inherit;padding:0">Retry</button></div>';
+  var h = _tcLoggedHistory();
+  if (!h.length)
+    return '<div style="' + box + 'color:var(--muted2)">No checked injections yet — this curve is your plan only. Tick doses off in Today and they become your history.</div>';
+  var first = h[0].date;
+  var d = parseLocalDate(first);
+  return '<div style="' + box + 'color:var(--muted2)">Built on <strong style="color:var(--text)">' + h.length +
+         ' checked injection' + (h.length === 1 ? '' : 's') + '</strong> since ' +
+         (d && !isNaN(d.getTime()) ? fmtDate(d) : _esc(first)) + ', plus the plan ahead.</div>';
 }
 
 // How many entries in the curve came from a planned protocol rather than the log.
@@ -3594,6 +3735,9 @@ function buildTCalc() {
   // Read the schedule out of the stack every time this tab is built. The profile
   // supplies the plan's inputs; the stack supplies the injections. T-Calc showing
   // something different from what is stored is the failure this removes.
+  // The past comes from the backend, not from _injectionsCache — that cache spans 14
+  // days and the PK model needs every checked injection that is still contributing.
+  if (_tcHistoryState === 'idle') _tcFetchHistory();
   _tcLoadLogFromStack();
 
   if (_tcBwEntries === null && !_tcBwLoading) {
@@ -3626,6 +3770,10 @@ function buildTCalc() {
   html += '<div class="card-title">PLASMA CURVE</div></div>';
   html += '<span style="font-size:11px;color:var(--muted2)">' + (mftNum > 0 ? 'calibrated · pmol/L' : 'add bloodwork to calibrate') + '</span>';
   html += '</div>';
+  // Say what the curve is standing on. A silent gap in the history reads as a low
+  // number, not as missing data — which is exactly how six weeks of logged TRT went
+  // unnoticed until the level looked wrong (2026-08-07).
+  html += _tcHistoryNoteHtml();
   if (validLog.length > 0) {
     html += '<div style="padding:2px 16px 10px">';
     html += '<div style="display:flex;gap:4px;margin-bottom:8px">';
