@@ -879,7 +879,52 @@ function _tcToggleAdvancedPlanner(el){
   _tcSetPlannerMode((el && el.checked) ? 'advanced' : 'simple');
 }
 
+// ── The plan lives in the stack, not beside it ────────────────────────────────
+// The simple planner used to keep its own {compId, doseMg, cadence, startDate} in
+// tcalc_profiles.json and generate injections from it. That is a testosterone
+// schedule existing outside a stack, which is the thing this app is not allowed to
+// have — and it produced exactly the contradiction reported on 2026-08-07: the plan
+// card read "Testoviron Depot · 75 mg · every 2 days from 4 Aug" while the protocol
+// it was assigned to held Nebido 100 mg, and _tcCurveLog's "the plan owns this day"
+// rule then SUPPRESSED the stack's real injections in favour of the stale plan.
+//
+// Once a stack is chosen, the stack's TRT config IS the plan: the card reads from it
+// and every edit writes back to it. _tcp.simplePlan remains only for the unassigned
+// case — a draft being built before "Save to stack" gives it a home.
+//
+// The planner can express ONE ester on ONE cadence. A stack whose TRT tier holds more
+// than one compound cannot be represented by it, so that stack is not adopted here
+// and the advanced planner stays the place to edit it (see _tcSimplePlanStack).
+function _tcSimplePlanStack(){
+  var tid = _tcp && _tcp.targetStackId;
+  if (!tid || typeof _userStacks === 'undefined' || !_userStacks) return null;
+  var st = _userStacks.find(function(s){ return s && s.id === tid; });
+  if (!st || !st.trt || !st.trt.enabled) return null;
+  var comps = st.trt.compounds || [];
+  if (comps.length !== 1) return null;
+  return st;
+}
+
+// The plan as the bound stack states it. Cadence comes from the same freqVal/freqUnit
+// pair the injection generator reads, so what the card shows and what gets injected
+// cannot drift apart.
+function _tcPlanFromStack(st){
+  var c = (st.trt.compounds || [])[0] || {};
+  var n = parseInt(c.freqVal, 10); if (!(n > 0)) n = 1;
+  var unit = (c.freqUnit === 'weeks') ? 'week' : 'day';
+  return {
+    compId:      c.id || '',
+    doseMg:      String(c.dose || ''),
+    cadenceN:    n,
+    cadenceUnit: unit,
+    cadenceDays: _tcCadenceToDays(n, unit),
+    startDate:   c.start_date || st.cycle_start || ''
+  };
+}
+
 function _tcSimplePlan(){
+  var _st = _tcSimplePlanStack();
+  if (_st) return _tcPlanFromStack(_st);
   var p = (_tcp && _tcp.simplePlan) || {};
   var days = parseDec(p.cadenceDays) || 0;
   var n    = parseInt(p.cadenceN, 10) || 0;
@@ -903,7 +948,58 @@ function _tcBlankSimplePlan(){
   return {compId:'', doseMg:'', cadenceN:0, cadenceUnit:'week', cadenceDays:0, startDate:''};
 }
 
-function _tcSetSimplePlanField(field, value){
+// Push an edited plan into the bound stack's TRT compound, then regenerate that
+// stack's injections. This is the only write path for a bound plan — nothing is kept
+// in the profile for it, so the card can never show a schedule the stack does not have.
+async function _tcWritePlanToStack(st, plan){
+  var c = (st.trt.compounds || [])[0];
+  if (!c) return;
+  var oldId = c.id;
+  if (plan.compId && plan.compId !== c.id){
+    c.id = plan.compId;
+    var cd = _tcCompInfo(plan.compId);
+    c.name = (cd && cd.name) || plan.compId;
+    c.dot  = (cd && cd.dot)  || c.dot;
+  }
+  if (plan.doseMg    !== undefined) c.dose = String(plan.doseMg);
+  if (plan.startDate !== undefined) c.start_date = plan.startDate || '';
+  if (plan.cadenceN){
+    c.freqVal  = plan.cadenceN;
+    c.freqUnit = (plan.cadenceUnit === 'week') ? 'weeks' : 'days';
+    // An interval cadence and a weekday list are two different schedules and the
+    // generator prefers the weekday list. Clearing it is what makes "every N days"
+    // actually take effect.
+    c.days = null;
+  }
+  c.unit = 'mg';
+  if (typeof saveStacksToBackend === 'function'){ try { await saveStacksToBackend(); } catch(_e){} }
+
+  var cyc = (typeof _stackCycleId === 'function') ? _stackCycleId(st) : (st.id || '');
+  var h   = (typeof authHeaders === 'function') ? authHeaders() : null;
+  var now = new Date(); now.setHours(0,0,0,0);
+  var td  = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  if (h && cyc){
+    // Drop the old ester's future injections too — switching Testoviron → Nebido must
+    // not leave the Testoviron shots standing beside the new ones.
+    var ids = (oldId && oldId !== c.id) ? [oldId, c.id] : [c.id];
+    for (var i = 0; i < ids.length; i++){
+      try { await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(cyc)+'&compound_id='+encodeURIComponent(ids[i])+'&from_date='+td, {method:'DELETE', headers:h}); } catch(_e){}
+    }
+  }
+  if (typeof generateAndPushInjections === 'function') await generateAndPushInjections(st, now);
+  if (typeof refreshInjectionsCache === 'function')    await refreshInjectionsCache();
+  buildTCalc();
+  if (typeof buildStackStore === 'function') buildStackStore();
+  if (typeof buildToday === 'function')      buildToday();
+}
+
+async function _tcSetSimplePlanField(field, value){
+  var st = _tcSimplePlanStack();
+  if (st){
+    var plan = {}; plan[field] = value;
+    await _tcWritePlanToStack(st, plan);
+    return;
+  }
   if (!_tcp.simplePlan) _tcp.simplePlan = _tcBlankSimplePlan();
   _tcp.simplePlan[field] = value;
   _tcSaveProfile();
@@ -913,14 +1009,22 @@ function _tcSetSimplePlanField(field, value){
 // Cadence is two fields but one stored interval — set either and cadenceDays is
 // recomputed from both, which is also the point where a legacy fractional interval
 // is replaced by the user's explicit choice.
-function _tcSetSimplePlanCadence(field, value){
-  if (!_tcp.simplePlan) _tcp.simplePlan = _tcBlankSimplePlan();
-  var cur = _tcSimplePlan();
+async function _tcSetSimplePlanCadence(field, value){
+  var cur  = _tcSimplePlan();
   var n    = field === 'cadenceN'    ? parseInt(value, 10) || 0 : cur.cadenceN;
   var unit = field === 'cadenceUnit' ? value                    : cur.cadenceUnit;
   if (!_TC_CADENCE_UNITS[unit]) unit = 'week';
   if (n > _TC_CADENCE_MAX_N) n = _TC_CADENCE_MAX_N;
   if (n < 0) n = 0;
+  var _st = _tcSimplePlanStack();
+  if (_st){
+    // A stack's TRT cadence is whole days or whole weeks — 'month' has no
+    // representation in freqUnit, so it is stored as its day count.
+    if (unit === 'month'){ n = n * 30; unit = 'day'; }
+    await _tcWritePlanToStack(_st, {cadenceN:n, cadenceUnit:unit});
+    return;
+  }
+  if (!_tcp.simplePlan) _tcp.simplePlan = _tcBlankSimplePlan();
   _tcp.simplePlan.cadenceN    = n;
   _tcp.simplePlan.cadenceUnit = unit;
   _tcp.simplePlan.cadenceDays = _tcCadenceToDays(n, unit);
@@ -943,6 +1047,10 @@ var _TC_SIMPLE_MAX_INJ      = 800;
 // Expand the plan into the same {compId, doseMg, date} shape the log uses. Generated
 // on the fly — never written into manualLog, which stays the user's own data.
 function _tcSimplePlanInjections(){
+  // A plan that lives in a stack has already been turned into stored injections by
+  // that stack's generator. Expanding it again here would be the same schedule from
+  // two sources — the double-count this whole rework exists to remove.
+  if (_tcSimplePlanStack()) return [];
   if (!_tcSimplePlanComplete()) return [];
   var p = _tcSimplePlan();
   var start = parseLocalDate(p.startDate);
@@ -990,7 +1098,10 @@ function _tcSimplePlannerHtml(iSty, lSty){
   h += '<div class="card-header"><div class="card-title-wrap">';
   h += '<div class="card-dot" style="background:' + (live ? '#5ad1b0' : 'var(--muted2)') + '"></div>';
   h += '<div class="card-title">TESTOSTERONE PLAN</div></div>';
-  h += '<span style="font-size:10px;color:var(--muted2)">' + (live ? 'active' : 'off — advanced planner is on') + '</span>';
+  var boundSt = _tcSimplePlanStack();
+  h += '<span style="font-size:10px;color:var(--muted2)">' +
+       (live ? (boundSt ? _esc(boundSt.name || 'protocol') : 'not saved to a protocol') : 'off — advanced planner is on') +
+       '</span>';
   h += '</div>';
   h += '<div style="padding:14px 16px;' + dim + '">';
 
@@ -1035,11 +1146,18 @@ function _tcSimplePlannerHtml(iSty, lSty){
 
   if (live) {
     if (_tcSimplePlanComplete()) {
-      var n = _tcSimplePlanInjections().length;
+      // Bound to a stack, the injections are the stack's stored ones, not a local
+      // expansion — count those, so the card never claims a schedule the protocol
+      // does not actually hold.
+      var _bound = _tcSimplePlanStack();
+      var n  = _bound ? _tcProtocolInjections().length : _tcSimplePlanInjections().length;
       var wk = (parseDec(p.doseMg) * 7 / p.cadenceDays);
       h += '<div style="margin-top:12px;background:rgba(90,209,176,0.08);border:1px solid rgba(90,209,176,0.25);border-radius:10px;padding:10px 12px">' +
-        '<div style="font-size:12px;color:#5ad1b0;font-weight:600">' + (Math.round(wk * 10) / 10) + ' mg/week · ' + n + ' injections projected</div>' +
-        '<div style="font-size:11px;color:var(--muted2);margin-top:3px">Shown in the plasma curve at the top of this page.</div>' +
+        '<div style="font-size:12px;color:#5ad1b0;font-weight:600">' + (Math.round(wk * 10) / 10) + ' mg/week · ' + n + ' injections scheduled</div>' +
+        '<div style="font-size:11px;color:var(--muted2);margin-top:3px">' +
+          (_bound ? ('Stored in ' + _esc(_bound.name || 'this protocol') + '. Editing any field above rewrites that protocol’s testosterone schedule.')
+                  : 'Shown in the plasma curve at the top of this page. Use Save to stack to store it in a protocol.') +
+        '</div>' +
       '</div>';
     } else {
       h += '<div style="margin-top:12px;font-size:11px;color:var(--muted2);line-height:1.5">Fill in all four and the curve above will render this plan.</div>';
@@ -1174,8 +1292,14 @@ function _tcCurveLog(){
   // curve that was dominated by the protocol underneath it.
   // Dates BEFORE the plan starts are left alone: those are real past dosing, and the
   // plan says nothing about them.
+  //
+  // ⚠️ Only an UNBOUND plan may do this. When the plan is bound to a stack the
+  // protocol injections it would suppress are its own output, and suppressing them
+  // left the curve with nothing but a locally generated schedule — which is how a
+  // stale "Testoviron Depot, 4 Aug" plan came to override a protocol holding Nebido
+  // (2026-08-07). Bound: the stack's stored injections ARE the curve.
   var planFrom = '';
-  if (_tcPlannerMode() === 'simple') {
+  if (_tcPlannerMode() === 'simple' && !_tcSimplePlanStack()) {
     var _sp = _tcSimplePlan();
     if (_tcSimplePlanComplete()) planFrom = _sp.startDate || '';
   }

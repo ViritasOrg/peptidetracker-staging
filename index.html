@@ -280,6 +280,12 @@ var _injectionsCache={};
 // Set by refreshInjectionsCache: how many stored injections were filtered out and
 // which protocol each belonged to. Read by buildToday's empty state.
 var _injHidden={count:0,stacks:{},noStart:[]};
+// Set by _genInjBatches: compounds a stack deliberately did NOT schedule because the
+// same molecule is already scheduled by another tier of that stack (today: enhanced
+// testosterone, when the TRT tier carries testosterone). Keyed by stack id. The stack
+// editor reads it to say which entry is dormant and why — suppressing a dose silently
+// is indistinguishable from losing it.
+var _injSuppressed={};
 var _injCacheReady=false;
 let _userProtocol=null;
 let _protocolLoaded=false;

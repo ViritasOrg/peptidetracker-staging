@@ -756,6 +756,46 @@ function _enhHitsDay(c,d,cycleStart){
   }
   return !(c.days&&c.days.length) || c.days.includes(d.getDay());
 }
+// Calendar days between two consecutive injections of an enhanced compound. Interval
+// cadence states it outright; weekday cadence spreads n injections over 7 days.
+function _enhIntervalDays(c){
+  if(_enhCadence(c)==='interval'){var s=_enhFreqDays(c);return s>0?s:1;}
+  var n=(c&&c.days&&c.days.length)?c.days.length:7;
+  return 7/n;
+}
+// A configured enhanced dose is a RATE ("350 mg/week"), not the amount in the syringe.
+// An injection record stores an amount, so the rate has to be converted before it is
+// written.
+//
+// The generator was the one reader that did not convert: it stored 350 with the unit
+// "mg/week" verbatim, so Today rendered "Testosterone Undecanoate (Nebido) 350 mg/week"
+// directly beneath a real "Nebido 100 mg" shot, and the two read as rival doses of the
+// same compound (reported 2026-08-07). tab-blood.js has always divided by injections
+// per week for its curve — this is the same conversion, generalised to every cadence
+// and every "/period" unit the dose dropdown offers.
+//
+// Units with no "/period" suffix (mg, ml, IU, %) are already per-dose and pass through
+// untouched, value and unit alike.
+function _enhDosePerInjection(c){
+  var raw=String((c&&c.dose)||'').trim();
+  var unit=String((c&&c.unit)||'');
+  var slash=unit.indexOf('/');
+  if(slash<0)return {dose:raw,unit:unit};
+  var base=unit.slice(0,slash);
+  var amount=parseDec(raw);
+  if(!(amount>0))return {dose:raw,unit:base};
+  var per=unit.slice(slash+1).toLowerCase();
+  var periodDays=(per==='week')?7:(per==='eod')?2:1;
+  var mg=(amount/periodDays)*_enhIntervalDays(c);
+  return {dose:String(Math.round(mg*10)/10),unit:base};
+}
+// Is this enhanced-tier entry a testosterone ester? Matched on the compound NAME, not
+// the id: the TRT and Enhanced catalogues key the same molecule differently ('nebido'
+// vs the backend catalogue's own id), so the id says nothing about what it is. This is
+// the same predicate tab-blood.js uses to route testosterone into the free-T line.
+function _isEnhTestosterone(c){
+  return String((c&&c.name)||'').toLowerCase().indexOf('testosterone')!==-1;
+}
 // Renders the schedule control: mode chips, then either weekday chips or an interval
 // input. `pfx` is 'edit' or 'wiz' so the same markup drives both the stack editor and
 // the wizard — they had duplicate day-chip blocks before this.
@@ -1791,6 +1831,17 @@ function wizToggleEnhTime(id,t){
 }
 function editSetEnhAmPm(id,on){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.amPm=!!on;_collectEditInputs();renderStackEditor();}
 function editSetEnhDays(id,di){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});renderStackEditor();}
+// Why an enhanced testosterone entry is sitting dormant. Reads the buffer being
+// edited, so the note appears and disappears as the TRT tier is changed rather than
+// lagging a save behind. Empty string when the entry does generate injections.
+function _enhDormantNoteHtml(c,stackLike){
+  if(!_isEnhTestosterone(c))return '';
+  if(!(stackLike&&stackLike.trt&&stackLike.trt.enabled&&(stackLike.trt.compounds||[]).length))return '';
+  return '<div style="background:rgba(232,168,32,0.08);border:1px solid rgba(232,168,32,0.35);border-radius:8px;padding:8px 10px;margin-bottom:8px">'
+    +'<div style="font-size:11px;font-weight:700;color:#e8a020;margin-bottom:2px">Not scheduled — the TRT tier carries testosterone</div>'
+    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5">A protocol injects testosterone from one tier only, so this entry generates no doses while the TRT tier has an ester configured. Its settings are kept — remove the TRT ester and it starts scheduling again.</div>'
+    +'</div>';
+}
 function _renderEditEnhanced(enh){
   if(!enh)enh={enabled:false,compounds:[]};
   var sel=enh.compounds||[];
@@ -1809,6 +1860,7 @@ function _renderEditEnhanced(enh){
         // the catalogue amPm flag). The injection builder already honours selData.amPm.
         var _amPm=(selData.amPm!==undefined?!!selData.amPm:!!c.amPm);
         html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';
+        html+=_enhDormantNoteHtml(c,_editBuf);
         html+='<div class="cfg-row" style="display:flex;align-items:center;justify-content:space-between"><div class="cfg-lbl" style="margin:0">Split across AM / Pre-GYM / PM</div><div onclick="editSetEnhAmPm(\''+c.id+'\','+(!_amPm)+')" style="cursor:pointer"><div class="toggle-sw'+(_amPm?' on':'')+'"></div></div></div>';
         if(_amPm){
           var _eUnit=(c.unit||'IU').split('/')[0];
@@ -2218,6 +2270,7 @@ function wizStepEnhanced(body,footer){
       html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="wizToggleEnhancedCompound(\''+c.id+'\')" style="margin-bottom:'+(isSel?'0':'8px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div><div class="pep-meta">'+_esc(c.group)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';
       if(isSel&&selData){
         html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';
+        html+=_enhDormantNoteHtml(c,_wiz);
         if(c.amPm){
           var _wUnit=(c.unit||'IU').split('/')[0];
           var _wTimes=_enhTimes(selData);
@@ -2495,9 +2548,30 @@ function _genInjBatches(stack,cycleId,fromDate){
     });
   }
 
+  // ── One testosterone stream per stack ──────────────────────────────────────
+  // Testosterone in the TRT tier and testosterone in the Enhanced tier of the SAME
+  // stack are one molecule in one body. Both tiers generated their own injections, so
+  // a single protocol put two testosterone rows on the same day — reported 2026-08-07,
+  // "In Today view I see double injections with Nebido (ie from TRT AND Enhanced)".
+  // The stack is the container, and it schedules testosterone once.
+  //
+  // The TRT tier wins because it is the tier T-Calc, the free-T model and the Levels
+  // views all read. The Enhanced entry is NOT deleted, edited or hidden: it stays in
+  // the stack, still renders in the Enhanced config with a note saying who is
+  // scheduling it, and starts generating again by itself the moment the TRT tier stops
+  // carrying testosterone. Suppressed entries are recorded so the UI can name them —
+  // a row that vanishes with no explanation is the bug, not the fix.
+  var _trtOwnsTesto=!!(stack.trt&&stack.trt.enabled&&(stack.trt.compounds||[]).length);
+  if(typeof _injSuppressed!=='undefined'&&_injSuppressed)_injSuppressed[stack.id||cycleId]=[];
+
   // Enhanced compounds
   if(stack.enhanced&&stack.enhanced.enabled){
     (stack.enhanced.compounds||[]).forEach(function(c){
+      if(_trtOwnsTesto&&_isEnhTestosterone(c)){
+        if(typeof _injSuppressed!=='undefined'&&_injSuppressed&&_injSuppressed[stack.id||cycleId])
+          _injSuppressed[stack.id||cycleId].push({id:c.id,name:c.name||c.id,reason:'trt'});
+        return;
+      }
       var dot=c.dot||'#a855f7';
       var eCat=(typeof ENHANCEMENT_COMPOUNDS!=='undefined')?(ENHANCEMENT_COMPOUNDS||[]).find(function(ec){return ec.id===c.id;}):null;
       var isAmPm=c.amPm||(eCat&&eCat.amPm);
@@ -2511,7 +2585,8 @@ function _genInjBatches(stack,cycleId,fromDate){
             if(c['dose_'+k]&&parseDec(c['dose_'+k])!==0)compEntries.push({cycle_id:cycleId,date:dk,compound_id:c.id,compound_name:c.name,tier:'enhanced',dose:c['dose_'+k],unit:baseUnit,dot:dot,time_of_day:t,active:true,logged:false});
           });
         }else{
-          compEntries.push({cycle_id:cycleId,date:dk,compound_id:c.id,compound_name:c.name,tier:'enhanced',dose:c.dose||'',unit:c.unit||'',dot:dot,time_of_day:null,active:true,logged:false});
+          var _pd=_enhDosePerInjection(c);
+          compEntries.push({cycle_id:cycleId,date:dk,compound_id:c.id,compound_name:c.name,tier:'enhanced',dose:_pd.dose,unit:_pd.unit,dot:dot,time_of_day:null,active:true,logged:false});
         }
       }
       if(compEntries.length)batches.push({compound_id:c.id,from_date:dateKey(genStart),entries:compEntries});
