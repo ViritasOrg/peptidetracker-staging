@@ -922,9 +922,45 @@ function _tcPlanFromStack(st){
   };
 }
 
+// ── Edits are a draft until Save is pressed ──────────────────────────────────
+// Writing each keystroke straight into the protocol was silent: "right now it
+// redraws the graph but how do I know if this update actually rewrote the TRT
+// schedule?" (Henrik 2026-08-07). Rewriting a stored schedule is not something to
+// infer from a chart moving.
+//
+// So a bound plan edits an in-memory draft. The curve previews it — that is what
+// T-Calc is for — but the card says in words that the protocol still holds the old
+// values, and nothing reaches the backend until Save. Discard drops the draft.
+//
+// The draft is deliberately NOT persisted anywhere. A half-finished plan surviving a
+// reload is another store that can disagree with the protocol, which is the whole
+// class of bug this tab has been fighting.
+var _tcPlanDraft = null;   // {stackId, compId, doseMg, cadenceN, cadenceUnit, cadenceDays, startDate}
+
+function _tcDraftFor(st){
+  return (_tcPlanDraft && st && _tcPlanDraft.stackId === st.id) ? _tcPlanDraft : null;
+}
+
+// What the protocol actually holds right now, ignoring any draft on top of it.
+function _tcStoredPlan(){
+  var st = _tcSimplePlanStack();
+  return st ? _tcPlanFromStack(st) : null;
+}
+
+var _TC_PLAN_FIELDS = ['compId','doseMg','cadenceN','cadenceUnit','cadenceDays','startDate'];
+
+// Which fields the draft would change. Empty = nothing to save.
+function _tcPlanChanges(){
+  var st = _tcSimplePlanStack(); if (!st) return [];
+  var d  = _tcDraftFor(st);      if (!d)  return [];
+  var stored = _tcPlanFromStack(st);
+  return _TC_PLAN_FIELDS.filter(function(k){ return String(d[k]) !== String(stored[k]); });
+}
+function _tcPlanDirty(){ return _tcPlanChanges().length > 0; }
+
 function _tcSimplePlan(){
   var _st = _tcSimplePlanStack();
-  if (_st) return _tcPlanFromStack(_st);
+  if (_st) return _tcDraftFor(_st) || _tcPlanFromStack(_st);
   var p = (_tcp && _tcp.simplePlan) || {};
   var days = parseDec(p.cadenceDays) || 0;
   var n    = parseInt(p.cadenceN, 10) || 0;
@@ -993,11 +1029,69 @@ async function _tcWritePlanToStack(st, plan){
   if (typeof buildToday === 'function')      buildToday();
 }
 
-async function _tcSetSimplePlanField(field, value){
+// ── Save / Discard ───────────────────────────────────────────────────────────
+// The ONLY path from a draft to the protocol. Nothing else writes.
+async function _tcSavePlanToStack(btnId){
+  var st = _tcSimplePlanStack();
+  var d  = st && _tcDraftFor(st);
+  if (!st || !d || !_tcPlanDirty()) return;
+  var btn = btnId && document.getElementById(btnId);
+  if (btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
+  var plan = {};
+  _TC_PLAN_FIELDS.forEach(function(k){ plan[k] = d[k]; });
+  try{
+    await _tcWritePlanToStack(st, plan);
+    _tcPlanDraft = null;
+    _tcPlanSavedAt = Date.now();   // drives the "Saved" confirmation on the card
+  }catch(e){
+    _logErr('tcSavePlan', e);
+    if (btn){ btn.disabled = false; btn.textContent = 'Save failed — try again'; }
+    return;
+  }
+  buildTCalc();
+}
+// How long the post-save confirmation stays on the card. It is a rendered line, not
+// a toast, so it survives the redraw that follows the save.
+var _tcPlanSavedAt = 0;
+var _TC_SAVED_NOTICE_MS = 20000;
+function _tcJustSaved(){ return _tcPlanSavedAt && (Date.now() - _tcPlanSavedAt) < _TC_SAVED_NOTICE_MS; }
+
+function _tcDiscardPlanDraft(){
+  _tcPlanDraft = null;
+  buildTCalc();
+}
+
+// Plain-language summary of what Save would write, so the button is never a leap of
+// faith. Reads old → new from the protocol and the draft.
+function _tcPlanChangeSummary(){
+  var st = _tcSimplePlanStack(); if (!st) return [];
+  var d  = _tcDraftFor(st);      if (!d)  return [];
+  var was = _tcPlanFromStack(st);
+  var out = [];
+  if (String(d.compId) !== String(was.compId))
+    out.push('Ester: ' + (_tcCompInfo(was.compId).name || was.compId || '—') + ' → ' + (_tcCompInfo(d.compId).name || d.compId || '—'));
+  if (String(d.doseMg) !== String(was.doseMg))
+    out.push('Dose: ' + (was.doseMg || '—') + ' → ' + (d.doseMg || '—') + ' mg per injection');
+  if (String(d.cadenceDays) !== String(was.cadenceDays))
+    out.push('Cadence: every ' + was.cadenceDays + ' d → every ' + d.cadenceDays + ' d');
+  if (String(d.startDate) !== String(was.startDate))
+    out.push('First injection: ' + (was.startDate || '—') + ' → ' + (d.startDate || '—'));
+  return out;
+}
+
+// Start (or extend) the draft for the bound stack. Seeded from what the protocol
+// currently holds, so an untouched field always equals the stored value and
+// _tcPlanChanges reports only what the user actually altered.
+function _tcTouchDraft(st){
+  if (!_tcDraftFor(st)) _tcPlanDraft = Object.assign({stackId: st.id}, _tcPlanFromStack(st));
+  return _tcPlanDraft;
+}
+
+function _tcSetSimplePlanField(field, value){
   var st = _tcSimplePlanStack();
   if (st){
-    var plan = {}; plan[field] = value;
-    await _tcWritePlanToStack(st, plan);
+    _tcTouchDraft(st)[field] = value;
+    buildTCalc();
     return;
   }
   if (!_tcp.simplePlan) _tcp.simplePlan = _tcBlankSimplePlan();
@@ -1009,7 +1103,7 @@ async function _tcSetSimplePlanField(field, value){
 // Cadence is two fields but one stored interval — set either and cadenceDays is
 // recomputed from both, which is also the point where a legacy fractional interval
 // is replaced by the user's explicit choice.
-async function _tcSetSimplePlanCadence(field, value){
+function _tcSetSimplePlanCadence(field, value){
   var cur  = _tcSimplePlan();
   var n    = field === 'cadenceN'    ? parseInt(value, 10) || 0 : cur.cadenceN;
   var unit = field === 'cadenceUnit' ? value                    : cur.cadenceUnit;
@@ -1021,7 +1115,9 @@ async function _tcSetSimplePlanCadence(field, value){
     // A stack's TRT cadence is whole days or whole weeks — 'month' has no
     // representation in freqUnit, so it is stored as its day count.
     if (unit === 'month'){ n = n * 30; unit = 'day'; }
-    await _tcWritePlanToStack(_st, {cadenceN:n, cadenceUnit:unit});
+    var d = _tcTouchDraft(_st);
+    d.cadenceN = n; d.cadenceUnit = unit; d.cadenceDays = _tcCadenceToDays(n, unit);
+    buildTCalc();
     return;
   }
   if (!_tcp.simplePlan) _tcp.simplePlan = _tcBlankSimplePlan();
@@ -1047,10 +1143,15 @@ var _TC_SIMPLE_MAX_INJ      = 800;
 // Expand the plan into the same {compId, doseMg, date} shape the log uses. Generated
 // on the fly — never written into manualLog, which stays the user's own data.
 function _tcSimplePlanInjections(){
-  // A plan that lives in a stack has already been turned into stored injections by
-  // that stack's generator. Expanding it again here would be the same schedule from
+  // A SAVED plan that lives in a stack has already been turned into stored injections
+  // by that stack's generator. Expanding it again here would be the same schedule from
   // two sources — the double-count this whole rework exists to remove.
-  if (_tcSimplePlanStack()) return [];
+  //
+  // An UNSAVED draft is the exception, and it is the point of the tab: it expands here
+  // so the curve previews the change before it is written. Nothing generated from a
+  // draft is ever persisted — _tcSavePlanToStack writes the plan's parameters to the
+  // protocol and lets the protocol's own generator produce the injections.
+  if (_tcSimplePlanStack() && !_tcPlanDirty()) return [];
   if (!_tcSimplePlanComplete()) return [];
   var p = _tcSimplePlan();
   var start = parseLocalDate(p.startDate);
@@ -1099,9 +1200,11 @@ function _tcSimplePlannerHtml(iSty, lSty){
   h += '<div class="card-dot" style="background:' + (live ? '#5ad1b0' : 'var(--muted2)') + '"></div>';
   h += '<div class="card-title">TESTOSTERONE PLAN</div></div>';
   var boundSt = _tcSimplePlanStack();
-  h += '<span style="font-size:10px;color:var(--muted2)">' +
-       (live ? (boundSt ? _esc(boundSt.name || 'protocol') : 'not saved to a protocol') : 'off — advanced planner is on') +
-       '</span>';
+  var hdr = live
+    ? (boundSt ? (_tcPlanDirty() ? 'unsaved changes' : _esc(boundSt.name || 'protocol')) : 'not saved to a protocol')
+    : 'off — advanced planner is on';
+  h += '<span style="font-size:10px;font-weight:' + (live && boundSt && _tcPlanDirty() ? '700' : '400') +
+       ';color:' + (live && boundSt && _tcPlanDirty() ? '#e8a020' : 'var(--muted2)') + '">' + hdr + '</span>';
   h += '</div>';
   h += '<div style="padding:14px 16px;' + dim + '">';
 
@@ -1145,18 +1248,49 @@ function _tcSimplePlannerHtml(iSty, lSty){
        'onchange="_tcSetSimplePlanField(\'startDate\', this.value)" style="' + iSty + ';width:100%">';
 
   if (live) {
+    var _bound = _tcSimplePlanStack();
+    var _dirty = _tcPlanDirty();
+
+    // ── Unsaved changes: say what is NOT yet written, and offer the only write ──
+    if (_bound && _dirty) {
+      var _chg = _tcPlanChangeSummary();
+      h += '<div style="margin-top:12px;background:rgba(232,168,32,0.10);border:1px solid rgba(232,168,32,0.45);border-radius:10px;padding:11px 12px">' +
+        '<div style="font-size:12px;font-weight:700;color:#e8a020;margin-bottom:5px">Not saved yet</div>' +
+        '<div style="font-size:11px;color:var(--muted2);line-height:1.55;margin-bottom:7px">' +
+          'The curve above previews this. “' + _esc(_bound.name || 'This protocol') + '” still holds its current schedule until you save.' +
+        '</div>' +
+        (_chg.length
+          ? '<div style="font-size:11px;color:var(--text);line-height:1.6;margin-bottom:9px">' +
+              _chg.map(function(t){ return '• ' + _esc(t); }).join('<br>') +
+            '</div>'
+          : '') +
+        '<div style="font-size:11px;color:var(--muted2);line-height:1.55;margin-bottom:9px">' +
+          'Saving replaces that protocol’s testosterone injections from today forward. Past and already-logged injections are not touched.' +
+        '</div>' +
+        '<div style="display:flex;gap:8px">' +
+          '<button id="tc-plan-save" onclick="_tcSavePlanToStack(\'tc-plan-save\')" style="flex:1;background:#e8a020;border:none;border-radius:9px;color:#0a0a0a;font-size:12px;font-weight:800;letter-spacing:0.4px;padding:9px;cursor:pointer;font-family:inherit">Save to ' + _esc(_bound.name || 'protocol') + '</button>' +
+          '<button onclick="_tcDiscardPlanDraft()" style="background:none;border:1px solid var(--border);border-radius:9px;color:var(--muted2);font-size:12px;font-weight:600;padding:9px 14px;cursor:pointer;font-family:inherit">Discard</button>' +
+        '</div>' +
+      '</div>';
+    } else if (_bound && _tcJustSaved()) {
+      h += '<div style="margin-top:12px;background:rgba(90,209,176,0.10);border:1px solid rgba(90,209,176,0.35);border-radius:10px;padding:10px 12px">' +
+        '<div style="font-size:12px;color:#5ad1b0;font-weight:700">Saved to ' + _esc(_bound.name || 'protocol') + '</div>' +
+        '<div style="font-size:11px;color:var(--muted2);margin-top:3px;line-height:1.5">Its testosterone injections were rewritten from today forward. Check Today and Plan.</div>' +
+      '</div>';
+    }
+
     if (_tcSimplePlanComplete()) {
-      // Bound to a stack, the injections are the stack's stored ones, not a local
+      // Saved and bound, the injections are the protocol's stored ones, not a local
       // expansion — count those, so the card never claims a schedule the protocol
-      // does not actually hold.
-      var _bound = _tcSimplePlanStack();
-      var n  = _bound ? _tcProtocolInjections().length : _tcSimplePlanInjections().length;
+      // does not actually hold. While a draft is live this is the preview's count.
+      var n  = (_bound && !_dirty) ? _tcProtocolInjections().length : _tcSimplePlanInjections().length;
       var wk = (parseDec(p.doseMg) * 7 / p.cadenceDays);
       h += '<div style="margin-top:12px;background:rgba(90,209,176,0.08);border:1px solid rgba(90,209,176,0.25);border-radius:10px;padding:10px 12px">' +
-        '<div style="font-size:12px;color:#5ad1b0;font-weight:600">' + (Math.round(wk * 10) / 10) + ' mg/week · ' + n + ' injections scheduled</div>' +
+        '<div style="font-size:12px;color:#5ad1b0;font-weight:600">' + (Math.round(wk * 10) / 10) + ' mg/week · ' + n + ' injections ' + (_dirty ? 'in this preview' : 'scheduled') + '</div>' +
         '<div style="font-size:11px;color:var(--muted2);margin-top:3px">' +
-          (_bound ? ('Stored in ' + _esc(_bound.name || 'this protocol') + '. Editing any field above rewrites that protocol’s testosterone schedule.')
-                  : 'Shown in the plasma curve at the top of this page. Use Save to stack to store it in a protocol.') +
+          (_dirty ? 'Preview only — nothing is stored until you save above.'
+                  : (_bound ? ('Stored in ' + _esc(_bound.name || 'this protocol') + '.')
+                            : 'Shown in the plasma curve at the top of this page. Use Save to stack to store it in a protocol.')) +
         '</div>' +
       '</div>';
     } else {
@@ -1299,7 +1433,12 @@ function _tcCurveLog(){
   // stale "Testoviron Depot, 4 Aug" plan came to override a protocol holding Nebido
   // (2026-08-07). Bound: the stack's stored injections ARE the curve.
   var planFrom = '';
-  if (_tcPlannerMode() === 'simple' && !_tcSimplePlanStack()) {
+  // Bound AND saved: the protocol's stored injections ARE the curve — a plan that
+  // suppressed them would just be showing its own copy of the same thing, which is
+  // how a stale plan came to override a protocol holding Nebido (2026-08-07).
+  // Bound and DIRTY: the draft is a preview of what Save would produce, so it owns
+  // its days for the duration of the preview and the stored ones step aside.
+  if (_tcPlannerMode() === 'simple' && (!_tcSimplePlanStack() || _tcPlanDirty())) {
     var _sp = _tcSimplePlan();
     if (_tcSimplePlanComplete()) planFrom = _sp.startDate || '';
   }

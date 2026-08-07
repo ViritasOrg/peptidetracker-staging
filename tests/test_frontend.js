@@ -1468,10 +1468,13 @@ console.log(`\n${'─'.repeat(59)}`);
   check('  …editing a field writes back to the stack', /_tcWritePlanToStack/.test(tcJs));
   check('  …and regenerates that stack\'s injections',
     /generateAndPushInjections\(st, now\)/.test(tcJs));
-  check('  …a bound plan generates no second schedule of its own',
-    /if \(_tcSimplePlanStack\(\)\) return \[\];/.test(tcJs));
+  // Updated 2026-08-07: edits are a DRAFT until Save, so "bound" alone no longer
+  // decides these — "bound and clean" does. A dirty draft deliberately expands and
+  // owns its days, which is the curve preview the Save button commits.
+  check('  …a saved bound plan generates no second schedule of its own',
+    /if \(_tcSimplePlanStack\(\) && !_tcPlanDirty\(\)\) return \[\];/.test(tcJs));
   check('  …and can no longer suppress the stack\'s stored injections',
-    /_tcPlannerMode\(\) === 'simple' && !_tcSimplePlanStack\(\)/.test(tcJs));
+    /_tcPlannerMode\(\) === 'simple' && \(!_tcSimplePlanStack\(\) \|\| _tcPlanDirty\(\)\)/.test(tcJs));
 
   G._userStacks = [{id:'s9', name:'P9', trt:{enabled:true, compounds:[
     {id:'nebido', name:'Nebido', dose:'100', unit:'mg', freqVal:5, freqUnit:'days', start_date:'2026-08-04'}]}}];
@@ -1487,6 +1490,45 @@ console.log(`\n${'─'.repeat(59)}`);
   G._tcp.targetStackId = '';
   check('  …an unassigned plan still comes from the profile',
     G._tcSimplePlan().compId === 'testoviron');
+
+  // ── D. edits are a draft until Save ────────────────────────────────────────
+  // "t-calc would need a Save button, right now it redraws the graph but how do I
+  // know if this update actually rewrote the TRT schedule?" (Henrik 2026-08-07).
+  // Writing each keystroke into the protocol was correct but invisible, and a
+  // rewritten schedule is not something to infer from a chart moving.
+  G._tcp.targetStackId = 's9';
+  G._tcPlanDraft = null;
+  check('a bound plan starts clean', G._tcPlanDirty() === false);
+
+  G._tcSetSimplePlanField('doseMg', '250');
+  check('editing a field does NOT write to the protocol',
+    (G._userStacks[0].trt.compounds[0].dose) === '100');
+  check('  …it goes into a draft instead', G._tcPlanDirty() === true);
+  check('  …which the card reads', G._tcSimplePlan().doseMg === '250');
+  check('  …while the protocol still reports its own value',
+    G._tcStoredPlan().doseMg === '100');
+  check('  …and only the edited field counts as changed',
+    JSON.stringify(G._tcPlanChanges()) === JSON.stringify(['doseMg']));
+  check('  …with a plain-language summary of what Save would do',
+    G._tcPlanChangeSummary().some(function(s){ return /100 → 250/.test(s); }),
+    JSON.stringify(G._tcPlanChangeSummary()));
+  check('  …and the draft expands so the curve can preview it',
+    G._tcSimplePlanInjections().length > 0);
+
+  G._tcDiscardPlanDraft();
+  check('Discard drops the draft', G._tcPlanDirty() === false);
+  check('  …leaving the protocol untouched', G._tcSimplePlan().doseMg === '100');
+  check('  …and the preview stops expanding', G._tcSimplePlanInjections().length === 0);
+
+  // The draft is in-memory only. Persisting it would be a second store that can
+  // disagree with the protocol — the exact class of bug this tab keeps hitting.
+  check('the draft is never written to the profile', !/simplePlan.*_tcPlanDraft/.test(tcJs));
+  check('  …and Save is the only path from a draft to the protocol',
+    (tcJs.match(/_tcWritePlanToStack\(/g) || []).length === 2);   // definition + the Save call
+  check('Save clears the draft once written', /_tcPlanDraft = null;\s*\n\s*_tcPlanSavedAt/.test(tcJs));
+  check('  …and confirms it on the card afterwards', /function _tcJustSaved\(\)/.test(tcJs));
+  check('  …and reports a failure instead of pretending it saved',
+    /Save failed — try again/.test(tcJs));
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
@@ -5068,8 +5110,11 @@ console.log('\n── T-calc: the live planner drives the curve ──');
 console.log('\n── T-calc: DST-proof schedule generation ──');
 {
   var _dsSrc = require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
-  var _dsFn = _dsSrc.slice(_dsSrc.indexOf('function _tcSimplePlanInjections'),
-                           _dsSrc.indexOf('function _tcSimplePlanInjections') + 2200);
+  // Slice to the END of the function, not a fixed character count — a 2200-char
+  // window silently clipped the guard the moment the function gained a comment,
+  // failing a test whose subject had not changed (2026-08-07).
+  var _dsAt  = _dsSrc.indexOf('function _tcSimplePlanInjections');
+  var _dsFn  = _dsSrc.slice(_dsAt, _dsSrc.indexOf('\nfunction ', _dsAt + 1));
   check('schedule steps in calendar days (DST-proof)',
     /start\.getDate\(\)\s*\+\s*Math\.round\(i \* cadence\)/.test(_dsFn),
     'calendar-day stepping is gone');
