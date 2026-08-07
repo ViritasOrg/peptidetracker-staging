@@ -1749,6 +1749,9 @@ function _tcShowAddSheet() {
     '<div><label style="'+lSty+'">EVERY (DAYS)</label>' +
     '<input id="tc-as-interval" type="number" inputmode="numeric" min="1" max="90" step="1" value="2" style="'+iSty+'"></div>' +
     '</div></div>' +
+    // A partial write has to be visible in the sheet, not swallowed — back-filling a
+    // long series is several POSTs and any of them can fail.
+    '<div id="tc-as-err" style="font-size:12px;color:#e8a020;line-height:1.5;margin-bottom:8px"></div>' +
     '<button onclick="_tcConfirmAddSheet()" style="width:100%;background:linear-gradient(135deg,#6688cc,#4466aa);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:800;letter-spacing:0.5px;padding:14px;cursor:pointer;font-family:inherit">ADD</button>' +
     '</div>';
   document.body.appendChild(ol);
@@ -1767,33 +1770,106 @@ function _tcCloseAddSheet() {
   var ol=document.getElementById('tc-add-sheet-overlay');if(ol)ol.remove();_tcAddSheet=null;
 }
 
-function _tcConfirmAddSheet() {
+// Back-fill: turn past-dated additions into REAL logged injection records.
+//
+// The mirror of the delete bug (2026-08-07). manualLog became a cache, so pushing a
+// past-dated row into it and calling buildTCalc() rebuilt the cache from the backend
+// and the row vanished — and _tcSyncLogToBackend only writes entries from TODAY
+// forward, so nothing persisted it either. Adding a past injection was a no-op.
+//
+// This is the same thing T-History's "+ Log a past injection" has always done
+// (savePastInjection in tab-thist.js): POST a record with logged:true, which is what
+// makes it the past. The body shape is kept identical to that one so both back-fill
+// paths produce indistinguishable rows.
+//
+// cycle_id: the bound stack's when there is one, so the dose also shows in Today and
+// the week strip. With no stack bound there is nothing to attach it to and it falls
+// back to 'manual' — the namespace refreshInjectionsCache renders unconditionally and
+// which tab-thist.js already writes for exactly this case.
+async function _tcCreateLoggedInjections(compId, doseMg, dates){
+  if (typeof authHeaders !== 'function') return 0;
+  var cd   = _tcCompInfo(compId);
+  var meta = (typeof _injPkMeta === 'function') ? _injPkMeta('trt', compId)
+                                                : {ester:null, half_life_days:null};
+  var cyc  = _tcTargetCycleId() || 'manual';
+  var ok = 0;
+  for (var i = 0; i < dates.length; i++){
+    var body = {cycle_id: cyc, date: dates[i], compound_id: compId,
+                compound_name: cd.name || compId, tier: 'trt',
+                dose: String(doseMg), unit: 'mg', dot: cd.dot || '#e8a020',
+                time_of_day: null, active: true, logged: true, source: 'manual',
+                ester: meta.ester, half_life_days: meta.half_life_days, route: null};
+    try{
+      var r = await fetch(AGENT_URL + '/injections',
+                          {method:'POST', headers: authHeaders({'Content-Type':'application/json'}),
+                           body: JSON.stringify(body)});
+      if (r.ok) ok++; else _logHttp('tcAddInj', r.status, '/injections');
+    }catch(e){ _logErr('tcAddInj', e); }
+  }
+  return ok;
+}
+
+async function _tcConfirmAddSheet() {
   var compEl=document.getElementById('tc-as-comp');
   var doseEl=document.getElementById('tc-as-dose');
   var dateEl=document.getElementById('tc-as-date');
   var countEl=document.getElementById('tc-as-count');
   var intervalEl=document.getElementById('tc-as-interval');
+  var errEl=document.getElementById('tc-as-err');
   var compId=compEl?compEl.value:'';
   var doseMg=doseEl?parseDec(doseEl.value):0;
   var startDate=dateEl?dateEl.value:'';
   var isSeries=_tcAddSheet&&_tcAddSheet.isSeries;
   if(!compId||!startDate||!(doseMg>0)){return;}
   if(!_tcp.manualLog)_tcp.manualLog=[];
+
+  var dates=[];
   if(!isSeries){
-    _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:startDate});
+    dates.push(startDate);
   }else{
     var count=countEl?Math.max(2,parseInt(countEl.value)||10):10;
     var intervalDays=intervalEl?Math.max(1,parseInt(intervalEl.value)||2):2;
-    var seriesId=Date.now().toString(36);
     var sp=startDate.split('-');
     for(var i=0;i<count;i++){
       var sd=new Date(+sp[0],+sp[1]-1,+sp[2]+i*intervalDays);
-      var ds=sd.getFullYear()+'-'+String(sd.getMonth()+1).padStart(2,'0')+'-'+String(sd.getDate()).padStart(2,'0');
-      _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:seriesId});
+      dates.push(sd.getFullYear()+'-'+String(sd.getMonth()+1).padStart(2,'0')+'-'+String(sd.getDate()).padStart(2,'0'));
     }
   }
-  _tcp.manualLog.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
-  _tcSaveProfile();_tcCloseAddSheet();buildTCalc();_tcSyncLogToBackend();
+
+  // A series can straddle today: the dates already taken are records, the ones ahead
+  // are still a plan. Split rather than force the whole series into one of the two.
+  var todayStr=dateKey(NOW);
+  var past=dates.filter(function(d){return d<=todayStr;});
+  var future=dates.filter(function(d){return d>todayStr;});
+
+  if(past.length){
+    var wrote=await _tcCreateLoggedInjections(compId,doseMg,past);
+    if(wrote<past.length){
+      if(errEl)errEl.textContent='Saved '+wrote+' of '+past.length+' — try again for the rest.';
+      else alert('Saved '+wrote+' of '+past.length+' injections. Try again for the rest.');
+      if(!wrote)return;                       // nothing landed: keep the sheet open
+    }
+  }
+  if(future.length){
+    var seriesId=future.length>1?Date.now().toString(36):undefined;
+    future.forEach(function(ds){
+      _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:seriesId});
+    });
+    _tcp.manualLog.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
+    _tcSaveProfile();
+  }
+  _tcCloseAddSheet();
+  if(past.length){
+    await _tcFetchHistory(true);                                  // re-read; do not guess
+    if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
+    _tcLoadLogFromStack();
+  }
+  buildTCalc();
+  if(future.length)_tcSyncLogToBackend();
+  if(past.length){
+    if(typeof buildToday==='function')buildToday();
+    if(typeof buildWeekStrip==='function')buildWeekStrip();
+  }
 }
 
 function _tcConfirmRemove(idx) {

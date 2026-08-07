@@ -1677,6 +1677,30 @@ console.log(`\n${'─'.repeat(59)}`);
   check('  …and an already-deleted record is not reported as a failure',
     /if \(!r\.ok && r\.status !== 404\)/.test(tcJs));
 
+  // ── Adding a PAST injection must create a real record ──────────────────────
+  // Reported 2026-08-07, straight after the delete fix: "I cant now add the old
+  // injections back?" The mirror of the same cause — manualLog is a cache, so a
+  // past-dated push was rebuilt away by the next render, and _tcSyncLogToBackend
+  // only writes from TODAY forward so nothing persisted it either.
+  check('a past-dated add POSTs a real injection record',
+    /async function _tcCreateLoggedInjections\(/.test(tcJs) &&
+    /AGENT_URL \+ '\/injections',\s*\n\s*\{method:'POST'/.test(tcJs));
+  check('  …marked logged, which is what makes it the past',
+    /active: true, logged: true, source: 'manual'/.test(tcJs));
+  check('  …carrying the PK snapshot, like the T-History back-fill does',
+    /_injPkMeta\('trt', compId\)/.test(tcJs));
+  check('  …under the bound stack, or manual when there is none',
+    /_tcTargetCycleId\(\) \|\| 'manual'/.test(tcJs));
+  check('a series straddling today splits into records and plan',
+    /var past=dates\.filter\(function\(d\)\{return d<=todayStr;\}\);/.test(tcJs) &&
+    /var future=dates\.filter\(function\(d\)\{return d>todayStr;\}\);/.test(tcJs));
+  check('  …with only the future half going through the plan sync',
+    /if\(future\.length\)_tcSyncLogToBackend\(\);/.test(tcJs));
+  check('  …and the history re-read after writing, not assumed',
+    /await _tcFetchHistory\(true\);[^\n]*\n\s*if\(typeof refreshInjectionsCache/.test(tcJs));
+  check('a partial write is reported rather than swallowed',
+    /Saved '\+wrote\+' of '\+past\.length/.test(tcJs) && /id="tc-as-err"/.test(tcJs));
+
   G._tcHistory = _svH; G._tcHistoryState = _svHS; G._injectionsCache = _svC; G._tcp = _svP;
 }
 
