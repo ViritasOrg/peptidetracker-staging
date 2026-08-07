@@ -1786,7 +1786,7 @@ function _tcCloseAddSheet() {
 // the week strip. With no stack bound there is nothing to attach it to and it falls
 // back to 'manual' — the namespace refreshInjectionsCache renders unconditionally and
 // which tab-thist.js already writes for exactly this case.
-async function _tcCreateLoggedInjections(compId, doseMg, dates){
+async function _tcCreateLoggedInjections(compId, doseMg, dates, seriesId){
   if (typeof authHeaders !== 'function') return 0;
   var cd   = _tcCompInfo(compId);
   var meta = (typeof _injPkMeta === 'function') ? _injPkMeta('trt', compId)
@@ -1798,6 +1798,7 @@ async function _tcCreateLoggedInjections(compId, doseMg, dates){
                 compound_name: cd.name || compId, tier: 'trt',
                 dose: String(doseMg), unit: 'mg', dot: cd.dot || '#e8a020',
                 time_of_day: null, active: true, logged: true, source: 'manual',
+                series_id: seriesId || null,
                 ester: meta.ester, half_life_days: meta.half_life_days, route: null};
     try{
       var r = await fetch(AGENT_URL + '/injections',
@@ -1842,8 +1843,13 @@ async function _tcConfirmAddSheet() {
   var past=dates.filter(function(d){return d<=todayStr;});
   var future=dates.filter(function(d){return d>todayStr;});
 
+  // One id across the WHOLE run. A series that straddles today is split into records
+  // and plan for storage, but it is still one series the user authored — giving each
+  // half its own id would render it as two unrelated cards.
+  var runId=dates.length>1?Date.now().toString(36):undefined;
+
   if(past.length){
-    var wrote=await _tcCreateLoggedInjections(compId,doseMg,past);
+    var wrote=await _tcCreateLoggedInjections(compId,doseMg,past,runId);
     if(wrote<past.length){
       if(errEl)errEl.textContent='Saved '+wrote+' of '+past.length+' — try again for the rest.';
       else alert('Saved '+wrote+' of '+past.length+' injections. Try again for the rest.');
@@ -1851,9 +1857,8 @@ async function _tcConfirmAddSheet() {
     }
   }
   if(future.length){
-    var seriesId=future.length>1?Date.now().toString(36):undefined;
     future.forEach(function(ds){
-      _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:seriesId});
+      _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:runId});
     });
     _tcp.manualLog.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
     _tcSaveProfile();
@@ -3720,6 +3725,10 @@ async function _tcSyncLogToBackend() {
         date:e.date,
         dose:String(Math.round(parseDec(e.doseMg)*10)/10),
         unit:'mg',dot:cd.dot||'#e8a020',
+        // The run this dose belongs to. Without it the grouping lived only in the
+        // profile cache: nineteen doses came back from the record as nineteen
+        // identical rows, and a restore could not rebuild the series card.
+        series_id:e.seriesId||null,
         source:'tcalc'
       };
     });
