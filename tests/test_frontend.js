@@ -1701,6 +1701,46 @@ console.log(`\n${'─'.repeat(59)}`);
   check('a partial write is reported rather than swallowed',
     /Saved '\+wrote\+' of '\+past\.length/.test(tcJs) && /id="tc-as-err"/.test(tcJs));
 
+  // ── A series is part of the RECORD, not of the profile cache ───────────────
+  // Henrik, 2026-08-07: "Make injections.json keep track of injections that are part
+  // of a series so a restore recreates the series cards in t-calc." The grouping used
+  // to live only in _tcp.manualLog, so nineteen doses read back out of the record
+  // came back as nineteen identical rows and a restore could not rebuild the card.
+  check('a created past injection carries its series id to the record',
+    /series_id: seriesId \|\| null/.test(tcJs));
+  check('  …and the plan sync writes it too, not just the local grouping',
+    /series_id:e\.seriesId\|\|null/.test(tcJs));
+  check('a stored history row reads its series id back',
+    /seriesId: e\.series_id \|\| undefined/.test(tcJs));
+  check('  …as does a planned row rebuilt from the stack',
+    /seriesId:e\.series_id\|\|undefined/.test(tcJs));
+  check('one id spans the whole run, so a straddling series is still one card',
+    /var runId=dates\.length>1\?Date\.now\(\)\.toString\(36\):undefined;/.test(tcJs) &&
+    /_tcCreateLoggedInjections\(compId,doseMg,past,runId\)/.test(tcJs) &&
+    /seriesId:runId/.test(tcJs));
+  check('  …and a single dose gets no series id at all',
+    !/var runId=dates\.length>0/.test(tcJs));
+
+  // End to end: the grouping survives a round trip through the record. The card is
+  // rendered inline in buildTCalc (which needs a DOM), so this asserts the input that
+  // card groups on — one seriesId shared by the restored rows, and none invented for
+  // a standalone dose.
+  hist([{compId:'nebido',doseMg:'100',date:'2026-06-26',seriesId:'r1',source:'logged'},
+        {compId:'nebido',doseMg:'100',date:'2026-06-28',seriesId:'r1',source:'logged'},
+        {compId:'nebido',doseMg:'100',date:'2026-06-30',seriesId:'r1',source:'logged'},
+        {compId:'testoviron',doseMg:'250',date:'2026-06-20',source:'logged'}]);
+  G._injectionsCache = {};
+  G._tcp = Object.assign({}, _svP || {}, {manualLog:[]});
+  G._tcLoadLogFromStack();
+  const grouped = {};
+  G._tcp.manualLog.forEach(e => { if (e.seriesId) grouped[e.seriesId] = (grouped[e.seriesId]||0) + 1; });
+  check('restored rows regroup into ONE series, not N loose doses',
+    Object.keys(grouped).length === 1 && grouped.r1 === 3, JSON.stringify(grouped));
+  check('  …and a standalone dose is not swept into it',
+    G._tcp.manualLog.filter(e => !e.seriesId).length === 1);
+  check('  …with the series reaching the curve as three separate injections',
+    G._tcCurveLog().filter(e => e.seriesId === 'r1').length === 3);
+
   G._tcHistory = _svH; G._tcHistoryState = _svHS; G._injectionsCache = _svC; G._tcp = _svP;
 }
 
