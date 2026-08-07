@@ -57,6 +57,48 @@ Every compound tier (Peptides, TRT, Enhanced) must have **exactly the same UI fe
 
 When a new compound tier feature is added, check all other tiers before closing the PR.
 
+## ⚠️ THE INJECTION LOG IS THE TRUE RECORD — A CHECKED DOSE IS THE PAST ⚠️
+Henrik, 2026-08-07: *"any checked injection needs to be counted regardless of which
+stack it actually belonged to. Also the Stack concept might be changed or updated in
+the future, so the checked injections is the only source of truth to the past."*
+And: *"the injection log must be treated as the true record of what was injected.
+Also it needs to be well protected in backups."*
+
+`injections.json` is the canonical history. `_tcp.manualLog`, a stack's config and a
+saved plasma curve are all **derived views** — when one disagrees with the injection
+log, the log is right and the view is stale.
+
+**This does not contradict the section below.** "The stack is the container" governs
+**writing**: nothing new is scheduled outside a stack. This governs **reading the
+past**: the stack a dose was filed under is irrelevant history.
+
+- Selection for the past is `logged === true` and **nothing else** — not `cycle_id`,
+  not whether the owning stack is active, not the `active` flag (that retires a
+  *schedule*, not a recorded event), not a date window beyond the PK bound.
+- `_tcFetchHistory` reads its own 400-day window straight from the backend. It must
+  **never** be re-pointed at `_injectionsCache`, which is scoped to what Today needs
+  (14 days back) and is exactly what broke this.
+- A past-dated dose that was never ticked is a plan the user did not confirm taking,
+  and is excluded. `_tcProtocolInjections` is future-only.
+- The past is added to the curve **first** and outranks every planner, so a draft
+  preview can change the future without rewriting what already went in.
+- **Editing history means editing the record.** T-Calc's add `POST`s a real injection
+  with `logged:true`; its delete `DELETE`s `/injections/<id>`. Both then re-read the
+  history rather than assuming. Writing to `manualLog` alone is a silent no-op — it is
+  a cache and the next render rebuilds it. That bug shipped twice in one day
+  (delete, then add); do not reintroduce it by "just updating the list".
+- `_tcLoadLogFromStack` refuses to rebuild `manualLog` unless the history is fully
+  loaded. A partial source once overwrote the stored log with a fortnight of it.
+
+**What triggered this (2026-08-07):** six weeks of logged TRT — two Testoviron Depot,
+then 100 mg Nebido E2D from 26 June — rendered as roughly 40% of the real accumulated
+level, and in simple-planner mode contributed nothing at all. Three filters compounded:
+the 14-day cache window, the active-stack filter, and a bound-stack `cycle_id` filter.
+At Nebido's 56-day half-life essentially nothing from June had cleared.
+
+The curve states what it stands on ("Built on N checked injections since …") precisely
+so a gap shows as missing data rather than as a low number. Keep that line.
+
 ## ⚠️ THE STACK IS THE CONTAINER — NO INJECTIONS OUTSIDE ONE ⚠️
 Henrik, 2026-08-06: *"T-calc should be used in the stack wizard, and testosterone
 injections should be part of a stack. No injections can exist outside of a stack
