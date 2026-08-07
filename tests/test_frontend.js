@@ -1654,6 +1654,29 @@ console.log(`\n${'─'.repeat(59)}`);
   check('  …naming the count and the start date',
     /1 checked injection/.test(G._tcHistoryNoteHtml()));
 
+  // ── Deleting a row must reach the stored injection ─────────────────────────
+  // Reported 2026-08-07: "There is a test injection of 1000mg nebio on 5 july but I
+  // cant delete it?" manualLog became a cache the same day, so splicing it and
+  // re-rendering rebuilt the row straight back out of injections.json — and
+  // _tcSyncLogToBackend only rewrites from TODAY forward, so a past dose was never
+  // reachable by any path.
+  check('a stored history row carries its injection id, or it cannot be deleted',
+    /injId: e\.id \|\| undefined/.test(tcJs));
+  check('deleting a stored row calls DELETE on the record',
+    /AGENT_URL \+ '\/injections\/' \+ encodeURIComponent\(injId\)/.test(tcJs) &&
+    /method: 'DELETE'/.test(tcJs));
+  check('  …re-reads the history rather than guessing what is left',
+    /await _tcFetchHistory\(true\);/.test(tcJs));
+  check('  …and says the delete is global first',
+    /confirmGlobalDelete\('this ' \+/.test(tcJs));
+  check('  …with the series delete doing the same for every stored row',
+    /for \(var i = 0; i < stored\.length; i\+\+\) await _tcDeleteStoredInjection/.test(tcJs));
+  check('a profile-only row still deletes locally',
+    /_tcp\.manualLog\.splice\(idx, 1\);/.test(tcJs));
+  // 404 is success: the record is gone, which is what was asked for.
+  check('  …and an already-deleted record is not reported as a failure',
+    /if \(!r\.ok && r\.status !== 404\)/.test(tcJs));
+
   G._tcHistory = _svH; G._tcHistoryState = _svHS; G._injectionsCache = _svC; G._tcp = _svP;
 }
 
