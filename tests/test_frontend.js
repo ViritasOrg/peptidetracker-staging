@@ -1365,6 +1365,34 @@ console.log(`\n${'─'.repeat(59)}`);
   check('existing global entries still render', /if\(cyc==='tcalc'\)return true;/.test(rawScript));
 }
 
+
+// ── T-Calc reads and writes the stack, not a private store (2026-08-06) ─────
+// Henrik: "t-calc is empty ie has nothing in it, even though the t-calc injections
+// are in the today view. Today view is also showing double injections... T-calc
+// needs to save and read injections to a stack to avoid this situation."
+//
+// Both symptoms were one flaw: _tcp.manualLog (in tcalc_profiles.json) and
+// injections.json held the same schedule, and the sync only ever pushed ONE WAY.
+// Diverge them and T-Calc renders empty while its injections still show; write from
+// both sides under different cycle ids and the same compound renders twice.
+{
+  const tc = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+
+  check('T-Calc writes into the stack\'s own cycle id', /return tid;/.test(tc));
+  check('  …not a private tcalc namespace', !/return 'tcalc:'\+tid;/.test(tc));
+
+  check('the schedule is read back out of the stack', /function _tcLoadLogFromStack\(\)\{/.test(tc));
+  check('  …filtered to THIS stack\'s testosterone',
+    /if\(String\(e\.cycle_id\|\|''\)!==cid\)return;/.test(tc));
+  check('  …ignoring inactive rows', /if\(e\.active===false\)return;/.test(tc));
+  check('  …and refusing a non-mg unit rather than assuming', /if\(unit!=='mg'\)return;/.test(tc));
+  check('  …on every build of the tab', /_tcLoadLogFromStack\(\);/.test(tc));
+  check('  …and doing nothing when no stack is chosen', /if\(!cid\)return false;/.test(tc));
+
+  // simplePlan is the plan's INPUT, not a derived schedule — it stays in the profile.
+  check('the plan parameters still live in the profile', /simplePlan/.test(tc));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -7099,7 +7127,9 @@ if (typeof G._tcTargetCycleId === 'function') {
   // the same day, and the single-source guard never fired because it requires the
   // plan to BE assigned. Nothing is written outside a stack now.
   G._tcp.targetStackId = '';       check('targetCycleId: no stack → empty',          G._tcTargetCycleId() === '');
-  G._tcp.targetStackId = 'cyc_b';  check('targetCycleId: assigned → tcalc:<id>',     G._tcTargetCycleId() === 'tcalc:cyc_b');
+  // The STACK's own cycle id. A separate 'tcalc:<id>' namespace is what allowed the
+  // same compound to exist as two series on the same day (2026-08-06).
+  G._tcp.targetStackId = 'cyc_b';  check('targetCycleId: assigned → the stack id',    G._tcTargetCycleId() === 'cyc_b');
   G._tcp.targetStackId = 'ghost';  check('targetCycleId: unknown stack → empty',     G._tcTargetCycleId() === '');
   check('_tcHasTargetStack follows it', G._tcHasTargetStack() === false);
   G._tcp.targetStackId = 'cyc_a';  check('  …and is true once a stack is chosen',    G._tcHasTargetStack() === true);
