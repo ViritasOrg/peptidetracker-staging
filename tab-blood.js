@@ -259,7 +259,13 @@ function _blTestosteroneLog(){
         var doseNum=parseDec(c.dose)||0; if(doseNum) pushSched(c, doseNum);
       });
     }
-    if(st.enhanced && st.enhanced.enabled){
+    // One testosterone stream per stack — the same rule the injection generator
+    // applies (_genInjBatches). When the TRT tier carries testosterone, the Enhanced
+    // tier's testosterone is not a second dose: it is the same protocol described
+    // twice, and adding both here doubled the free-T curve for anyone who had
+    // configured it in both places.
+    var _trtOwnsTesto = !!(st.trt && st.trt.enabled && (st.trt.compounds||[]).length);
+    if(st.enhanced && st.enhanced.enabled && !_trtOwnsTesto){
       (st.enhanced.compounds||[]).forEach(function(c){
         if((c.name||'').toLowerCase().indexOf('testosterone')===-1) return;
         var ec = (typeof ENHANCEMENT_COMPOUNDS!=='undefined') ? ENHANCEMENT_COMPOUNDS.find(function(x){return x.id===c.id;}) : null;

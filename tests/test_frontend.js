@@ -1389,8 +1389,104 @@ console.log(`\n${'─'.repeat(59)}`);
   check('  …on every build of the tab', /_tcLoadLogFromStack\(\);/.test(tc));
   check('  …and doing nothing when no stack is chosen', /if\(!cid\)return false;/.test(tc));
 
-  // simplePlan is the plan's INPUT, not a derived schedule — it stays in the profile.
-  check('the plan parameters still live in the profile', /simplePlan/.test(tc));
+  // simplePlan survives ONLY for a plan that has no stack yet. Once one is chosen the
+  // plan reads and writes that stack (see the block below) — the earlier assertion
+  // here ("the plan parameters still live in the profile") described the design that
+  // produced the 2026-08-07 divergence and has been replaced.
+  check('an unassigned plan still has somewhere to live', /_tcBlankSimplePlan/.test(tc));
+}
+
+// ── 2026-08-07: three symptoms, one protocol ─────────────────────────────────
+// "Under TRT the testosterone doses (from Enhanced?) is visible, but in t-calc I see
+// Testoviron Depot injections (from local storage???) In Today view (for tomorrow) I
+// see double injections with Nebido (ie I assume from TRT AND Enhanced???)."
+{
+  const stackJs = require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+  const bloodJs = require('fs').readFileSync(require('path').join(__dirname,'../tab-blood.js'),'utf8');
+  const tcJs    = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+
+  // ── A. a configured enhanced dose is a RATE; an injection stores an AMOUNT ──
+  // Today rendered "Testosterone Undecanoate (Nebido) 350 mg/week" as a dose row
+  // because the generator wrote the weekly rate and its unit verbatim.
+  const dpi = G._enhDosePerInjection;
+  check('an enhanced weekly rate converts to a per-injection dose',
+    dpi({dose:'350',unit:'mg/week',cadence:'interval',freqVal:5,freqUnit:'days'}).dose === '250');
+  check('  …carrying the base unit, never "mg/week"',
+    dpi({dose:'350',unit:'mg/week',cadence:'interval',freqVal:5,freqUnit:'days'}).unit === 'mg');
+  check('  …spread across a weekday schedule',   // 350/wk on Mon+Thu = 175 a shot
+    dpi({dose:'350',unit:'mg/week',days:[1,4]}).dose === '175');
+  check('  …a daily rate taken daily is unchanged',
+    dpi({dose:'10',unit:'mg/day',days:[0,1,2,3,4,5,6]}).dose === '10');
+  check('  …mg/EOD every other day is unchanged',
+    dpi({dose:'50',unit:'mg/EOD',cadence:'interval',freqVal:2,freqUnit:'days'}).dose === '50');
+  check('  …and a unit with no period passes straight through',
+    dpi({dose:'100',unit:'mg'}).dose === '100' && dpi({dose:'100',unit:'mg'}).unit === 'mg');
+
+  // ── B. one testosterone stream per stack ────────────────────────────────────
+  const mkStack = (trtOn) => ({
+    id:'s1', name:'Protocol 1', cycle_start:'2026-08-01', cycle_length:12,
+    trt:{enabled:trtOn, compounds:trtOn?[{id:'nebido',name:'Nebido',dose:'100',unit:'mg',freqVal:5,freqUnit:'days'}]:[]},
+    enhanced:{enabled:true, compounds:[
+      {id:'test-u', name:'Testosterone Undecanoate (Nebido)', dose:'350', unit:'mg/week', cadence:'interval', freqVal:5, freqUnit:'days'},
+      {id:'hgh',    name:'HGH',                               dose:'4',   unit:'IU/day',  days:[0,1,2,3,4,5,6]},
+    ]},
+  });
+  const idsOf = st => G._genInjBatches(st,'s1',null).map(b => b.compound_id);
+
+  check('a stack with TRT testosterone does not also inject it from Enhanced',
+    idsOf(mkStack(true)).indexOf('test-u') === -1);
+  check('  …while the rest of the Enhanced tier is untouched',
+    idsOf(mkStack(true)).indexOf('hgh') !== -1);
+  check('  …and the TRT ester itself still generates',
+    idsOf(mkStack(true)).indexOf('nebido') !== -1);
+  check('  …but with no TRT testosterone the Enhanced entry generates again',
+    idsOf(mkStack(false)).indexOf('test-u') !== -1);
+  idsOf(mkStack(true));   // _injSuppressed reflects the LAST generation — regenerate
+  check('  …the suppressed entry is recorded, not silently dropped',
+    (G._injSuppressed['s1']||[]).some(x => x.id === 'test-u'));
+  check('  …and the config says so where the user configured it',
+    /function _enhDormantNoteHtml\(/.test(stackJs) &&
+    /_enhDormantNoteHtml\(c,_editBuf\)/.test(stackJs) &&
+    /_enhDormantNoteHtml\(c,_wiz\)/.test(stackJs));
+
+  // No generated injection may carry a rate unit — that is the "350 mg/week" row.
+  const units = G._genInjBatches(mkStack(false),'s1',null)
+    .reduce((a,b) => a.concat(b.entries.map(e => e.unit||'')), []);
+  check('no generated injection carries a "/period" unit',
+    units.every(u => u.indexOf('/') === -1), units.join(','));
+
+  // The free-T curve aggregates both tiers, so it double-counted the same way.
+  check('the free-T log applies the same one-stream rule',
+    /_trtOwnsTesto/.test(bloodJs) && /st\.enhanced\.enabled && !_trtOwnsTesto/.test(bloodJs));
+
+  // ── C. the plan lives in the stack it is assigned to ────────────────────────
+  // T-Calc showed Testoviron Depot 75 mg E2D while the protocol held Nebido 100 mg,
+  // and _tcCurveLog's "the plan owns this day" rule suppressed the protocol's real
+  // injections in favour of that stale plan.
+  check('a plan assigned to a stack reads that stack', /function _tcSimplePlanStack\(\)/.test(tcJs));
+  check('  …one ester on one cadence, or it is not adopted', /comps\.length !== 1/.test(tcJs));
+  check('  …editing a field writes back to the stack', /_tcWritePlanToStack/.test(tcJs));
+  check('  …and regenerates that stack\'s injections',
+    /generateAndPushInjections\(st, now\)/.test(tcJs));
+  check('  …a bound plan generates no second schedule of its own',
+    /if \(_tcSimplePlanStack\(\)\) return \[\];/.test(tcJs));
+  check('  …and can no longer suppress the stack\'s stored injections',
+    /_tcPlannerMode\(\) === 'simple' && !_tcSimplePlanStack\(\)/.test(tcJs));
+
+  G._userStacks = [{id:'s9', name:'P9', trt:{enabled:true, compounds:[
+    {id:'nebido', name:'Nebido', dose:'100', unit:'mg', freqVal:5, freqUnit:'days', start_date:'2026-08-04'}]}}];
+  G._tcp = Object.assign({}, G._tcp, {targetStackId:'s9',
+    simplePlan:{compId:'testoviron', doseMg:'75', cadenceN:2, cadenceUnit:'day', cadenceDays:2, startDate:'2026-08-04'}});
+  const shown = G._tcSimplePlan();
+  check('the plan card shows the stack, not a stale profile plan',
+    shown.compId === 'nebido' && shown.doseMg === '100', JSON.stringify(shown));
+  check('  …including its cadence', shown.cadenceN === 5 && shown.cadenceUnit === 'day');
+  check('  …and its start date', shown.startDate === '2026-08-04');
+  check('  …and it expands to nothing, because the stack already stores it',
+    G._tcSimplePlanInjections().length === 0);
+  G._tcp.targetStackId = '';
+  check('  …an unassigned plan still comes from the profile',
+    G._tcSimplePlan().compId === 'testoviron');
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
