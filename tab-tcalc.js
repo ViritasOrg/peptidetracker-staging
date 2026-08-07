@@ -1421,7 +1421,11 @@ async function _tcFetchHistory(force){
       if (unit !== 'mg') return;                    // a unit mix-up would corrupt the curve
       var mg = parseDec(e.dose);
       if (!(mg > 0)) return;
+      // injId is what makes a stored row deletable. Without it the log list can only
+      // splice a cache that is rebuilt from this fetch on the next render, so the row
+      // reappears and the delete is a silent no-op (2026-08-07).
       rows.push({compId: e.compound_id, doseMg: String(mg), date: e.date,
+                 injId: e.id || undefined,
                  seriesId: e.series_id || undefined, source: 'logged'});
     });
     rows.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
@@ -1821,20 +1825,70 @@ function _tcConfirmRemove(idx) {
   document.body.appendChild(d);
 }
 
-function _tcRemoveManualEntry(idx) {
+// ── Deleting a row has to reach the stored injection ─────────────────────────
+// manualLog stopped being a store on 2026-08-07 and became a cache rebuilt from the
+// logged history on every render. Splicing it and calling buildTCalc() therefore
+// deleted nothing: the row came straight back from injections.json, and
+// _tcSyncLogToBackend only ever rewrites entries from TODAY forward, so a past dose
+// was never reachable at all. Reported the same day — a test 1000 mg Nebido on 5 July
+// that could not be removed and was distorting the whole curve.
+//
+// A row carrying injId IS a stored injection: delete the record. Everything else is
+// a profile-only row and keeps the old local behaviour.
+async function _tcDeleteStoredInjection(injId) {
+  if (typeof authHeaders !== 'function') return false;
+  try {
+    var r = await fetch(AGENT_URL + '/injections/' + encodeURIComponent(injId),
+                        {method: 'DELETE', headers: authHeaders()});
+    // 404 means it is already gone — the user's intent is satisfied either way.
+    if (!r.ok && r.status !== 404) { _logHttp('tcDelInj', r.status, '/injections/' + injId); return false; }
+    return true;
+  } catch (e) { _logErr('tcDelInj', e); return false; }
+}
+
+async function _tcRemoveManualEntry(idx) {
   if (!_tcp.manualLog) return;
+  var row = _tcp.manualLog[idx];
+  if (!row) return;
+  if (row.injId) {
+    // Reaches the backend, so it is gone from every device — say so first.
+    if (typeof confirmGlobalDelete === 'function' &&
+        !confirmGlobalDelete('this ' + (row.doseMg ? row.doseMg + ' mg ' : '') + 'injection on ' + row.date)) return;
+    if (!await _tcDeleteStoredInjection(row.injId)) { buildTCalc(); return; }
+    await _tcFetchHistory(true);                                  // re-read; do not guess
+    if (typeof refreshInjectionsCache === 'function') await refreshInjectionsCache();
+    _tcLoadLogFromStack();
+    buildTCalc();
+    if (typeof buildToday === 'function') buildToday();
+    if (typeof buildWeekStrip === 'function') buildWeekStrip();
+    return;
+  }
   _tcp.manualLog.splice(idx, 1);
   _tcSaveProfile();
   buildTCalc();
   _tcSyncLogToBackend();
 }
 
-function _tcRemoveSeries(seriesId) {
+async function _tcRemoveSeries(seriesId) {
   if (!_tcp.manualLog || !seriesId) return;
+  var stored = _tcp.manualLog.filter(function(e){ return e.seriesId === seriesId && e.injId; });
+  if (stored.length) {
+    if (typeof confirmGlobalDelete === 'function' &&
+        !confirmGlobalDelete('all ' + stored.length + ' injections in this series')) return;
+    for (var i = 0; i < stored.length; i++) await _tcDeleteStoredInjection(stored[i].injId);
+    await _tcFetchHistory(true);
+    if (typeof refreshInjectionsCache === 'function') await refreshInjectionsCache();
+  }
   _tcp.manualLog = _tcp.manualLog.filter(function(e){ return e.seriesId !== seriesId; });
   _tcSaveProfile();
+  if (stored.length) _tcLoadLogFromStack();
   buildTCalc();
-  _tcSyncLogToBackend();
+  if (stored.length) {
+    if (typeof buildToday === 'function') buildToday();
+    if (typeof buildWeekStrip === 'function') buildWeekStrip();
+  } else {
+    _tcSyncLogToBackend();
+  }
 }
 
 function _tcOpenEditSeriesSheet(sid) {
