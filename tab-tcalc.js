@@ -1474,6 +1474,25 @@ function _tcLoadLogFromStack(){
       });
     });
   }
+  // T-Calc is a PLANNING tool: the flow is add doses, read the curve, and only then
+  // Save to protocol — which is what binds a stack and flushes the plan to the record
+  // (_tcSetTargetStack -> _tcSyncLogToBackend). So a planned dose necessarily exists
+  // before any stack does, and this rebuild ran on every buildTCalc() and assigned
+  // manualLog outright from the record — erasing the draft on the very next render.
+  // That is why a 10-dose series starting today kept only the one logged dose for
+  // today: the past half was a record, the future half was a draft, and the draft
+  // never survived long enough to be saved.
+  // Only entries explicitly marked draft are carried, and only for today onwards —
+  // the record owns the past. A draft the record has caught up with is already in
+  // `seen`, so it retires itself rather than duplicating.
+  var todayK=dateKey(NOW);
+  (_tcp.manualLog||[]).forEach(function(e){
+    if(!e||!e.draft)return;
+    if((e.date||'')<todayK)return;
+    if(seen[e.compId+'|'+e.date])return;
+    seen[e.compId+'|'+e.date]=true;
+    rows.push(e);
+  });
   rows.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
   _tcp.manualLog=rows;
   return true;
@@ -1843,21 +1862,6 @@ async function _tcConfirmAddSheet() {
   var past=dates.filter(function(d){return d<=todayStr;});
   var future=dates.filter(function(d){return d>todayStr;});
 
-  // A PLANNED dose can only be stored against a stack — _tcTargetCycleId() returns ''
-  // with none bound and _tcSyncLogToBackend then returns without writing anything
-  // ("no injections can exist outside of a stack object", 2026-08-06). It did that
-  // silently, while the past half still saved under the 'manual' fallback: a 10-dose
-  // series starting today stored the one logged dose for today and dropped the other
-  // nine, with the sheet reporting success and the card reading "1 injections".
-  // Refuse BEFORE writing anything, so there is no half-saved series either.
-  if(future.length && typeof _tcHasTargetStack==='function' && !_tcHasTargetStack()){
-    var _noStackMsg='Pick a protocol first — planned doses are stored on the protocol, '+
-                    'so '+future.length+' of these '+dates.length+' would not be saved. '+
-                    'Use "Save to protocol", then add the series.';
-    if(errEl)errEl.textContent=_noStackMsg; else alert(_noStackMsg);
-    return;
-  }
-
   // One id across the WHOLE run. A series that straddles today is split into records
   // and plan for storage, but it is still one series the user authored — giving each
   // half its own id would render it as two unrelated cards.
@@ -1873,7 +1877,9 @@ async function _tcConfirmAddSheet() {
   }
   if(future.length){
     future.forEach(function(ds){
-      _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:runId});
+      // draft: planned here, not yet in the record. Save to protocol is what
+      // persists it — until then _tcLoadLogFromStack must carry it forward.
+      _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:runId,draft:true});
     });
     _tcp.manualLog.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
     _tcSaveProfile();
@@ -2163,19 +2169,12 @@ async function _tcSaveEditSeries() {
   var count=countEl?Math.max(2,parseInt(countEl.value)||10):10;
   var intervalDays=intervalEl?Math.max(1,parseInt(intervalEl.value)||2):2;
   if(!compId||!startDate||!(doseMg>0)){return;}
-  // Same silent no-op as the add: with no stack bound the sync writes nothing, so the
-  // edit looked saved and was gone on the next render.
-  if(typeof _tcHasTargetStack==='function' && !_tcHasTargetStack()){
-    alert('Pick a protocol first — this series is stored on the protocol, so the change '+
-          'cannot be saved yet. Use "Save to protocol", then edit the series.');
-    return;
-  }
   _tcp.manualLog = _tcp.manualLog.filter(function(e){ return e.seriesId !== sid; });
   var sp=startDate.split('-');
   for(var i=0;i<count;i++){
     var sd=new Date(+sp[0],+sp[1]-1,+sp[2]+i*intervalDays);
     var ds=sd.getFullYear()+'-'+String(sd.getMonth()+1).padStart(2,'0')+'-'+String(sd.getDate()).padStart(2,'0');
-    _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:sid});
+    _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:sid,draft:true});
   }
   _tcp.manualLog.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
   _tcSaveProfile();
