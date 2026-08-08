@@ -1726,24 +1726,52 @@ console.log(`\n${'─'.repeat(59)}`);
   check('the plan sync clears only the plan, never a logged record',
     /'&unlogged_only=true'/.test(tcJs));
 
-  // ── A plan with no stack bound must FAIL LOUDLY, not half-save ─────────────
-  // Reported 2026-08-08, still broken after the ordering fix: "added a series with
-  // 10 but only one is saved". The record showed why — two attempts, each one row,
-  // both cycle_id 'manual', and nothing dated after today. _tcTargetCycleId() is ''
-  // with no stack bound, so _tcSyncLogToBackend returned without writing while the
-  // past half still saved under the 'manual' fallback. Nine doses dropped silently
-  // and the card read "1 injections".
-  check('a future dose with no stack bound is refused, not silently dropped',
-    /if\(future\.length && typeof _tcHasTargetStack==='function' && !_tcHasTargetStack\(\)\)\{/.test(tcJs));
-  check('  …before anything is written, so there is no half-saved series',
-    tcJs.indexOf("if(future.length && typeof _tcHasTargetStack==='function'") <
-    tcJs.indexOf('var wrote=await _tcCreateLoggedInjections('));
-  check('  …naming how many of the doses would be lost',
-    /of these '\+dates\.length\+' would not be saved/.test(tcJs));
-  check('  …and a past-only add still works without a stack',
-    /_tcTargetCycleId\(\) \|\| 'manual'/.test(tcJs));
-  check('editing a series with no stack bound is refused too',
-    /cannot be saved yet\. Use "Save to protocol", then edit the series/.test(tcJs));
+  // ── A planned dose is a DRAFT until Save to protocol ───────────────────────
+  // Henrik, 2026-08-08: "the user flow would always be add injections and when happy
+  // with the curve then save it to a protocol. Its a planning tool!"
+  // _tcSetTargetStack is what binds a stack and then flushes manualLog to the record,
+  // so a planned dose necessarily exists BEFORE any stack does. _tcLoadLogFromStack
+  // assigned manualLog outright from the record and runs on every buildTCalc(), so
+  // the draft was erased on the very next render and never survived to be saved —
+  // which is why a 10-dose series starting today kept only the one logged dose for
+  // today (a record) and lost the nine future ones (a draft).
+  check('a locally planned dose is marked as an unsaved draft',
+    /seriesId:runId,draft:true/.test(tcJs) && /seriesId:sid,draft:true/.test(tcJs));
+  check('  …and the planner is NOT gated on having a protocol first',
+    !/Pick a protocol first/.test(tcJs));
+
+  hist([]);
+  G._injectionsCache = {};
+  var _dk = G.dateKey, _now = new Date();   // NOW is a const, not on the sandbox
+  var _fut  = _dk(new Date(_now.getTime() + 7 * 86400000));
+  var _fut2 = _dk(new Date(_now.getTime() + 9 * 86400000));
+  var _old  = _dk(new Date(_now.getTime() - 7 * 86400000));
+  G._tcp = Object.assign({}, G._tcp, {manualLog:[
+    {compId:'nebido',doseMg:'100',date:_fut,  seriesId:'s1',draft:true},
+    {compId:'nebido',doseMg:'100',date:_fut2, seriesId:'s1',draft:true}]});
+  G._tcLoadLogFromStack();
+  check('a planned series survives the rebuild that runs on every build',
+    G._tcp.manualLog.length === 2, JSON.stringify(G._tcp.manualLog));
+
+  // The record owns the past: a draft dated before today is not resurrected.
+  G._tcp = Object.assign({}, G._tcp, {manualLog:[
+    {compId:'nebido',doseMg:'100',date:_old,seriesId:'s2',draft:true}]});
+  G._tcLoadLogFromStack();
+  check('  …but a draft in the past is dropped — the record owns the past',
+    G._tcp.manualLog.length === 0, JSON.stringify(G._tcp.manualLog));
+
+  // Once the record holds it, the draft retires instead of duplicating the row.
+  hist([]);
+  G._injectionsCache = {};
+  G._tcHistory = [{compId:'nebido',doseMg:'100',date:_fut,source:'logged'}];
+  G._tcHistoryState = 'ready';
+  G._tcp = Object.assign({}, G._tcp, {manualLog:[
+    {compId:'nebido',doseMg:'100',date:_fut,seriesId:'s1',draft:true}]});
+  G._tcLoadLogFromStack();
+  check('  …and a draft the record caught up with does not duplicate',
+    G._tcp.manualLog.length === 1, JSON.stringify(G._tcp.manualLog));
+  hist([]);
+  G._injectionsCache = {};
   check('  …and the history re-read after writing, not assumed',
     /await _tcFetchHistory\(true\);[^\n]*\n\s*if\(typeof refreshInjectionsCache/.test(tcJs));
   check('a partial write is reported rather than swallowed',
