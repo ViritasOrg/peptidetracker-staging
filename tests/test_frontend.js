@@ -1725,6 +1725,25 @@ console.log(`\n${'─'.repeat(59)}`);
   // unlogged plans — a record silently downgraded to a schedule.
   check('the plan sync clears only the plan, never a logged record',
     /'&unlogged_only=true'/.test(tcJs));
+
+  // ── A plan with no stack bound must FAIL LOUDLY, not half-save ─────────────
+  // Reported 2026-08-08, still broken after the ordering fix: "added a series with
+  // 10 but only one is saved". The record showed why — two attempts, each one row,
+  // both cycle_id 'manual', and nothing dated after today. _tcTargetCycleId() is ''
+  // with no stack bound, so _tcSyncLogToBackend returned without writing while the
+  // past half still saved under the 'manual' fallback. Nine doses dropped silently
+  // and the card read "1 injections".
+  check('a future dose with no stack bound is refused, not silently dropped',
+    /if\(future\.length && typeof _tcHasTargetStack==='function' && !_tcHasTargetStack\(\)\)\{/.test(tcJs));
+  check('  …before anything is written, so there is no half-saved series',
+    tcJs.indexOf("if(future.length && typeof _tcHasTargetStack==='function'") <
+    tcJs.indexOf('var wrote=await _tcCreateLoggedInjections('));
+  check('  …naming how many of the doses would be lost',
+    /of these '\+dates\.length\+' would not be saved/.test(tcJs));
+  check('  …and a past-only add still works without a stack',
+    /_tcTargetCycleId\(\) \|\| 'manual'/.test(tcJs));
+  check('editing a series with no stack bound is refused too',
+    /cannot be saved yet\. Use "Save to protocol", then edit the series/.test(tcJs));
   check('  …and the history re-read after writing, not assumed',
     /await _tcFetchHistory\(true\);[^\n]*\n\s*if\(typeof refreshInjectionsCache/.test(tcJs));
   check('a partial write is reported rather than swallowed',
