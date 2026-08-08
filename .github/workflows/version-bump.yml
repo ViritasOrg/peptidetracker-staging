@@ -59,7 +59,9 @@ jobs:
             --head "$BRANCH" \
             --title "chore: bump to v${NEW}" \
             --body "Auto-generated version bump. Merges automatically once CI passes.")
-          gh pr merge --auto --squash "$PR_URL"
+          # --delete-branch removes version-bump/vX.Y once the merge lands. Without
+          # it every bump leaves its branch behind forever; this repo had 407 of them.
+          gh pr merge --auto --squash --delete-branch "$PR_URL"
 
       - name: Rerun blocked CI run
         env:
