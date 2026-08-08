@@ -1843,6 +1843,21 @@ async function _tcConfirmAddSheet() {
   var past=dates.filter(function(d){return d<=todayStr;});
   var future=dates.filter(function(d){return d>todayStr;});
 
+  // A PLANNED dose can only be stored against a stack — _tcTargetCycleId() returns ''
+  // with none bound and _tcSyncLogToBackend then returns without writing anything
+  // ("no injections can exist outside of a stack object", 2026-08-06). It did that
+  // silently, while the past half still saved under the 'manual' fallback: a 10-dose
+  // series starting today stored the one logged dose for today and dropped the other
+  // nine, with the sheet reporting success and the card reading "1 injections".
+  // Refuse BEFORE writing anything, so there is no half-saved series either.
+  if(future.length && typeof _tcHasTargetStack==='function' && !_tcHasTargetStack()){
+    var _noStackMsg='Pick a protocol first — planned doses are stored on the protocol, '+
+                    'so '+future.length+' of these '+dates.length+' would not be saved. '+
+                    'Use "Save to protocol", then add the series.';
+    if(errEl)errEl.textContent=_noStackMsg; else alert(_noStackMsg);
+    return;
+  }
+
   // One id across the WHOLE run. A series that straddles today is split into records
   // and plan for storage, but it is still one series the user authored — giving each
   // half its own id would render it as two unrelated cards.
@@ -2148,6 +2163,13 @@ async function _tcSaveEditSeries() {
   var count=countEl?Math.max(2,parseInt(countEl.value)||10):10;
   var intervalDays=intervalEl?Math.max(1,parseInt(intervalEl.value)||2):2;
   if(!compId||!startDate||!(doseMg>0)){return;}
+  // Same silent no-op as the add: with no stack bound the sync writes nothing, so the
+  // edit looked saved and was gone on the next render.
+  if(typeof _tcHasTargetStack==='function' && !_tcHasTargetStack()){
+    alert('Pick a protocol first — this series is stored on the protocol, so the change '+
+          'cannot be saved yet. Use "Save to protocol", then edit the series.');
+    return;
+  }
   _tcp.manualLog = _tcp.manualLog.filter(function(e){ return e.seriesId !== sid; });
   var sp=startDate.split('-');
   for(var i=0;i<count;i++){
