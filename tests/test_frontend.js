@@ -1695,7 +1695,36 @@ console.log(`\n${'─'.repeat(59)}`);
     /var past=dates\.filter\(function\(d\)\{return d<=todayStr;\}\);/.test(tcJs) &&
     /var future=dates\.filter\(function\(d\)\{return d>todayStr;\}\);/.test(tcJs));
   check('  …with only the future half going through the plan sync',
-    /if\(future\.length\)_tcSyncLogToBackend\(\);/.test(tcJs));
+    /if\(future\.length\)\{[\s\S]{0,1200}?await _tcSyncLogToBackend\(\);/.test(tcJs));
+
+  // ── The plan must be PERSISTED before anything re-reads the record ─────────
+  // Reported 2026-08-08: "If I edit a series it won't save the update. If I add a
+  // new series of 10 injections starting at today's date, only a single injection
+  // is saved." One cause behind both. _tcLoadLogFromStack() assigns _tcp.manualLog
+  // outright from the record, so running it BEFORE the sync erased every dose that
+  // was still only in the profile — and the sync then wrote that erased state back.
+  // The add only hits it when the series straddles today, i.e. when it starts today.
+  var _tcAddFn  = tcJs.slice(tcJs.indexOf('async function _tcConfirmAddSheet()'),
+                             tcJs.indexOf('function _tcConfirmRemove('));
+  var _tcEditFn = tcJs.slice(tcJs.indexOf('async function _tcSaveEditSeries()'),
+                             tcJs.indexOf('function _tcConfirmRemoveSeries('));
+  check('adding a series persists the plan before the record is re-read',
+    _tcAddFn.indexOf('await _tcSyncLogToBackend();') > -1 &&
+    _tcAddFn.indexOf('await _tcSyncLogToBackend();') < _tcAddFn.indexOf('_tcLoadLogFromStack();'));
+  check('  …and never syncs after the rebuild, which wrote the erased state back',
+    !/if\(future\.length\)_tcSyncLogToBackend\(\);/.test(tcJs));
+  check('editing a series persists before buildTCalc rebuilds manualLog',
+    _tcEditFn.indexOf('await _tcSyncLogToBackend();') > -1 &&
+    _tcEditFn.indexOf('await _tcSyncLogToBackend();') < _tcEditFn.indexOf('buildTCalc();'));
+  check('  …and is async, so the sync is actually awaited',
+    /async function _tcSaveEditSeries\(\)/.test(tcJs));
+  check('  …then re-reads the history rather than trusting the local edit',
+    /await _tcSyncLogToBackend\(\);\n  await _tcFetchHistory\(true\);/.test(tcJs));
+  // The plan sync clears before it re-posts. That delete had no logged filter, so it
+  // removed logged records dated today or later and the re-post recreated them as
+  // unlogged plans — a record silently downgraded to a schedule.
+  check('the plan sync clears only the plan, never a logged record',
+    /'&unlogged_only=true'/.test(tcJs));
   check('  …and the history re-read after writing, not assumed',
     /await _tcFetchHistory\(true\);[^\n]*\n\s*if\(typeof refreshInjectionsCache/.test(tcJs));
   check('a partial write is reported rather than swallowed',
