@@ -1862,6 +1862,12 @@ async function _tcConfirmAddSheet() {
     });
     _tcp.manualLog.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
     _tcSaveProfile();
+    // MUST be awaited here, before the re-read below. _tcLoadLogFromStack() assigns
+    // _tcp.manualLog outright from the record, so any future dose still only in the
+    // profile is erased by it. Syncing afterwards then wrote that erased state back:
+    // a 10-dose series starting today kept only the one logged dose for today, which
+    // is the single case where past.length and future.length are both non-zero.
+    await _tcSyncLogToBackend();
   }
   _tcCloseAddSheet();
   if(past.length){
@@ -1870,7 +1876,6 @@ async function _tcConfirmAddSheet() {
     _tcLoadLogFromStack();
   }
   buildTCalc();
-  if(future.length)_tcSyncLogToBackend();
   if(past.length){
     if(typeof buildToday==='function')buildToday();
     if(typeof buildWeekStrip==='function')buildWeekStrip();
@@ -2129,7 +2134,7 @@ function _tcAttachPanListeners(canvas) {
   canvas.addEventListener('mouseup', canvas._tcMouseEnd);
 }
 
-function _tcSaveEditSeries() {
+async function _tcSaveEditSeries() {
   var sid = _tcEditSeriesId;
   if (!sid || !_tcp || !_tcp.manualLog) return;
   var compEl=document.getElementById('tc-es-comp');
@@ -2151,7 +2156,15 @@ function _tcSaveEditSeries() {
     _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:sid});
   }
   _tcp.manualLog.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
-  _tcSaveProfile();_tcCloseEditSeriesSheet();buildTCalc();_tcSyncLogToBackend();
+  _tcSaveProfile();
+  _tcCloseEditSeriesSheet();
+  // Persist FIRST. buildTCalc() calls _tcLoadLogFromStack(), which replaces
+  // _tcp.manualLog with what the record holds — running it before the sync threw
+  // the edit away and then wrote the pre-edit state back, so nothing ever saved.
+  await _tcSyncLogToBackend();
+  await _tcFetchHistory(true);
+  _tcLoadLogFromStack();
+  buildTCalc();
 }
 
 function _tcConfirmRemoveSeries(sid) {
@@ -3711,7 +3724,10 @@ async function _tcSyncLogToBackend() {
   // Clear all unlogged tcalc entries from today onwards (covers removed compounds too),
   // then re-post each compound's future entries via batch upsert.
   try{
-    await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)+'&from_date='+todayStr,{method:'DELETE',headers:h});
+    // unlogged_only: this clears the PLAN. Without it the delete also removed
+    // logged records dated today or later, and the batch re-post recreated them
+    // as unlogged plans — a record silently downgraded to a schedule.
+    await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)+'&from_date='+todayStr+'&unlogged_only=true',{method:'DELETE',headers:h});
   }catch(_e){}
 
   var compIds=Object.keys(byComp);
