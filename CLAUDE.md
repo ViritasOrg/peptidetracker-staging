@@ -132,8 +132,22 @@ symptoms, one cause:
 - Never reintroduce a `tcalc`, `manual`, or any other cycle id that is not a stack id.
   Legacy rows still RENDER (refusing to write a new one must never make stored
   injections vanish) but nothing new is written outside a stack.
-- Never store a dated schedule anywhere but `injections.json`. A second copy is what
-  this section exists to prevent — plan *parameters* are fine, plan *output* is not.
+- Never store a dated schedule anywhere but `injections.json` **as a second permanent
+  copy** — that is what this section exists to prevent. Plan *parameters* are fine,
+  a persisted parallel schedule is not.
+- **An UNSAVED DRAFT is the exception, and it is required (clarified 2026-08-08).**
+  Henrik: *"the user flow would always be add injections and when happy with the curve
+  then save it to a protocol. Its a planning tool!"* **Save to protocol** is the moment
+  of persistence — `_tcSetTargetStack` binds the stack and then calls
+  `_tcSyncLogToBackend` — so a planned dose necessarily exists **before** any stack
+  does. Those doses are marked `draft:true` in `manualLog` and `_tcLoadLogFromStack`
+  carries them forward; without that they were erased on the next `buildTCalc()` and a
+  10-dose series starting today saved only the one logged dose for today.
+  A draft is not a second copy of stored data — it is data the record does not have
+  yet. The carry-forward is deliberately narrow: only entries marked `draft`, only
+  from today onwards (the record owns the past, so a draft can never resurrect a
+  deleted row), and a draft the record has caught up with retires itself. Tests cover
+  all four. Do not "fix" this back into an unconditional rebuild.
 - T-Calc must read on open. A planner that only writes cannot detect that it has
   drifted from what is stored.
 - Saving a T-Calc schedule goes through **Save to protocol**: pick an existing stack
@@ -364,6 +378,26 @@ This is the single most common way the rule above gets bypassed — through inte
 - If your fix genuinely makes something obsolete, **say so in your reply and ask** — never remove it silently.
 - You may only remove code that was **explicitly named** in the request.
 
+## ⚠️ A VERIFIED ERROR IN AN md FILE GETS FIXED IMMEDIATELY ⚠️
+Henrik, 2026-08-08: *"When you find verified errors in md files always fix em
+instantly."*
+
+If you establish that something in a `CLAUDE.md` (or any md in these repos) is
+**wrong** — not merely stale-sounding or awkward — correct it in that session. Do
+not flag it and wait, do not add it to a TODO, do not ask whether to bother.
+
+- **Verified** means you checked: you read the workflow, ran the command, or saw
+  the run. A hunch is not a finding, and "this reads oddly" is not an error.
+- Fix it where it is wrong, in every writable repo that repeats the claim — these
+  files are copied between repos, so one wrong sentence usually exists in several.
+- Say what was wrong and why in the commit and in your reply, so the next session
+  can tell a correction from a drive-by edit.
+- **This does not license rewriting rules you disagree with.** A rule you think is
+  mistaken is Henrik's call — say so and leave it. This is for statements of fact
+  that are demonstrably untrue: a workflow that does not do what the file says, a
+  file credited with behaviour it does not have, a value that no longer matches.
+- A SETTLED marker still wins. If a value is marked settled, raise it, do not edit.
+
 ## Git workflow — ALWAYS follow this
 ### ⚠️ CLAUDE ALWAYS CREATES AND MERGES ITS OWN PRS — NEVER ASK HENRIK ⚠️
 **Claude must NEVER ask Henrik to create a PR, merge a PR, or do anything with GitHub.**
@@ -380,7 +414,15 @@ Use them. Every time. No exceptions. Asking Henrik to touch GitHub is a failure.
 3. `mcp__github__create_pull_request` — do this yourself immediately after pushing
 4. Check CI: `pull_request_read` with `method: get_check_runs` — wait for `conclusion: success`. If still running, poll. If failed, fix and re-push. **Never merge with failing or pending checks.**
 5. `mcp__github__merge_pull_request` — once CI is green, merge it yourself immediately
-5. After merge the `version-bump` GitHub Action auto-increments the minor version in `version.json` and `const VERSION` in `index.html` and commits with `[skip ci]`
+5. After merge the `version-bump` GitHub Action increments the minor version in
+   `version.json` and `const VERSION` in `index.html`. **It does NOT commit with
+   `[skip ci]`** (corrected 2026-08-08 — the file said so, the workflow never did):
+   it pushes a `version-bump/vX.Y` branch, opens a PR and auto-merges it, falling
+   back to merging directly when auto-merge is unavailable. So the bump arrives as
+   its own squash-merged commit on `main`, and Pages deploys **that** commit — which
+   is why step 6 checks the Pages run against the bump SHA, not the merge SHA.
+   The run also prunes superseded `version-bump/*` branches, which used to
+   accumulate forever (407 of them here before #865)
 6. **After merging, you must confirm BOTH of these before telling the user it's live:**
    - `mcp__github__actions_list` (method: list_workflow_runs, resource_id: version-bump.yml) → confirm `conclusion: success` and read the bumped version from the commit message
    - `mcp__github__actions_list` (method: list_workflow_runs, resource_id: pages-build-deployment) → confirm the latest run has `conclusion: success` and its `head_sha` matches the bump commit SHA
