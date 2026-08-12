@@ -388,11 +388,13 @@ async function syncSafetyNotes(){try{const r=await fetch(AGENT_URL+'/safety-note
 var _CITATIONS=getData('proto-citations',null)||{};
 var _GRADES=getData('proto-grades',null)||{};
 var _STACK_CAP=getData('proto-stack-cap',null)||null;
+var _FT_REF=getData('proto-ft-ref',null)||null;
 function _absorbCitations(d){
   if(!d)return;
   if(d.citations&&Object.keys(d.citations).length){_CITATIONS=d.citations;setData('proto-citations',_CITATIONS);}
   if(d.grades&&Object.keys(d.grades).length){_GRADES=d.grades;setData('proto-grades',_GRADES);}
   if(d.stack_cap_note){_STACK_CAP={cap:d.stack_grade_cap||'C',note:d.stack_cap_note};setData('proto-stack-cap',_STACK_CAP);}
+  if(d.free_t_reference&&d.free_t_reference.ceiling_pmol_l){_FT_REF=d.free_t_reference;setData('proto-ft-ref',_FT_REF);}
 }
 // Standalone fetch, for tiers that never load the Enhanced catalogue (a TRT-only
 // or peptides-only user still gets citations).
@@ -486,6 +488,54 @@ function openGradeLegend(focus){
   });
   if(_STACK_CAP)h+='<div style="margin-top:10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.35);border-radius:8px;padding:10px 12px;font-size:11px;color:var(--text);line-height:1.55"><b>Whole protocols cap at '+_esc(_STACK_CAP.cap)+'.</b> '+_esc(_STACK_CAP.note)+'</div>';
   _citOverlay(h);
+}
+// ── Free-T exposure vs the physiological range ───────────────────────────────
+// Henrik, 2026-08-12: "for testosterone the real metric is free T."
+//
+// The dose anchor (mg/week) cannot see SHBG, so two people on the same mg land in
+// different places. This turns the free T that T-Calc ALREADY computes into the
+// one thing trial-and-error cannot give you: how far outside the measured human
+// range you are.
+//
+// It does NOT recompute anything. T-Calc owns the model (doc 13, SETTLED); this
+// reads the value it already plotted and divides. If the model is ever wrong this
+// readout is wrong with it — which is correct, because they must never disagree.
+//
+// Deliberately NOT claimed: that above the ceiling is dangerous, or that it is
+// fine. It is UNMEASURED, and the copy says exactly that.
+function _ftExposureHtml(pmol){
+  if(!_FT_REF||!_FT_REF.ceiling_pmol_l)return'';        // range not loaded — say nothing
+  if(!(pmol>0)||!isFinite(pmol))return'';               // no curve yet
+  var ceil=_FT_REF.ceiling_pmol_l, floor=_FT_REF.floor_pmol_l;
+  var step=_FT_REF.round_to||0.5;
+  var mult=Math.round((pmol/ceil)/step)*step;
+  var lvl=Math.round(pmol);
+  var col, headline, body;
+  if(pmol<floor){
+    col='#7dd3fc';
+    headline=lvl+' pmol/L — below the healthy young-male range';
+    body=_FT_REF.below_floor_note||'';
+  }else if(pmol<=ceil){
+    col='#3cffa0';
+    headline=lvl+' pmol/L — within the healthy young-male range';
+    body='Between the 2.5th percentile ('+floor+') and the top of the range ('+ceil+' pmol/L).';
+  }else{
+    col='#f59e0b';
+    // "about 3×" not "3.1×" — a direct assay has been seen to differ from the
+    // calculation by ~1.5×, so a second decimal would be false precision.
+    headline=lvl+' pmol/L — about '+(mult<1?'1':(mult%1===0?mult.toFixed(0):mult.toFixed(1)))+'× the top of the healthy young-male range';
+    body=_FT_REF.above_ceiling_note||'';
+  }
+  var cites=(typeof _citeChips==='function')
+    ? _citeChips((_FT_REF.cite||[]).concat(_FT_REF.caveat_cite||[]),'Range from')
+    : '';
+  return'<div style="margin:8px 16px 0;background:'+col+'14;border:1px solid '+col+'55;border-radius:8px;padding:9px 11px">'
+    +'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+    +'<span style="font-size:9px;font-weight:800;letter-spacing:0.7px;color:'+col+';text-transform:uppercase">Exposure</span>'
+    +'<span style="font-size:12px;font-weight:700;color:var(--text)">'+_esc(headline)+'</span></div>'
+    +(body?'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-top:3px">'+_esc(body)+'</div>':'')
+    +'<div style="font-size:10px;color:var(--muted2);opacity:0.8;line-height:1.45;margin-top:4px">'+_esc(_FT_REF.caveat||'')+'</div>'
+    +cites+'</div>';
 }
 // Every reference the app can show, in one place — Settings → References.
 function openAllReferences(){

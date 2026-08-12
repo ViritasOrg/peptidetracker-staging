@@ -1914,6 +1914,62 @@ console.log(`\n${'─'.repeat(59)}`);
   }
 }
 
+
+// ── Free-T exposure vs the physiological range ───────────────────────────────
+// Henrik, 2026-08-12: "for testosterone the real metric is free T." The dose
+// anchor cannot see SHBG; this can. The risk in building it is that it quietly
+// becomes a SECOND free-T model that disagrees with the chart, or that it starts
+// claiming an outcome nobody has measured. These tests guard both.
+{
+  const tc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+
+  check('the reference range comes from the backend, not a frontend const',
+    /_FT_REF/.test(rawScript) && /free_t_reference/.test(rawScript));
+  check('  …and no pmol/L threshold is hardcoded in the frontend',
+    !/\b(804|243)\s*pmol/.test(rawScript) && !/ceiling_pmol_l\s*[:=]\s*\d/.test(rawScript));
+  check('an exposure helper exists', /function _ftExposureHtml\(/.test(rawScript));
+
+  {
+    const i = rawScript.indexOf('function _ftExposureHtml(');
+    const body = rawScript.slice(i, rawScript.indexOf('function openAllReferences(', i));
+    check('it renders nothing when the range has not loaded',
+      /if\(!_FT_REF\|\|!_FT_REF\.ceiling_pmol_l\)return''/.test(body));
+    check('it renders nothing without a curve', /if\(!\(pmol>0\)\|\|!isFinite\(pmol\)\)return''/.test(body));
+    check('the multiple is rounded to the backend step, not shown raw',
+      /_FT_REF\.round_to/.test(body) && /Math\.round\(\(pmol\/ceil\)\/step\)\*step/.test(body));
+    check('above the ceiling is described as unmeasured, not unsafe',
+      /above_ceiling_note/.test(body));
+    check('  …and the frontend does not invent its own harm wording',
+      !/dangerous|unsafe|toxic/i.test(body));
+    check('the calculated-free-T caveat always ships with the number',
+      /_FT_REF\.caveat/.test(body));
+    check('the range carries its citation chips', /_citeChips\(/.test(body));
+    check('every rendered field is escaped', /_esc\(headline\)/.test(body) && /_esc\(_FT_REF\.caveat/.test(body));
+    check('units are pmol/L and nothing else', /pmol\/L/.test(body) && !/\bng\/dL\b|\bpg\/mL\b|\bmg\/day\b/.test(body));
+  }
+
+  // The load-bearing one. doc 13 is SETTLED: T-Calc owns the free-T model and
+  // this readout must be a READ of what was plotted, never a second derivation.
+  {
+    const i = tc.indexOf('_tcSsPeakPmol = ');
+    const around = tc.slice(Math.max(0, i - 900), i + 300);
+    check('the exposure value is read from the plotted series',
+      /total\[_si\] \* \(calFT_arr \? calFT_arr\[_si\] : scale\)/.test(around));
+    check('  …with no call into the model to get it',
+      !/_tcFreeTSeries\(/.test(around));
+    check('  …over the steady-state window, not the ramp-up',
+      /Math\.floor\(totalDays \/ 2\)/.test(around));
+    check('an uncalibrated curve yields no multiple at all',
+      /_tcSsPeakPmol = \(calFT && _ssPk > 0\) \? _ssPk : null/.test(tc));
+  }
+
+  check('T-Calc renders a slot for the exposure note', /id="tc-exposure-note"/.test(tc));
+  check('  …filled only after the chart has been drawn',
+    /getElementById\('tc-exposure-note'\)/.test(tc));
+  check('the readout never writes to stored history',
+    !/_tcSsPeakPmol[\s\S]{0,200}(setData|pushT|POST)/.test(tc));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });

@@ -34,6 +34,10 @@ var _tcAgeMissing     = false; // true when user-settings returned but no user_a
 var _tcBwOpen         = false; // whether the bloodwork panel is expanded
 var _tcBwEntries      = null; // null = not loaded; [] = loaded & empty; [...] = loaded
 var _tcBwLoading      = false;
+var _tcSsPeakPmol     = null;  // steady-state peak in pmol/L, read from the values this
+                               // chart just PLOTTED. Never recomputed — T-Calc owns the
+                               // model (doc 13, SETTLED) and this must never disagree
+                               // with the curve the user is looking at.
 var _tcDrawnFT        = null;  // {firstMs,unit,values:[per-day free-T]} cached from the last
                               // CALIBRATED plasma draw — the only source T-History capture may use
 var _tcEditSeriesId = null;   // seriesId currently open in the Edit Series sheet
@@ -2894,6 +2898,24 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
     _tcDrawnFT = null;
   }
 
+  // Steady-state peak in pmol/L, taken from the SAME expression the chart plots
+  // (total * calFT_arr). Second half of the series only, matching the ss window
+  // _tcComputeStats uses, so the ramp-up does not read as the plateau.
+  // This is a read, not a calculation: no model call, no re-derivation.
+  (function(){
+    var _ssFrom = Math.floor(totalDays / 2), _ssPk = 0;
+    for (var _si = _ssFrom; _si <= totalDays; _si++) {
+      var _sv = total[_si] * (calFT_arr ? calFT_arr[_si] : scale);
+      if (isFinite(_sv) && _sv > _ssPk) _ssPk = _sv;
+    }
+    // calFT null means the baseline never solved, so the series is not on a
+    // pmol/L scale and a multiple of it would be meaningless.
+    _tcSsPeakPmol = (calFT && _ssPk > 0) ? _ssPk : null;
+    var _el = document.getElementById('tc-exposure-note');
+    if (_el) _el.innerHTML = (typeof _ftExposureHtml === 'function' && _tcSsPeakPmol)
+      ? _ftExposureHtml(_tcSsPeakPmol) : '';
+  })();
+
   var dpr  = window.devicePixelRatio || 1;
   var cssW = canvas.offsetWidth || 300;
   var cssH = 150;
@@ -3950,6 +3972,10 @@ function buildTCalc() {
   // number, not as missing data — which is exactly how six weeks of logged TRT went
   // unnoticed until the level looked wrong (2026-08-07).
   html += _tcHistoryNoteHtml();
+  // Filled by _tcDrawManualChart once the curve has been plotted — it reads the
+  // drawn pmol/L values rather than recomputing them, so it cannot disagree with
+  // the chart above it. Empty until then, and empty when the curve is uncalibrated.
+  html += '<div id="tc-exposure-note"></div>';
   if (validLog.length > 0) {
     html += '<div style="padding:2px 16px 10px">';
     html += '<div style="display:flex;gap:4px;margin-bottom:8px">';
