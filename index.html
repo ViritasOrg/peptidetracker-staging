@@ -158,6 +158,7 @@
     </div>
     <div id="s-tabs-card" style="margin-top:14px"></div>
     <div id="s-appearance-card" style="margin-top:14px"></div>
+    <div id="s-refs-card" style="margin-top:14px"></div>
     <div id="s-cache-card" style="margin-top:14px"></div>
     <div id="s-stagecopy-card" style="margin-top:14px"></div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:14px;">
@@ -371,6 +372,143 @@ function _cyclesAllowed(){if(!_featuresLoaded)return true;if(_userTier>=2)return
 async function syncProtocolTemplates(){try{const r=await fetch(AGENT_URL+'/protocol-templates',{headers:authHeaders()});if(!r.ok){_logHttp('syncTemplates',r.status,'/protocol-templates');return;}const d=await r.json();if(d&&Array.isArray(d.templates)){_protocolTemplates=d.templates;setData('proto-templates',_protocolTemplates);if(typeof buildToday==='function')buildToday();}}catch(e){_logErr('syncTemplates',e);}}
 // Contextual safety notes (watch/test/stop) per compound tier — served from the backend.
 async function syncSafetyNotes(){try{const r=await fetch(AGENT_URL+'/safety-notes',{headers:authHeaders()});if(!r.ok){_logHttp('syncSafety',r.status,'/safety-notes');return;}const d=await r.json();if(d&&d.notes){_safetyNotes=d.notes;setData('proto-safety-notes',_safetyNotes);}if(d&&d.readiness){_readinessNotes=d.readiness;setData('proto-readiness-notes',_readinessNotes);}}catch(e){_logErr('syncSafety',e);}}
+// ── Evidence grades + research citations ─────────────────────────────────────
+// Henrik 2026-08-12: "this app will basically have research citations and t-calc
+// as its USP." So a dose recommendation never appears without (a) how well
+// evidenced it is and (b) what it stands on.
+//
+// The registry lives in the backend (citations.py) and is served with the
+// compound catalogue. Compounds carry citation KEYS only — the bibliographic
+// text exists in exactly one place, so a corrected reference updates every
+// screen at once. Nothing here hardcodes a PMID.
+//
+// These helpers live in index.html on purpose: all three compound tiers
+// (Peptides / TRT / Enhanced) must render evidence identically per the UI
+// parity rule, so they share one implementation rather than three lookalikes.
+var _CITATIONS=getData('proto-citations',null)||{};
+var _GRADES=getData('proto-grades',null)||{};
+var _STACK_CAP=getData('proto-stack-cap',null)||null;
+function _absorbCitations(d){
+  if(!d)return;
+  if(d.citations&&Object.keys(d.citations).length){_CITATIONS=d.citations;setData('proto-citations',_CITATIONS);}
+  if(d.grades&&Object.keys(d.grades).length){_GRADES=d.grades;setData('proto-grades',_GRADES);}
+  if(d.stack_cap_note){_STACK_CAP={cap:d.stack_grade_cap||'C',note:d.stack_cap_note};setData('proto-stack-cap',_STACK_CAP);}
+}
+// Standalone fetch, for tiers that never load the Enhanced catalogue (a TRT-only
+// or peptides-only user still gets citations).
+async function syncCitations(){try{const r=await fetch(AGENT_URL+'/citations',{headers:authHeaders()});if(!r.ok){_logHttp('syncCitations',r.status,'/citations');return;}_absorbCitations(await r.json());}catch(e){_logErr('syncCitations',e);}}
+
+// Grade pill. Colour and wording come from the backend legend so the UI can
+// never drift from the definition in doc 14 §2.
+function _evBadge(g){
+  if(!g)return'';
+  var meta=_GRADES[g]||{};
+  var col=meta.color||'var(--muted2)';
+  return'<span onclick="event.stopPropagation();openGradeLegend(\''+g+'\')" title="'+_esc(meta.desc||'')+'" '+
+    'style="display:inline-flex;align-items:center;gap:3px;background:'+col+'1f;border:1px solid '+col+'66;'+
+    'color:'+col+';font-size:9px;font-weight:800;letter-spacing:0.6px;padding:1px 5px;border-radius:4px;'+
+    'cursor:pointer;white-space:nowrap;vertical-align:middle">'+g+'<span style="opacity:0.75;font-weight:700">'+
+    _esc(meta.short||'')+'</span></span>';
+}
+// The anchor line is the single most useful thing this app can tell an advanced
+// user: the highest dose anyone has ACTUALLY measured in a controlled trial.
+// Above it is not forbidden — it is uncharted, and we say so plainly.
+function _anchorLine(evidence,ev){
+  if(!evidence)return'';
+  if(evidence.no_anchor){
+    return'<div style="font-size:10px;color:#ef4444;margin-top:3px;line-height:1.45">'+
+      '⚑ No dose of this compound has ever been measured in a controlled human trial.</div>';
+  }
+  if(ev&&ev.over&&evidence.anchor){
+    return'<div style="font-size:10px;color:#f59e0b;margin-top:3px;line-height:1.45">'+
+      '⚑ Above '+_esc(evidence.anchor)+' — the highest dose ever measured in a trial. '+
+      '<span style="color:var(--muted2)">Uncharted, not endorsed.</span></div>';
+  }
+  if(evidence.anchor){
+    return'<div style="font-size:10px;color:var(--muted2);margin-top:3px;line-height:1.45">'+
+      '✓ Within the trialled range (anchor '+_esc(evidence.anchor)+').</div>';
+  }
+  return'';
+}
+// Reference chips. Rendered wherever a fact or recommendation is made.
+function _citeChips(keys,label){
+  var ks=(keys||[]).filter(function(k){return _CITATIONS[k];});
+  if(!ks.length)return'';
+  var chips=ks.map(function(k){
+    var c=_CITATIONS[k];
+    var neg=c.kind==='negative-result';
+    var col=neg?'#ef4444':'var(--muted2)';
+    var short=c.pmid?('PMID '+c.pmid):(c.kind==='label'?'Label':(neg?'Checked absence':((c.authors||'').split(',')[0]||c.journal||'Ref')));
+    if(!c.pmid&&c.year&&!neg&&c.kind!=='label')short+=' '+c.year;
+    return'<span onclick="event.stopPropagation();openCitation(\''+k+'\')" '+
+      'style="display:inline-block;background:var(--surface2);border:1px solid var(--border);color:'+col+';'+
+      'font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;cursor:pointer;white-space:nowrap">'+
+      _esc(short)+'</span>';
+  }).join('');
+  return'<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-top:4px">'+
+    '<span style="font-size:9px;font-weight:700;letter-spacing:0.5px;color:var(--muted2);text-transform:uppercase">'+
+    _esc(label||'Source')+'</span>'+chips+'</div>';
+}
+function _citOverlay(inner){
+  var ov=document.createElement('div');ov.className='pcard-overlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:9999;display:flex;align-items:flex-end;justify-content:center;';
+  ov.onclick=function(e){if(e.target===ov)ov.remove();};
+  ov.innerHTML='<div style="background:var(--surface);border-top-left-radius:16px;border-top-right-radius:16px;'+
+    'width:100%;max-width:620px;max-height:86vh;overflow-y:auto;padding:20px 18px 30px;">'+inner+
+    '<button onclick="this.closest(\'.pcard-overlay\').remove()" style="width:100%;margin-top:18px;background:var(--surface2);'+
+    'border:1px solid var(--border);color:var(--text);font-size:14px;font-weight:700;padding:13px;border-radius:12px;'+
+    'cursor:pointer;font-family:inherit">Close</button></div>';
+  document.body.appendChild(ov);
+}
+function openCitation(key){
+  var c=_CITATIONS[key];if(!c)return;
+  var provLabel={retrieved:'Primary document retrieved and read',corpus:'Vetted reference list',negative:'Checked absence — this search deliberately found nothing'}[c.provenance]||c.provenance;
+  var h='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Reference</div>';
+  h+='<div style="font-size:15px;font-weight:700;color:var(--text);line-height:1.4">'+_esc(c.title||key)+'</div>';
+  var meta=[c.authors,c.journal,c.year,c.pmid?('PMID '+c.pmid):'',c.trial_id||''].filter(Boolean).join(' · ');
+  if(meta)h+='<div style="font-size:11px;color:var(--muted2);margin-top:5px;line-height:1.5">'+_esc(meta)+'</div>';
+  if(c.states)h+='<div style="margin-top:12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--text);line-height:1.55"><div style="font-size:9px;font-weight:700;letter-spacing:0.6px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">What it states</div>'+_esc(c.states)+'</div>';
+  if(c.caveat)h+='<div style="margin-top:8px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.35);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--text);line-height:1.55"><div style="font-size:9px;font-weight:700;letter-spacing:0.6px;color:#f59e0b;text-transform:uppercase;margin-bottom:4px">Read with this caveat</div>'+_esc(c.caveat)+'</div>';
+  h+='<div style="margin-top:10px;font-size:10px;color:var(--muted2);line-height:1.5">'+_esc(provLabel)+'</div>';
+  _citOverlay(h);
+}
+function openGradeLegend(focus){
+  var order=['A','B','C','D'];
+  var h='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:10px">Evidence grades</div>';
+  h+='<div style="font-size:12px;color:var(--muted2);line-height:1.55;margin-bottom:12px">How well a <b style="color:var(--text)">specific dose</b> is supported for a physique goal in healthy people. <b style="color:var(--text)">A grade is not a safety rating</b> — grade D means nobody measured it, which is worse than a known risk, not better.</div>';
+  order.forEach(function(g){
+    var m=_GRADES[g];if(!m)return;
+    var on=(g===focus);
+    h+='<div style="background:'+(on?(m.color+'14'):'var(--surface2)')+';border:1px solid '+(on?(m.color+'66'):'var(--border)')+';border-radius:8px;padding:9px 11px;margin-bottom:6px">'+
+      '<div style="display:flex;align-items:center;gap:7px"><span style="color:'+m.color+';font-weight:800;font-size:13px">'+g+'</span>'+
+      '<span style="font-size:12px;font-weight:700;color:var(--text)">'+_esc(m.label)+'</span></div>'+
+      '<div style="font-size:11px;color:var(--muted2);margin-top:3px;line-height:1.5">'+_esc(m.desc)+'</div></div>';
+  });
+  if(_STACK_CAP)h+='<div style="margin-top:10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.35);border-radius:8px;padding:10px 12px;font-size:11px;color:var(--text);line-height:1.55"><b>Whole protocols cap at '+_esc(_STACK_CAP.cap)+'.</b> '+_esc(_STACK_CAP.note)+'</div>';
+  _citOverlay(h);
+}
+// Every reference the app can show, in one place — Settings → References.
+function openAllReferences(){
+  var keys=Object.keys(_CITATIONS);
+  if(!keys.length){_citOverlay('<div style="font-size:13px;color:var(--muted2)">References have not loaded yet. They arrive with the compound catalogue — check your connection and reopen.</div>');return;}
+  var groups={retrieved:[],corpus:[],negative:[]};
+  keys.forEach(function(k){(groups[_CITATIONS[k].provenance]||groups.corpus).push(k);});
+  var titles={retrieved:'Primary documents — retrieved and read',corpus:'Vetted reference list',negative:'Checked absences — searches that found nothing'};
+  var h='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">References</div>';
+  h+='<div style="font-size:12px;color:var(--muted2);line-height:1.55;margin-bottom:14px">Every source behind a dose or recommendation in this app. '+keys.length+' entries.</div>';
+  ['retrieved','corpus','negative'].forEach(function(p){
+    if(!groups[p].length)return;
+    h+='<div style="font-size:10px;font-weight:700;letter-spacing:0.6px;color:var(--muted2);text-transform:uppercase;margin:14px 0 6px">'+_esc(titles[p])+' ('+groups[p].length+')</div>';
+    groups[p].sort(function(a,b){return (_CITATIONS[a].title||'').localeCompare(_CITATIONS[b].title||'');}).forEach(function(k){
+      var c=_CITATIONS[k];
+      var meta=[c.journal,c.year,c.pmid?('PMID '+c.pmid):''].filter(Boolean).join(' · ');
+      h+='<div onclick="openCitation(\''+k+'\')" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:5px;cursor:pointer">'+
+        '<div style="font-size:12px;font-weight:600;color:var(--text);line-height:1.4">'+_esc(c.title||k)+'</div>'+
+        (meta?'<div style="font-size:10px;color:var(--muted2);margin-top:2px">'+_esc(meta)+'</div>':'')+'</div>';
+    });
+  });
+  _citOverlay(h);
+}
 // ── Pre-cycle body-fat readiness card (BF drives aromatase → lowers free T) ───
 function _bfFmt(n){return (Math.round(n*10)/10).toString();}
 function _bfEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -499,7 +637,7 @@ function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id)
 function logout(){_googleToken='';_sessionToken='';localStorage.removeItem('google_token');localStorage.removeItem('google_email');localStorage.removeItem('session_token');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('signin-screen').classList.remove('hidden');}
 function _fmtTokExp(tok){try{var p=JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));if(!p.exp)return null;return{exp:new Date(p.exp*1000),leftMin:Math.round((p.exp*1000-Date.now())/60000)};}catch(e){return null;}}
 function _renderAuthDebug(){var el=document.getElementById('s-session');if(!el)return;var st=localStorage.getItem('session_token')||'';var gt=localStorage.getItem('google_token')||'';var using=(_sessionToken?'session':(_googleToken?'google':'none'));el.textContent=st?'Present':(gt?'Google only':'None');el.style.color=st?'#3cffa0':'#f59e0b';function human(d){return d<0?'EXPIRED':d>1440?(Math.round(d/1440)+'d left'):d>60?(Math.round(d/60)+'h left'):d+'m left';}function line(label,tok){if(!tok)return'<div>'+label+': <b>absent</b></div>';var e=_fmtTokExp(tok);if(!e)return'<div>'+label+': present (no exp)</div>';return'<div>'+label+': '+human(e.leftMin)+' ('+e.exp.toLocaleString()+')</div>';}var det=document.getElementById('s-session-detail');if(det)det.innerHTML=line('Session',st)+line('Google',gt)+'<div>Using: <b>'+using+'</b></div>';}
-async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}_renderAuthDebug();const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData(BC_KEY,[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});if(r.ok){const hd=await r.json();aDot.className='agent-dot up';document.getElementById('s-agent-label').textContent='Online'+(hd.version?' v'+hd.version:'');}else{aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders(),signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';const _mBtn=document.getElementById('s-migrate-btn');if(_mBtn)_mBtn.style.display=unsynced===0?'none':'';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}try{const _bc=new AbortController();setTimeout(()=>_bc.abort(),5000);const _rb=await fetch(AGENT_URL+'/backups',{headers:authHeaders(),signal:_bc.signal});if(_rb.ok){const _bd=await _rb.json();const _dates=[...new Set((_bd.backups||[]).map(function(b){return b.date;}))].sort();const _dl=_dates.length?_dates[_dates.length-1]:null;const _wk=_dates.slice().reverse().find(function(d){return new Date(d+'T12:00:00').getDay()===1;})||null;const _mo=_dates.slice().reverse().find(function(d){return d.slice(8)==='01';})||null;if(document.getElementById('s-backup-daily'))document.getElementById('s-backup-daily').textContent=_dl||'None';if(document.getElementById('s-backup-weekly'))document.getElementById('s-backup-weekly').textContent=_wk||'None';if(document.getElementById('s-backup-monthly'))document.getElementById('s-backup-monthly').textContent=_mo||'None';}}catch(e){}buildTabsSettingsCard();buildAppearanceCard();buildCacheCard();buildStageCopyCard();checkForUpdate();buildLastPushDropdown();const _mEl=document.getElementById('s-milestones-count');if(_mEl&&_mEl.textContent==='—')_mEl.textContent=MILESTONES.length+' events';}
+async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}_renderAuthDebug();const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData(BC_KEY,[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});if(r.ok){const hd=await r.json();aDot.className='agent-dot up';document.getElementById('s-agent-label').textContent='Online'+(hd.version?' v'+hd.version:'');}else{aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders(),signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';const _mBtn=document.getElementById('s-migrate-btn');if(_mBtn)_mBtn.style.display=unsynced===0?'none':'';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}try{const _bc=new AbortController();setTimeout(()=>_bc.abort(),5000);const _rb=await fetch(AGENT_URL+'/backups',{headers:authHeaders(),signal:_bc.signal});if(_rb.ok){const _bd=await _rb.json();const _dates=[...new Set((_bd.backups||[]).map(function(b){return b.date;}))].sort();const _dl=_dates.length?_dates[_dates.length-1]:null;const _wk=_dates.slice().reverse().find(function(d){return new Date(d+'T12:00:00').getDay()===1;})||null;const _mo=_dates.slice().reverse().find(function(d){return d.slice(8)==='01';})||null;if(document.getElementById('s-backup-daily'))document.getElementById('s-backup-daily').textContent=_dl||'None';if(document.getElementById('s-backup-weekly'))document.getElementById('s-backup-weekly').textContent=_wk||'None';if(document.getElementById('s-backup-monthly'))document.getElementById('s-backup-monthly').textContent=_mo||'None';}}catch(e){}buildTabsSettingsCard();buildAppearanceCard();buildRefsCard();buildCacheCard();buildStageCopyCard();checkForUpdate();buildLastPushDropdown();const _mEl=document.getElementById('s-milestones-count');if(_mEl&&_mEl.textContent==='—')_mEl.textContent=MILESTONES.length+' events';}
 const PROMOTE_STEPS=['Checkout staging','Checkout prod','Sync files into prod branch','Open PR on prod','Wait for CI and merge prod PR'];let _prodVer=null;let _lastPushData=null;let _pollErrs=0;let _prevProdVer=null;let _prodArtifacts=null;let _stagingVer=null;function pushToProd(){const btn=document.getElementById('push-to-prod-btn');const statusEl=document.getElementById('push-to-prod-status');if(btn){btn.textContent='Pushing...';btn.disabled=true;}_prodVer=null;_pollErrs=0;_prevProdVer=null;_stagingVer=VERSION;fetch('https://viritasorg.github.io/peptidetracker/version.json',{cache:'no-store'}).then(r=>r.json()).then(d=>{_prevProdVer=d.version||null;}).catch(()=>{});renderPromoteStatus({status:'queued',steps:PROMOTE_STEPS.map(n=>({name:n,status:'queued',conclusion:null}))},statusEl);fetch(AGENT_URL+'/promote-to-prod',{method:'POST',headers:authHeaders()}).then(r=>{if(!r.ok)return r.json().catch(()=>({})).then(j=>{throw new Error('HTTP '+r.status+(j.detail?' — '+j.detail:''));});return r.json();}).then(data=>{pollPromoteStatus(0,data.dispatched_at||new Date().toISOString().replace(/\.\d{3}Z$/,'Z'));}).catch(e=>{if(btn){btn.textContent='Push to Prod';btn.disabled=false;}if(statusEl)statusEl.textContent='Failed: '+e.message;});}
 function pollPromoteStatus(attempt,since){if(attempt>100){const statusEl=document.getElementById('push-to-prod-status');const btn=document.getElementById('push-to-prod-btn');if(btn){btn.textContent='Push to Prod';btn.disabled=false;}if(statusEl)statusEl.innerHTML+='<div style="color:#ef4444;font-weight:600;margin-top:6px">Timed out — <a href="https://github.com/ViritasOrg/peptidetracker-staging/actions" target="_blank" style="color:#ef4444">Check Actions →</a></div>';return;}fetch(AGENT_URL+'/promote-to-prod/status?since='+encodeURIComponent(since),{headers:authHeaders()}).then(r=>r.json()).then(data=>{_pollErrs=0;const statusEl=document.getElementById('push-to-prod-status');const btn=document.getElementById('push-to-prod-btn');renderPromoteStatus(data,statusEl);if(data.status==='completed'){_lastPushData=data;saveLastPush(data,null,_stagingVer);if(btn){btn.textContent='Push to Prod';btn.disabled=false;}if(data.pr_url)pollProdVersion(0);}else{setTimeout(()=>pollPromoteStatus(attempt+1,since),3000);}}).catch(()=>{_pollErrs++;if(_pollErrs>=5){const statusEl=document.getElementById('push-to-prod-status');const btn=document.getElementById('push-to-prod-btn');if(btn){btn.textContent='Push to Prod';btn.disabled=false;}if(statusEl)statusEl.innerHTML+='<div style="color:#ef4444;font-weight:600;margin-top:6px">Connection lost — <a href="https://github.com/ViritasOrg/peptidetracker-staging/actions" target="_blank" style="color:#ef4444">Check Actions →</a></div>';return;}setTimeout(()=>pollPromoteStatus(attempt+1,since),5000);});}
 function pollProdVersion(attempt){if(attempt>40)return;fetch('https://viritasorg.github.io/peptidetracker/version.json',{cache:'no-store'}).then(r=>r.json()).then(function(d){var v=d.version||'?';var row=document.getElementById('push-to-prod-prod-row');if(_prevProdVer!==null&&v===_prevProdVer){if(row)row.innerHTML='<span style="color:var(--accent);font-weight:700;width:10px;text-align:center;flex-shrink:0">…</span><span style="color:var(--muted2)">Pages deploying...</span>';setTimeout(function(){pollProdVersion(attempt+1);},20000);return;}_prodVer=v;if(row)row.innerHTML='<span style="color:#22c55e;font-weight:700;width:10px;text-align:center;flex-shrink:0">✓</span><span style="color:var(--fg)">Prod: v'+v+'</span>';saveLastPush(_lastPushData,v,_stagingVer);pollProdArtifacts(0);}).catch(function(){setTimeout(function(){pollProdVersion(attempt+1);},5000);});}
@@ -1797,8 +1935,9 @@ function buildAppearanceCard(){
     +densityBlock
     +'</div></div>';
 }
+function buildRefsCard(){var card=document.getElementById('s-refs-card');if(!card)return;var n=Object.keys(_CITATIONS||{}).length;card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'+sSecHdr('refs','Research & References')+sSecBody('refs')+'<div style="padding:14px 16px;"><div style="font-size:12px;color:var(--muted2);margin-bottom:12px;line-height:1.55">Every dose tier in this app carries an evidence grade and the sources behind it. '+(n?(n+' references loaded.'):'References load with the compound catalogue.')+'</div>'+'<div style="display:flex;gap:8px;flex-wrap:wrap">'+'<button onclick="openAllReferences()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">All references</button>'+'<button onclick="openGradeLegend()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Evidence grades</button>'+'</div></div></div></div>';}
 function buildCacheCard(){var card=document.getElementById('s-cache-card');if(!card)return;card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'+sSecHdr('cache','Local Cache')+sSecBody('cache')+'<div style="padding:14px 16px;"><div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">All data is stored on the server. Clear the local cache to force a full re-sync.</div><button onclick="wipeLocalCache()" style="background:var(--danger,#ff3c3c);color:#fff;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Wipe local cache</button></div></div></div>';}
-function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();(function(){if(localStorage.getItem('pep-dose-dedup-v1'))return;function _ndi(id){var _m=id.match(/^(.+)_(\d{4}-\d{1,2}-\d{1,2})$/);if(!_m)return id;var _p=_m[2].split('-');return _m[1]+'_'+_p[0]+'-'+('0'+_p[1]).slice(-2)+'-'+('0'+_p[2]).slice(-2);}var _ks=[];for(var _i=0;_i<localStorage.length;_i++){var _k=localStorage.key(_i);if(_k&&_k.startsWith('proto-chk-'))_ks.push(_k);}_ks.forEach(function(k){var _d;try{_d=JSON.parse(localStorage.getItem(k)||'[]');}catch(e){return;}if(!Array.isArray(_d))return;var _seen=new Set();var _dd=[];_d.forEach(function(id){var _n=_ndi(id);if(!_seen.has(_n)){_seen.add(_n);_dd.push(_n);}});if(_dd.length!==_d.length)localStorage.setItem(k,JSON.stringify(_dd));});localStorage.setItem('pep-dose-dedup-v1','1');})();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('signin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);if(!localStorage.getItem('peptide_sync_done_fly')){const bar=document.createElement('div');bar.className='sync-bar';bar.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1c1c1c;border-top:1px solid var(--accent);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;z-index:500;font-size:13px;';bar.innerHTML='<span style="color:#f0f0f0">Sync local data to backend?<\/span><button id="peptide-sync-btn" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer" onclick="pushAllPeptideToBackend()">Sync Now<\/button>';document.body.appendChild(bar);}checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();syncFeaturesFromAgent();syncProtocolTemplates();syncSafetyNotes();syncEnhancedCompoundsFromAgent();if(typeof syncEscalationFromAgent==='function')syncEscalationFromAgent();if(typeof syncCycleTemplatesFromAgent==='function')syncCycleTemplatesFromAgent();if(typeof syncCycleBloodworkRecsFromAgent==='function')syncCycleBloodworkRecsFromAgent();syncSupplementsFromAgent();syncSupplementLogFromAgent();if(typeof syncLabMarkersFromAgent==='function')syncLabMarkersFromAgent();if(typeof _blSyncPK==='function')_blSyncPK();if(typeof _tcFetchBwEntries==='function'&&typeof _tcBwEntries!=='undefined'&&_tcBwEntries===null&&!_tcBwLoading){_tcBwLoading=true;_tcFetchBwEntries();}checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();(function(){var _mpk='pep-mp-'+MILESTONES.length;if(!localStorage.getItem(_mpk))pushMilestonesToBackend().then(function(){localStorage.setItem(_mpk,'1');}).catch(function(){});})();applySubtabLabels();initTabVis();(function(){PRIMARY_ORDER.forEach(function(p){var s=localStorage.getItem('pep-last-sub-'+p);if(s)_lastSub[p]=s;});var _lt=localStorage.getItem('pep-last-tab');var startTab=(_lt&&_tabVis[_lt]!==false&&document.getElementById('tab-btn-'+_lt))?_lt:'today';var startPrimary=primaryOf(startTab)||'today';_lastSub[startPrimary]=startTab;switchPrimary(startPrimary);})();_initSwipeNav();}
+function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();(function(){if(localStorage.getItem('pep-dose-dedup-v1'))return;function _ndi(id){var _m=id.match(/^(.+)_(\d{4}-\d{1,2}-\d{1,2})$/);if(!_m)return id;var _p=_m[2].split('-');return _m[1]+'_'+_p[0]+'-'+('0'+_p[1]).slice(-2)+'-'+('0'+_p[2]).slice(-2);}var _ks=[];for(var _i=0;_i<localStorage.length;_i++){var _k=localStorage.key(_i);if(_k&&_k.startsWith('proto-chk-'))_ks.push(_k);}_ks.forEach(function(k){var _d;try{_d=JSON.parse(localStorage.getItem(k)||'[]');}catch(e){return;}if(!Array.isArray(_d))return;var _seen=new Set();var _dd=[];_d.forEach(function(id){var _n=_ndi(id);if(!_seen.has(_n)){_seen.add(_n);_dd.push(_n);}});if(_dd.length!==_d.length)localStorage.setItem(k,JSON.stringify(_dd));});localStorage.setItem('pep-dose-dedup-v1','1');})();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('signin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);if(!localStorage.getItem('peptide_sync_done_fly')){const bar=document.createElement('div');bar.className='sync-bar';bar.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1c1c1c;border-top:1px solid var(--accent);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;z-index:500;font-size:13px;';bar.innerHTML='<span style="color:#f0f0f0">Sync local data to backend?<\/span><button id="peptide-sync-btn" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer" onclick="pushAllPeptideToBackend()">Sync Now<\/button>';document.body.appendChild(bar);}checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();syncFeaturesFromAgent();syncProtocolTemplates();syncSafetyNotes();syncEnhancedCompoundsFromAgent();if(typeof syncCitations==='function')syncCitations();if(typeof syncEscalationFromAgent==='function')syncEscalationFromAgent();if(typeof syncCycleTemplatesFromAgent==='function')syncCycleTemplatesFromAgent();if(typeof syncCycleBloodworkRecsFromAgent==='function')syncCycleBloodworkRecsFromAgent();syncSupplementsFromAgent();syncSupplementLogFromAgent();if(typeof syncLabMarkersFromAgent==='function')syncLabMarkersFromAgent();if(typeof _blSyncPK==='function')_blSyncPK();if(typeof _tcFetchBwEntries==='function'&&typeof _tcBwEntries!=='undefined'&&_tcBwEntries===null&&!_tcBwLoading){_tcBwLoading=true;_tcFetchBwEntries();}checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();(function(){var _mpk='pep-mp-'+MILESTONES.length;if(!localStorage.getItem(_mpk))pushMilestonesToBackend().then(function(){localStorage.setItem(_mpk,'1');}).catch(function(){});})();applySubtabLabels();initTabVis();(function(){PRIMARY_ORDER.forEach(function(p){var s=localStorage.getItem('pep-last-sub-'+p);if(s)_lastSub[p]=s;});var _lt=localStorage.getItem('pep-last-tab');var startTab=(_lt&&_tabVis[_lt]!==false&&document.getElementById('tab-btn-'+_lt))?_lt:'today';var startPrimary=primaryOf(startTab)||'today';_lastSub[startPrimary]=startTab;switchPrimary(startPrimary);})();_initSwipeNav();}
 function initTabVis(){const saved=getData('proto-tab-vis',{});_tabVis=Object.assign({},TAB_DEFAULTS,saved);applyTabVis();}
 async function pushPepSettingsToAgent(kv){try{const r=await fetch(AGENT_URL+'/user-settings',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({settings:kv})});if(!r.ok)_logHttp('pushPepSettings',r.status,'/user-settings');}catch(e){_logErr('pushPepSettings',e);}}
 // Seed the staging environment with a copy of this account's production data.

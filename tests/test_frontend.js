@@ -1820,6 +1820,100 @@ console.log(`\n${'─'.repeat(59)}`);
   G._tcHistory = _svH; G._tcHistoryState = _svHS; G._injectionsCache = _svC; G._tcp = _svP;
 }
 
+
+// ── Evidence grades + research citations ─────────────────────────────────────
+// Henrik, 2026-08-12: "this app will basically have research citations and t-calc
+// as its USP." So a dose recommendation must never render without (a) how well
+// evidenced it is and (b) what it stands on. These tests exist because an
+// authoritative-looking badge with nothing behind it is worse than no badge.
+{
+  const stack = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
+  const cycles = fs.readFileSync(path.join(__dirname, '../tab-cycles.js'), 'utf8');
+
+  // The registry is the backend's. Nothing here may hardcode bibliography —
+  // that is the compound-data-lives-in-the-backend rule applied to citations.
+  check('citations come from the backend, not a frontend const',
+    /_absorbCitations/.test(rawScript) && /AGENT_URL\+'\/citations'/.test(rawScript));
+  check('the enhanced catalogue fetch absorbs the citations riding with it',
+    /_absorbCitations\(d\)/.test(cycles));
+  check('citations are also fetched standalone, so a TRT-only user still gets them',
+    /async function syncCitations\(\)/.test(rawScript));
+  check('  …and startup actually calls it', /syncCitations\(\)/.test(rawScript));
+  check('no PMID is hardcoded in the frontend',
+    !/PMID\s*\d{5,}/.test(rawScript) && !/PMID\s*\d{5,}/.test(stack));
+
+  // The three shared helpers. One implementation, because all three compound
+  // tiers must render evidence identically (UI parity rule).
+  check('a grade badge helper exists', /function _evBadge\(/.test(rawScript));
+  check('an anchor-line helper exists', /function _anchorLine\(/.test(rawScript));
+  check('a citation-chip helper exists', /function _citeChips\(/.test(rawScript));
+  check('the grade legend is rendered from the backend, not restated locally',
+    /_GRADES\[g\]/.test(rawScript));
+
+  // The anchor is the point of the whole feature.
+  {
+    const i = rawScript.indexOf('function _anchorLine(');
+    const body = rawScript.slice(i, i + 1400);
+    check('a dose above the anchor is called uncharted, not endorsed',
+      /highest dose ever measured in a trial/.test(body) && /Uncharted, not endorsed/.test(body));
+    check('a compound with no anchor says so explicitly',
+      /No dose of this compound has ever been measured/.test(body));
+    check('  …rather than silently rendering nothing for it',
+      /no_anchor/.test(body));
+  }
+
+  // PARITY: all three tiers must show grade, anchor and sources. This is the
+  // rule that gets quietly broken, so it is asserted per renderer.
+  const tiers = [
+    ['Enhanced', '_renderEnhancedGuide', 'function stackAASAutoFill'],
+    ['TRT', '_renderTRTGuide', 'function _refreshTRTGuide'],
+    // End marker must be the NEXT function in file order, not any function that
+    // _renderDoseGuide happens to call — _dosePersonalization is defined earlier,
+    // so indexOf returned -1 and sliced an empty body that passed nothing.
+    ['Peptides', '_renderDoseGuide', 'function _renderRampSection'],
+  ];
+  tiers.forEach(function(t){
+    const name = t[0];
+    const start = stack.indexOf('function ' + t[1] + '(');
+    const end = stack.indexOf(t[2], start);
+    const body = start >= 0 && end > start ? stack.slice(start, end) : '';
+    check(name + ' tier renders an evidence badge', /_evBadge\(/.test(body));
+    check(name + ' tier renders the dose anchor', /_anchorLine\(/.test(body));
+    check(name + ' tier renders source chips', /_citeChips\(/.test(body));
+  });
+
+  // Mechanism and side-effect copy are claims too, not just doses.
+  {
+    const i = stack.indexOf('function _renderEnhancedGuide(');
+    const body = stack.slice(i, stack.indexOf('function stackAASAutoFill', i));
+    check('"How it works" carries its sources', /cat\.interaction\+_refs/.test(body));
+    check('"Side effects" carries its sources', /cat\.sides\+_refs/.test(body));
+  }
+
+  // A user must be able to read the whole evidence base, not only what happens
+  // to be on screen.
+  check('Settings exposes every reference', /function openAllReferences\(/.test(rawScript));
+  check('  …and the grade legend', /function openGradeLegend\(/.test(rawScript));
+  check('  …via a Settings card', /function buildRefsCard\(/.test(rawScript));
+  check('  …that loadSettings actually builds', /buildRefsCard\(\);/.test(rawScript));
+  check('a single citation opens in full', /function openCitation\(/.test(rawScript));
+  check('a citation shows what the document states', /What it states/.test(rawScript));
+  check('a citation shows its caveat, so it cannot be over-read',
+    /Read with this caveat/.test(rawScript));
+  check('a checked absence is shown as a source in its own right',
+    /Checked absence/.test(rawScript));
+  check('the grade legend says a grade is not a safety rating',
+    /not a safety rating/.test(rawScript));
+
+  // Citation text is backend-supplied, so it goes through the escaper.
+  {
+    const i = rawScript.indexOf('function openCitation(');
+    const body = rawScript.slice(i, rawScript.indexOf('function openGradeLegend(', i));
+    check('citation fields are escaped before rendering',
+      /_esc\(c\.title/.test(body) && /_esc\(c\.states\)/.test(body));
+  }
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
