@@ -1052,7 +1052,8 @@ function _renderDoseGuide(pepId,currentDose){
     var doseHtml=t.d?('<span style="font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap">'+t.d+'</span>'):'';
     var note=t.n?('<span style="font-size:11px;color:var(--muted2);flex:1">'+t.n+'</span>'):'';
     var risk=t.r?('<div style="font-size:11px;color:#f59e0b;padding:2px 0 0 0">⚠ '+t.r+'</div>'):'';
-    return'<div style="'+bg+'border-radius:6px;padding:5px 8px;margin-bottom:3px"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;font-weight:700;color:'+(isActive?'var(--accent)':'var(--muted2)')+';text-transform:uppercase;min-width:62px">'+t.l+'</span>'+doseHtml+'</div>'+note+risk+'</div>';
+    var _pev=t.ev||null;var _pb=(_pev&&typeof _evBadge==='function')?_evBadge(_pev.g):'';var _pa=(typeof _anchorLine==='function')?_anchorLine(t.evidence||null,_pev):'';var _pc=(_pev&&typeof _citeChips==='function')?_citeChips(_pev.cite):'';
+    return'<div style="'+bg+'border-radius:6px;padding:5px 8px;margin-bottom:3px"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:10px;font-weight:700;color:'+(isActive?'var(--accent)':'var(--muted2)')+';text-transform:uppercase;min-width:62px">'+t.l+'</span>'+doseHtml+_pb+'</div>'+note+risk+_pa+_pc+'</div>';
   });
   var profile=_userProfile();
   var hasProfile=profile.age>0||profile.weight_kg>0;
@@ -1427,9 +1428,9 @@ function _renderEnhancedGuide(cat,activeDose){
   var html='';
   if(cat.cadence){var cad=cat.cadence;html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">Injection Frequency</div><div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;"><div style="font-size:12px;font-weight:700;color:var(--accent);">'+cad.rec+'</div><div style="font-size:11px;color:var(--muted2);margin-top:2px;line-height:1.5;">'+cad.note+'</div><div style="font-size:10px;color:var(--muted2);margin-top:3px;font-style:italic;">½-life: '+cad.halfLife+'</div></div></div>';}
   var tiers=(cat.doseTiers&&cat.doseTiers.length)?cat.doseTiers:(DOSE_GUIDE&&DOSE_GUIDE[cat.id]?DOSE_GUIDE[cat.id]:null);
-  if(tiers&&tiers.length){var rows=tiers.map(function(t){var _isActive=(activeDose&&activeDose>0)?(function(){var _ns=(t.d||'').match(/[\d.]+/g);if(_ns&&_ns.length>=2){var _mn=parseDec(_ns[0]),_mx=parseDec(_ns[_ns.length-1]);return activeDose>=_mn&&activeDose<=_mx;}return!!t.b;})():!!t.b;var bg=_isActive?'background:rgba(var(--accent-rgb,60,255,160),0.08);border:1px solid rgba(var(--accent-rgb,60,255,160),0.3);':'background:var(--surface2);border:1px solid var(--border);';var doseHtml=t.d?('<span style="font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap">'+t.d+'</span>'):'';var note=t.n?('<div style="font-size:11px;color:var(--muted2);margin-top:2px;">'+t.n+'</div>'):'';var risk=t.r?('<div style="font-size:11px;color:#f59e0b;padding:2px 0 0 0">⚠ '+t.r+'</div>'):'';return'<div style="'+bg+'border-radius:6px;padding:5px 8px;margin-bottom:3px"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;font-weight:700;color:'+(_isActive?'var(--accent)':'var(--muted2)')+';text-transform:uppercase;min-width:62px">'+t.l+'</span>'+doseHtml+'</div>'+note+risk+'</div>';}).join('');html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Recommended Doses</div>'+rows+'</div>';}
-  if(cat.interaction)html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">How it works</div><div style="font-size:12px;color:var(--text);line-height:1.5;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">'+cat.interaction+'</div></div>';
-  if(cat.sides)html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">Side effects</div><div style="font-size:12px;color:var(--text);line-height:1.5;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">'+cat.sides+'</div></div>';
+  if(tiers&&tiers.length){var rows=tiers.map(function(t){var _isActive=(activeDose&&activeDose>0)?(function(){var _ns=(t.d||'').match(/[\d.]+/g);if(_ns&&_ns.length>=2){var _mn=parseDec(_ns[0]),_mx=parseDec(_ns[_ns.length-1]);return activeDose>=_mn&&activeDose<=_mx;}return!!t.b;})():!!t.b;var bg=_isActive?'background:rgba(var(--accent-rgb,60,255,160),0.08);border:1px solid rgba(var(--accent-rgb,60,255,160),0.3);':'background:var(--surface2);border:1px solid var(--border);';var doseHtml=t.d?('<span style="font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap">'+t.d+'</span>'):'';var note=t.n?('<div style="font-size:11px;color:var(--muted2);margin-top:2px;">'+t.n+'</div>'):'';var risk=t.r?('<div style="font-size:11px;color:#f59e0b;padding:2px 0 0 0">⚠ '+t.r+'</div>'):'';var _ev=t.ev||null;var _badge=(_ev&&typeof _evBadge==='function')?_evBadge(_ev.g):'';var _anch=(typeof _anchorLine==='function')?_anchorLine(cat.evidence,_ev):'';var _cit=(_ev&&typeof _citeChips==='function')?_citeChips(_ev.cite):'';return'<div style="'+bg+'border-radius:6px;padding:5px 8px;margin-bottom:3px"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:10px;font-weight:700;color:'+(_isActive?'var(--accent)':'var(--muted2)')+';text-transform:uppercase;min-width:62px">'+t.l+'</span>'+doseHtml+_badge+'</div>'+note+risk+_anch+_cit+'</div>';}).join('');html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Recommended Doses</div>'+rows+'</div>';}
+  var _refs=(typeof _citeChips==='function')?_citeChips(cat.refs):'';if(cat.interaction)html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">How it works</div><div style="font-size:12px;color:var(--text);line-height:1.5;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">'+cat.interaction+_refs+'</div></div>';
+  if(cat.sides)html+='<div style="display:block;margin-top:8px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">Side effects</div><div style="font-size:12px;color:var(--text);line-height:1.5;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">'+cat.sides+_refs+'</div></div>';
   return html+_renderSafetyNote('enhanced');
 }
 function stackAASAutoFill(id){
@@ -1545,12 +1546,16 @@ function _renderTRTGuide(cId,weeklyDoseMg){
     var bg=isMatch?'background:rgba(232,160,32,0.1);border:1px solid rgba(232,160,32,0.4);':'background:var(--surface2);border:1px solid var(--border);';
     var risk=t.r?'<div style="font-size:11px;color:#f59e0b;padding-top:2px">⚠ '+t.r+'</div>':'';
     return'<div style="'+bg+'border-radius:6px;padding:5px 8px;margin-bottom:3px">'
-      +'<div style="display:flex;align-items:center;gap:8px">'
+      +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
       +'<span style="font-size:10px;font-weight:700;color:'+(isMatch?tColor:'var(--muted2)')+';text-transform:uppercase;min-width:80px">'+t.l+'</span>'
       +'<span style="font-size:12px;font-weight:700;color:'+tColor+'">'+t.d+'</span>'
+      +((t.ev&&typeof _evBadge==='function')?_evBadge(t.ev.g):'')
       +'</div>'
       +'<div style="font-size:11px;color:var(--muted2);margin-top:1px">'+t.freq+(t.n?' — '+t.n:'')+'</div>'
-      +risk+'</div>';
+      +risk
+      +((t.ev&&typeof _anchorLine==='function')?_anchorLine(g.evidence,t.ev):'')
+      +((t.ev&&typeof _citeChips==='function')?_citeChips(t.ev.cite):(typeof _citeChips==='function'?_citeChips(g.refs):''))
+      +'</div>';
   }).join('');
   var profile=_userProfile();
   var mods=[];

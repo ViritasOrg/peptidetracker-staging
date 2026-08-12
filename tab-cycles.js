@@ -190,7 +190,7 @@ async function syncCycleTemplatesFromAgent(){try{var _sx=_userSexCyc();var r=awa
 async function syncCycleBloodworkRecsFromAgent(){try{var r=await fetch(AGENT_URL+'/cycles/bloodwork-recommendations?sex='+_userSexCyc(),{headers:authHeaders()});if(!r.ok){_logHttp('syncCycleBwRecs',r.status,'/cycles/bloodwork-recommendations');return;}var d=await r.json();if(d&&d.panels){_cycleBwPanels=d.panels;setData('proto-cycle-bw-panels',_cycleBwPanels);if(typeof renderCyclesTab==='function')renderCyclesTab();}}catch(e){_logErr('syncCycleBwRecs',e);}}
 async function syncEnhancedCompoundsFromAgent(){
   var ctrl=new AbortController();var tid=setTimeout(function(){ctrl.abort();},10000);
-  try{var r=await fetch(AGENT_URL+'/compounds/enhanced',{headers:authHeaders(),signal:ctrl.signal});clearTimeout(tid);if(!r.ok){_logHttp('syncEnhanced',r.status,'/compounds/enhanced');return{ok:false,status:r.status};}var d=await r.json();ENHANCEMENT_COMPOUNDS=Array.isArray(d)?d:(d.compounds||[]);return{ok:true};}catch(e){clearTimeout(tid);_logErr('syncEnhanced',e);return{ok:false,status:null,msg:String(e&&e.message||e)};}
+  try{var r=await fetch(AGENT_URL+'/compounds/enhanced',{headers:authHeaders(),signal:ctrl.signal});clearTimeout(tid);if(!r.ok){_logHttp('syncEnhanced',r.status,'/compounds/enhanced');return{ok:false,status:r.status};}var d=await r.json();ENHANCEMENT_COMPOUNDS=Array.isArray(d)?d:(d.compounds||[]);if(typeof _absorbCitations==='function')_absorbCitations(d);return{ok:true};}catch(e){clearTimeout(tid);_logErr('syncEnhanced',e);return{ok:false,status:null,msg:String(e&&e.message||e)};}
 }
 var _cwiz={step:1,tpl:null,phase:'foundational',weeks:20,startDate:'',compounds:[]};
 function cycleWizardOpen(){
