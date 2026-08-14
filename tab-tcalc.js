@@ -3348,6 +3348,31 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
     ctx.beginPath(); ctx.moveTo(ix, PAD.top + cH); ctx.lineTo(ix, PAD.top + cH + 5); ctx.stroke();
   });
 
+  // ── SCHEDULED BUT NEVER TICKED — marked WHERE THE CURVE GOES FLAT ──────────
+  // These doses are excluded from the model (a plan the user did not confirm taking
+  // is not the past — unchanged rule), which is correct but invisible: the curve
+  // simply stops rising, and with a 56-day depot it can tip into a visible DECLINE
+  // for several days. Reported three times as "the curve flatlines", most recently
+  // read as an artefact of two adjacent series joining — it is not, the join is
+  // seamless. The note under the chart already names the dates; the gap has to be
+  // legible at the point it happens, not only in prose. Drawn as a hollow amber
+  // stem so it reads as "a dose belongs here and is not counted", never as a dose.
+  if (_tcSkippedPast && _tcSkippedPast.length) {
+    ctx.save();
+    _tcSkippedPast.forEach(function(e) {
+      if (!e || !e.date) return;
+      var sd = Math.round((new Date(e.date + 'T12:00:00') - firstDate) / 86400000);
+      if (sd < xStart || sd > xEnd) return;
+      var sx = xOf(sd);
+      ctx.strokeStyle = '#e8a020cc'; ctx.lineWidth = 1; ctx.setLineDash([2,2]);
+      ctx.beginPath(); ctx.moveTo(sx, PAD.top); ctx.lineTo(sx, PAD.top + cH + 5); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(sx, PAD.top + cH + 3, 2.2, 0, Math.PI * 2);
+      ctx.strokeStyle = '#e8a020'; ctx.lineWidth = 1.2; ctx.stroke();
+    });
+    ctx.restore();
+  }
+
   // Bloodwork dots — one per entry that has a free_t value, plotted at their calendar date
   if (_tcBwEntries && calFT) {
     _tcBwEntries.forEach(function(bwE) {

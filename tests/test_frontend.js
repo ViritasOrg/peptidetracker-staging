@@ -2075,6 +2075,17 @@ console.log('\n── T-calc: skipped doses are reported, not absorbed ───
   // Cadence must survive a hole anywhere in the run.
   check('series cadence is the MODAL gap, not the first gap',
     !/_seriesMeta\[sid\]\.interval=Math\.round\(\(d1-d0\)\/86400000\)/.test(_skSrc));
+
+  // The gap has to be visible ON THE CHART, at the point the curve stops rising.
+  // Reported three times as "the curve flatlines" — the third time read as an
+  // artefact of two adjacent series joining, which it is not (the join is seamless;
+  // the flat is entirely the unticked doses). Prose under the chart was not enough.
+  check('skipped doses are marked on the chart itself',
+    /_tcSkippedPast && _tcSkippedPast\.length/.test(_skSrc) &&
+    /ctx\.arc\(sx, PAD\.top \+ cH \+ 3/.test(_skSrc));
+  check('  …distinct from a real dose tick, not drawn as one',
+    /setLineDash\(\[2,2\]\)[\s\S]{0,400}?ctx\.arc\(sx/.test(_skSrc));
+
   check('  …and the card states how many doses the span is missing',
     /_seriesMeta\[sid\]\.missing/.test(_skSrc) && / missed<\/span>/.test(_skSrc));
 }
