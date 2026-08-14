@@ -2148,6 +2148,173 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcCurveLog === 'function
   G._injectionsCache = _uxSave.c; G._tcSkippedPast = _uxSave.sk;
 }
 
+
+// ── T-Calc: every way a schedule can be CREATED, driven end to end ───────────
+// Audit 2026-08-14. Until now the two main creation paths — the Add sheet and the
+// series editor — were guarded only by source greps (call ordering, await present,
+// draft flag). Those catch "someone deleted the await"; they do not catch "the
+// resulting schedule is wrong", which is exactly what shipped: a straddling edit
+// silently lost its past-dated doses on every save.
+//
+// These drive the real functions with stubbed DOM fields and a recording fetch, and
+// assert what is actually WRITTEN, for every temporal permutation:
+//   entry point  x  {all past, straddling today, all future}
+console.log('\n── T-calc: schedule creation permutations ────────────────');
+if (typeof G._tcConfirmAddSheet === 'function' && typeof G._tcSaveEditSeries === 'function') {
+  const _pmSave = {tp:G._tcp, us:G._userStacks, h:G._tcHistory, hs:G._tcHistoryState,
+                   c:G._injectionsCache, sk:G._tcSkippedPast, as:G._tcAddSheet,
+                   es:G._tcEditSeriesId, f:G.fetch, g:G.document.getElementById};
+  const _dk = G.dateKey, _now = new Date();
+  const _d = (off) => _dk(new Date(_now.getTime() + off * 86400000));
+
+  // Record every write instead of performing it.
+  const _arm = (fields) => {
+    const calls = [];
+    G.fetch = async (url, opt) => {
+      const m = (opt && opt.method) || 'GET';
+      let body = null;
+      try { body = opt && opt.body ? JSON.parse(opt.body) : null; } catch (e) {}
+      calls.push({url:String(url), method:m, body:body});
+      return {ok:true, status:200, json: async () => []};
+    };
+    G.document.getElementById = (id) =>
+      Object.prototype.hasOwnProperty.call(fields, id)
+        ? {value:fields[id], textContent:'', style:{}, innerHTML:'', remove(){}, appendChild(){}}
+        : {value:'', textContent:'', style:{}, innerHTML:'', remove(){}, appendChild(){},
+           classList:{add(){},remove(){},contains:()=>false}, getContext:()=>null, offsetWidth:300};
+    return calls;
+  };
+  const _reset = () => {
+    G._userStacks = [{id:'s1', name:'P1', cycle_start:_d(-30)}];
+    G._tcp = {targetStackId:'s1', manualLog:[], plannerMode:'advanced', measuredFT:'217'};
+    G._tcHistory = []; G._tcHistoryState = 'ready';
+    G._injectionsCache = {}; G._tcSkippedPast = [];
+  };
+  // Doses written as RECORDS (logged:true) via POST /injections
+  const _recs  = (c) => c.filter(x => x.method === 'POST' && /\/injections$/.test(x.url) && x.body && x.body.logged === true);
+  // Doses written as PLAN rows (logged:false) via POST /injections
+  const _plans = (c) => c.filter(x => x.method === 'POST' && /\/injections$/.test(x.url) && x.body && x.body.logged === false);
+  // Future plan, written by the batch upsert
+  const _batch = (c) => c.filter(x => x.method === 'POST' && /\/injections\/batch$/.test(x.url))
+                         .reduce((n, x) => n + ((x.body && x.body.entries) ? x.body.entries.length : 0), 0);
+
+  // ── ADD SHEET ────────────────────────────────────────────────────────────
+  const _add = async (label, fields, isSeries, expect) => {
+    _reset();
+    G._tcAddSheet = {isSeries: isSeries};
+    const calls = _arm(fields);
+    await G._tcConfirmAddSheet();
+    const r = _recs(calls).length, p = _plans(calls).length, b = _batch(calls);
+    check('add · ' + label,
+      r === expect.records && b === expect.future && p === 0,
+      'records=' + r + ' (want ' + expect.records + '), future=' + b + ' (want ' + expect.future + '), plans=' + p);
+  };
+  // A dose already taken is a RECORD; a dose ahead is a PLAN. A series spanning
+  // today splits, and nothing is lost at the seam.
+  await _add('single dose in the past', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-5)}, false,
+             {records:1, future:0});
+  await _add('single dose in the future', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(5)}, false,
+             {records:0, future:1});
+  await _add('series entirely in the past', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-20),
+             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:5, future:0});
+  await _add('series entirely in the future', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(4),
+             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:0, future:5});
+  await _add('series straddling today', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-4),
+             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:3, future:2});
+  await _add('series starting exactly today', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(0),
+             'tc-as-count':'10','tc-as-interval':'2'}, true, {records:1, future:9});
+
+  // ── SERIES EDITOR ────────────────────────────────────────────────────────
+  // The reported bug: a straddling edit dropped its past-dated doses on every save.
+  // The editor must account for EVERY dose in the run it was asked to write.
+  const _edit = async (label, existing, fields, expect) => {
+    _reset();
+    G._tcp.manualLog = existing.map(d => ({compId:'nebido', doseMg:'100', date:d, seriesId:'sX'}));
+    G._tcEditSeriesId = 'sX';
+    const calls = _arm(fields);
+    await G._tcSaveEditSeries();
+    const r = _recs(calls).length, p = _plans(calls).length, b = _batch(calls);
+    check('edit · ' + label,
+      p === expect.plans && b === expect.future && r === expect.records,
+      'plans=' + p + ' (want ' + expect.plans + '), future=' + b + ' (want ' + expect.future +
+      '), records=' + r + ' (want ' + expect.records + ')');
+  };
+  const _ex = [_d(-4), _d(-2), _d(0), _d(2)];
+  // Re-typing a cadence never asserts a dose was injected: the past half is written
+  // as PLAN rows, never records.
+  await _edit('grown, straddling today', _ex,
+    {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-4),'tc-es-count':'10','tc-es-interval':'2'},
+    {plans:2, future:8, records:0});
+  await _edit('entirely in the future', _ex,
+    {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(4),'tc-es-count':'6','tc-es-interval':'2'},
+    {plans:0, future:6, records:0});
+  await _edit('entirely in the past', _ex,
+    {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-20),'tc-es-count':'4','tc-es-interval':'2'},
+    {plans:4, future:0, records:0});
+  await _edit('shrunk, straddling today', _ex,
+    {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-4),'tc-es-count':'3','tc-es-interval':'2'},
+    {plans:2, future:1, records:0});
+
+
+  // ── REMOVAL — the inverse, and historically the most fragile ──────────────
+  // CLAUDE.md: "Writing to manualLog alone is a silent no-op — it is a cache and the
+  // next render rebuilds it. That bug shipped twice in one day (delete, then add)."
+  // These had NO coverage at all before this audit. A delete must reach the RECORD.
+  // agree=false models the user cancelling at the global-delete prompt.
+  const _del = async (label, rows, run, expect, agree) => {
+    _reset();
+    G._tcp.manualLog = rows.slice();
+    const calls = _arm({});
+    const _oc = G.confirmGlobalDelete;
+    G.confirmGlobalDelete = () => (agree !== false);
+    await run();
+    G.confirmGlobalDelete = _oc;
+    const dels = calls.filter(x => x.method === 'DELETE' && /\/injections\//.test(x.url));
+    check('remove · ' + label, dels.length === expect,
+      'DELETE /injections/<id> x' + dels.length + ', want ' + expect);
+  };
+  const _stored = (d, i, sid) => ({compId:'nebido', doseMg:'100', date:d, injId:'i'+i, seriesId:sid});
+  await _del('a stored row deletes the record, not just the cache',
+    [_stored(_d(-6),1), _stored(_d(-4),2)],
+    () => G._tcRemoveManualEntry(0), 1);
+  await _del('a whole stored series deletes every record in it',
+    [_stored(_d(-6),1,'sA'), _stored(_d(-4),2,'sA'), _stored(_d(-2),3,'sA')],
+    () => G._tcRemoveSeries('sA'), 3);
+  await _del('a profile-only row (no injId) reaches no endpoint',
+    [{compId:'nebido', doseMg:'100', date:_d(4), draft:true}],
+    () => G._tcRemoveManualEntry(0), 0);
+  await _del('cancelling the global-delete prompt deletes nothing',
+    [_stored(_d(-6),1), _stored(_d(-4),2)],
+    () => G._tcRemoveManualEntry(0), 0, false);
+  await _del('cancelling it on a series deletes nothing either',
+    [_stored(_d(-6),1,'sA'), _stored(_d(-4),2,'sA')],
+    () => G._tcRemoveSeries('sA'), 0, false);
+
+  // THE REGRESSION, stated as the invariant it broke: an edit writes as many doses as
+  // it was asked for. The old code wrote only the future half, so "10 every 2 days"
+  // starting four days ago persisted 8 — and each further save shed two more.
+  const _acct = async (count, startOff) => {
+    _reset();
+    G._tcp.manualLog = _ex.map(d => ({compId:'nebido', doseMg:'100', date:d, seriesId:'sX'}));
+    G._tcEditSeriesId = 'sX';
+    const calls = _arm({'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(startOff),
+                        'tc-es-count':String(count),'tc-es-interval':'2'});
+    await G._tcSaveEditSeries();
+    return _plans(calls).length + _recs(calls).length + _batch(calls);
+  };
+  check('edit · every dose asked for is accounted for (10 from −4d)',
+    (await _acct(10, -4)) === 10, 'wrote ' + (await _acct(10, -4)) + ' of 10');
+  check('edit · …and re-saving the same run does not shed doses',
+    (await _acct(10, -4)) === (await _acct(10, -4)));
+  check('edit · a 20-dose run from 10 days ago is written in full',
+    (await _acct(20, -10)) === 20, 'wrote ' + (await _acct(20, -10)) + ' of 20');
+
+  G._tcp = _pmSave.tp; G._userStacks = _pmSave.us; G._tcHistory = _pmSave.h;
+  G._tcHistoryState = _pmSave.hs; G._injectionsCache = _pmSave.c;
+  G._tcSkippedPast = _pmSave.sk; G._tcAddSheet = _pmSave.as; G._tcEditSeriesId = _pmSave.es;
+  G.fetch = _pmSave.f; G.document.getElementById = _pmSave.g;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
