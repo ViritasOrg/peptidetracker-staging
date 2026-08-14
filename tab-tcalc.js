@@ -4253,27 +4253,56 @@ function _tcUnsavedDraftBanner(){
   +'</div>';
 }
 
+// ── SAVE TO PROTOCOL — one dropdown, one button ──────────────────────────────
+// Henrik, 2026-08-14: "this is a fucked up dialog. remove the create new protocol
+// choices, only input is a drop down with existing protocols, active protocol
+// prechosen, and a big colored Save button."
+//
+// The sheet used to put "New protocol → TRT / Enhanced" directly beneath the list
+// of existing protocols. Those buttons create an EMPTY protocol and make it the
+// only active one, and on 2026-08-14 one tap on Enhanced did exactly that: Today
+// went blank, and the bind that followed deleted the account's whole forward
+// schedule. A destructive option should not sit inside a dialog whose job is
+// "file these doses somewhere".
+//
+// Creating a protocol belongs in Plan, where a protocol is built with its
+// compounds. _tcCreateStackForTesto is left in place and untouched — it is simply
+// no longer reachable from here.
 function _tcOpenSaveToStack(){
   _tcCloseSaveToStack();
   var stacks=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks:[];
-  var full=stacks.length>=4;
-  var enhOk=_tcEnhancedAllowed();
+  var live=stacks.filter(function(s){return !!s;});
 
-  var rows=stacks.map(function(st,i){
-    if(!st)return '';
-    var act=(typeof _isActiveStack==='function'&&_isActiveStack(i))?' <span style="font-size:11px;color:#5ad1b0;font-weight:700">· active</span>':'';
-    var cur=(_tcp&&_tcp.targetStackId===st.id)?' <span style="font-size:11px;color:#6688cc;font-weight:700">· current target</span>':'';
-    return '<button onclick="_tcSaveToExistingStack(\''+_esc(st.id||'')+'\')" style="display:block;width:100%;text-align:left;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;color:var(--text);font-size:14px;font-family:inherit;cursor:pointer">'
-      +_esc(st.name||('Protocol '+(i+1)))+act+cur+'</button>';
-  }).join('');
+  // Preselect: the protocol already bound if there is one, else the ACTIVE protocol.
+  // The active one is what a user assumes "Save to protocol" means, and that
+  // assumption is now correct because it is what the control starts on.
+  var preId='';
+  if(_tcp&&_tcp.targetStackId&&live.some(function(s){return s.id===_tcp.targetStackId;}))preId=_tcp.targetStackId;
+  if(!preId){
+    for(var _a=0;_a<stacks.length;_a++){
+      if(stacks[_a]&&typeof _isActiveStack==='function'&&_isActiveStack(_a)){preId=stacks[_a].id||'';break;}
+    }
+  }
+  if(!preId&&live.length)preId=live[0].id||'';
 
-  var newBtn=function(tier,label,ok){
-    var dis=!ok||full;
-    return '<button '+(dis?'disabled ':'')+'onclick="_tcCreateStackForTesto(\''+tier+'\')" '
-      +'title="'+(full?'You already have 4 protocols':(ok?'':'Enhanced requires tier 3'))+'" '
-      +'style="flex:1;background:'+(dis?'var(--surface2)':'var(--accent)')+';color:'+(dis?'var(--muted2)':'#000')+';border:1px solid var(--border);border-radius:10px;padding:12px;font-size:13px;font-weight:700;font-family:inherit;cursor:'+(dis?'default':'pointer')+';opacity:'+(dis?'0.5':'1')+'">'
-      +label+'</button>';
-  };
+  var body;
+  if(!live.length){
+    // No protocol to file into. Say where one is made rather than offering to
+    // create an empty one from here.
+    body='<div style="font-size:13px;color:var(--muted2);line-height:1.6;margin-bottom:16px">'
+      +'You have no protocols yet. Build one in <b>Plan</b> with the compounds you are running, then come back and save these doses into it.'
+      +'</div>';
+  }else{
+    var opts=stacks.map(function(st,i){
+      if(!st)return '';
+      var act=(typeof _isActiveStack==='function'&&_isActiveStack(i))?' · active':'';
+      return '<option value="'+_esc(st.id||'')+'"'+((st.id||'')===preId?' selected':'')+'>'
+        +_esc(st.name||('Protocol '+(i+1)))+act+'</option>';
+    }).join('');
+    body='<select id="tc-save-stack-sel" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:16px;padding:13px 12px;font-family:inherit;margin-bottom:16px">'+opts+'</select>'
+      +'<button onclick="_tcSaveToExistingStack((document.getElementById(\'tc-save-stack-sel\')||{}).value)" '
+      +'style="width:100%;background:#e8a020;border:none;border-radius:10px;color:#0a0a0a;font-size:15px;font-weight:800;letter-spacing:0.4px;padding:15px;cursor:pointer;font-family:inherit">Save</button>';
+  }
 
   var ov=document.createElement('div');
   ov.id='tc-save-stack-overlay';
@@ -4282,13 +4311,8 @@ function _tcOpenSaveToStack(){
   ov.innerHTML='<div style="background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:20px 18px calc(20px + env(safe-area-inset-bottom,0px));max-height:80vh;overflow:auto">'
     +'<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">Save to protocol</div>'
     +'<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;line-height:1.5">Testosterone belongs to a protocol, so its doses show on Today alongside everything else you are running.</div>'
-    +(rows?('<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Existing</div>'+rows):'')
-    +'<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px">New protocol</div>'
-    +'<div style="font-size:11px;color:#e8a020;line-height:1.5;margin-bottom:8px">Creates an <b>empty</b> protocol and makes it the active one. Your other protocols keep their compounds, but Today will show only this one until you switch back. To add testosterone to a protocol you already run, pick it under Existing instead.</div>'
-    +'<div style="display:flex;gap:8px">'+newBtn('trt','TRT',true)+newBtn('enhanced','Enhanced',enhOk)+'</div>'
-    +(enhOk?'':'<div style="font-size:11px;color:var(--muted2);margin-top:8px">Enhanced protocols need tier 3.</div>')
-    +(full?'<div style="font-size:11px;color:var(--muted2);margin-top:8px">You already have 4 protocols — pick one above.</div>':'')
-    +'<button onclick="_tcCloseSaveToStack()" style="width:100%;background:none;border:none;color:var(--muted2);font-size:13px;font-family:inherit;cursor:pointer;margin-top:16px;padding:8px">Cancel</button>'
+    +body
+    +'<button onclick="_tcCloseSaveToStack()" style="width:100%;background:none;border:none;color:var(--muted2);font-size:13px;font-family:inherit;cursor:pointer;margin-top:14px;padding:8px">Cancel</button>'
     +'</div>';
   document.body.appendChild(ov);
 }
