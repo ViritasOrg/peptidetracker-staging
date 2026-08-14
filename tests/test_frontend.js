@@ -1591,9 +1591,21 @@ console.log(`\n${'─'.repeat(59)}`);
     /_TC_HISTORY_LOOKBACK_DAYS = 400/.test(tcJs));
   check('  …selecting on logged, and refusing anything else',
     /if \(!e\.logged\) return;/.test(tcJs));
-  check('  …with no cycle_id filter anywhere in that fetch',
-    !/cycle_id/.test(tcJs.slice(tcJs.indexOf('async function _tcFetchHistory'),
-                                tcJs.indexOf('// manualLog is the ADVANCED planner'))));
+  // The rule this protects is that the PAST is selected on `logged` and nothing else —
+  // never narrowed by which stack a dose was filed under. Narrowed 2026-08-14 from
+  // "the token cycle_id never appears" to "cycle_id is never TESTED": the skipped-dose
+  // rows now carry cycle_id as metadata so the series editor can address them, which is
+  // a record, not a filter. Any comparison or branch on cycle_id inside this fetch still
+  // fails — that is the thing that broke six weeks of TRT.
+  {
+    const _fetchSrc = tcJs.slice(tcJs.indexOf('async function _tcFetchHistory'),
+                                 tcJs.indexOf('// manualLog is the ADVANCED planner'));
+    const _cycTested = _fetchSrc.split('\n').some(l =>
+      /cycle_id/.test(l) && (/[!=]==?/.test(l) || /\bif\s*\(/.test(l) || /\breturn\b/.test(l)));
+    check('  …with no cycle_id filter anywhere in that fetch', !_cycTested);
+    check('  …and the logged rows carry no cycle id at all',
+      !/rows\.push\(\{[^}]*cycle/i.test(_fetchSrc.replace(/\n/g, ' ')));
+  }
   check('  …and triggered when the tab is built', /if \(_tcHistoryState === 'idle'\) _tcFetchHistory\(\);/.test(tcJs));
 
   // The curve, end to end.
@@ -2065,6 +2077,75 @@ console.log('\n── T-calc: skipped doses are reported, not absorbed ───
     !/_seriesMeta\[sid\]\.interval=Math\.round\(\(d1-d0\)\/86400000\)/.test(_skSrc));
   check('  …and the card states how many doses the span is missing',
     /_seriesMeta\[sid\]\.missing/.test(_skSrc) && / missed<\/span>/.test(_skSrc));
+}
+
+
+// ── T-Calc: editing a series must not shed its past ──────────────────────────
+// Reported 2026-08-14: "If I edit the last series to 10 injections every 2 day and click
+// save it saves as 8 injections every 6 day? And every edit drops number of injections
+// by 2????"
+//
+// _tcSaveEditSeries regenerated EVERY dose as draft:true. _tcSyncLogToBackend only
+// writes from today forward and _tcLoadLogFromStack only carries drafts from today
+// forward, so each save deleted the past-dated doses that were not already logged
+// records. Two unticked doses (10 + 12 Aug) vanished on every save, and because the
+// editor also derived its cadence from entries[1]-entries[0] the surviving 8 Aug -> 14
+// Aug gap re-labelled an EOD run "every 6 days" — which the next save then applied.
+console.log('\n── T-calc: an edited series keeps its past ────────────────');
+{
+  const _esSrc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  const _esFn = _esSrc.slice(_esSrc.indexOf('async function _tcSaveEditSeries'),
+                             _esSrc.indexOf('function _tcConfirmRemoveSeries'));
+  check('the past half of an edited series is not pushed as a draft',
+    /if\(ds < _editTodayK\) return;/.test(_esFn),
+    'every dose is still drafted, so the past half is dropped again');
+  check('  …it is written as a PLAN row instead',
+    /_tcCreatePlannedInjections\(compId,doseMg,_toCreate,sid\)/.test(_esFn));
+  check('  …never as a record — re-typing a cadence is not a claim you injected',
+    /logged: false/.test(_esSrc) && !/_tcCreateLoggedInjections/.test(_esFn));
+  check('  …and doses already ticked are left alone',
+    /_loggedOn\[compId\+'\|'\+d\]/.test(_esFn));
+  check('  …while doses the edit removed are retired from the record',
+    /_tcDeleteStoredInjection\(_stale\[_si\]\.injId\)/.test(_esFn));
+
+  // The editor and the card must agree on cadence, or opening the sheet and pressing
+  // SAVE silently rewrites the schedule to the wrong interval.
+  const _esOpen = _esSrc.slice(_esSrc.indexOf('function _tcOpenEditSeriesSheet'),
+                               _esSrc.indexOf('function _tcCloseEditSeriesSheet'));
+  check('the edit sheet pre-fills the MODAL gap, not the first gap',
+    !/interval = Math\.max\(1, Math\.round\(\(d1-d0\)\/86400000\)\)/.test(_esOpen) &&
+    /_eBest/.test(_esOpen));
+
+  // The curve rule is untouched: a past dose that was never ticked is still excluded.
+  check('unticked past doses are carried in the PLAN',
+    /rows\.push\(Object\.assign\(\{\},e,\{unticked:true\}\)\)/.test(_esSrc));
+  check('  …and still excluded from the CURVE',
+    /if \(e\.unticked\) return;/.test(_esSrc));
+  check('  …with the card saying how many are not ticked',
+    / not ticked<\/span>/.test(_esSrc));
+}
+
+// The exclusion is behavioural, not just textual: an unticked row in the plan must not
+// move the modelled level by even a fraction of a pmol/L.
+if (typeof G._tcFreeTSeries === 'function' && typeof G._tcCurveLog === 'function') {
+  const _uxSave = {tp:G._tcp, h:G._tcHistory, hs:G._tcHistoryState, c:G._injectionsCache, sk:G._tcSkippedPast};
+  G._tcHistory = [{compId:'nebido',doseMg:'100',date:'2026-06-26',source:'logged'},
+                  {compId:'nebido',doseMg:'100',date:'2026-06-28',source:'logged'}];
+  G._tcHistoryState = 'ready'; G._injectionsCache = {};
+  G._tcp = Object.assign({}, _uxSave.tp||{}, {plannerMode:'advanced', manualLog:[
+    {compId:'nebido',doseMg:'100',date:'2026-06-26'},
+    {compId:'nebido',doseMg:'100',date:'2026-06-28'},
+  ]});
+  const _uxClean = G._tcCurveLog().length;
+  G._tcp.manualLog = G._tcp.manualLog.concat([
+    {compId:'nebido',doseMg:'100',date:'2026-06-30',unticked:true},
+    {compId:'nebido',doseMg:'100',date:'2026-07-02',unticked:true},
+  ]);
+  const _uxWith = G._tcCurveLog().length;
+  check('an unticked plan row never reaches the curve log',
+    _uxWith === _uxClean, 'curve grew from ' + _uxClean + ' to ' + _uxWith);
+  G._tcp = _uxSave.tp; G._tcHistory = _uxSave.h; G._tcHistoryState = _uxSave.hs;
+  G._injectionsCache = _uxSave.c; G._tcSkippedPast = _uxSave.sk;
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);

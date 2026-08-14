@@ -1435,7 +1435,11 @@ async function _tcFetchHistory(force){
         var _sm = parseDec(e.dose);
         if ((e.unit || 'mg').toLowerCase() === 'mg' && _sm > 0)
           _skipped.push({compId: e.compound_id, doseMg: String(_sm), date: e.date,
-                         seriesId: e.series_id || undefined});
+                         seriesId: e.series_id || undefined,
+                         // injId and cycleId make the row addressable: the series editor
+                         // has to be able to keep, retire or recreate it rather than
+                         // silently dropping it (see _tcSaveEditSeries).
+                         injId: e.id || undefined, cycleId: String(e.cycle_id || '')});
       }
       if (!e.logged) return;                        // checked, or it is not the past
       var unit = (e.unit || 'mg').toLowerCase();
@@ -1516,6 +1520,22 @@ function _tcLoadLogFromStack(){
     seen[e.compId+'|'+e.date]=true;
     rows.push(e);
   });
+  // PAST-DATED DOSES THAT WERE SCHEDULED BUT NEVER TICKED BELONG TO THE PLAN.
+  // They are NOT part of the curve — that rule is unchanged, and `unticked` is what
+  // _tcCurveLog filters on — but dropping them from manualLog entirely made the
+  // planner lose them. Editing a series regenerates every dose as a draft, the sync
+  // only writes from today forward, and the draft carry-forward above is
+  // today-onwards, so each save silently deleted the past-dated doses that were not
+  // already logged records: "edit to 10 injections every 2 days" saved as 8, and
+  // every further edit shed another two. The run is the user's plan; only the CURVE
+  // is restricted to confirmed doses.
+  (_tcSkippedPast||[]).forEach(function(e){
+    if(!e||!e.date)return;
+    if(cid&&String(e.cycleId||'')!==cid)return;    // this stack's plan only
+    if(seen[e.compId+'|'+e.date])return;
+    seen[e.compId+'|'+e.date]=true;
+    rows.push(Object.assign({},e,{unticked:true}));
+  });
   rows.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
   _tcp.manualLog=rows;
   return true;
@@ -1560,6 +1580,13 @@ function _tcCurveLog(){
   function _add(list){
     (list || []).forEach(function(e){
       if (!e || !e.date || !(parseDec(e.doseMg) > 0)) return;
+      // A past-dated dose that was never ticked is a plan the user did not confirm
+      // taking, and is excluded — unchanged. manualLog now CARRIES those rows so the
+      // planner and the series card can show the real run (and so editing a series
+      // stops deleting them), which is exactly why the exclusion has to be enforced
+      // here as well as by the date filters. `unticked` is set only in
+      // _tcLoadLogFromStack, from the record's own unlogged past rows.
+      if (e.unticked) return;
       var k = e.compId + '|' + e.date;
       if (seen[k]) return;
       seen[k] = true;
@@ -1870,6 +1897,36 @@ async function _tcCreateLoggedInjections(compId, doseMg, dates, seriesId){
   return ok;
 }
 
+// Past-dated doses belonging to a PLAN, not to the record: logged:false. Used when an
+// edited series covers days already gone by. Re-typing a cadence is not a claim that
+// those doses were injected, so this must never write logged:true — that is
+// _tcCreateLoggedInjections' job, and it is called only from the Add sheet where the
+// user is explicitly entering doses they took. Today is the only place a plan becomes
+// a record.
+async function _tcCreatePlannedInjections(compId, doseMg, dates, seriesId){
+  if (typeof authHeaders !== 'function') return 0;
+  var cd   = _tcCompInfo(compId);
+  var meta = (typeof _injPkMeta === 'function') ? _injPkMeta('trt', compId)
+                                                : {ester:null, half_life_days:null};
+  var cyc  = _tcTargetCycleId() || 'manual';
+  var ok = 0;
+  for (var i = 0; i < dates.length; i++){
+    var body = {cycle_id: cyc, date: dates[i], compound_id: compId,
+                compound_name: cd.name || compId, tier: 'trt',
+                dose: String(doseMg), unit: 'mg', dot: cd.dot || '#e8a020',
+                time_of_day: null, active: true, logged: false, source: 'tcalc',
+                series_id: seriesId || null,
+                ester: meta.ester, half_life_days: meta.half_life_days, route: null};
+    try{
+      var r = await fetch(AGENT_URL + '/injections',
+                          {method:'POST', headers: authHeaders({'Content-Type':'application/json'}),
+                           body: JSON.stringify(body)});
+      if (r.ok) ok++; else _logHttp('tcAddPlanInj', r.status, '/injections');
+    }catch(e){ _logErr('tcAddPlanInj', e); }
+  }
+  return ok;
+}
+
 async function _tcConfirmAddSheet() {
   var compEl=document.getElementById('tc-as-comp');
   var doseEl=document.getElementById('tc-as-dose');
@@ -2048,11 +2105,21 @@ function _tcOpenEditSeriesSheet(sid) {
   var doseMg = first.doseMg || '';
   var startDate = first.date || new Date().toISOString().slice(0,10);
   var count = entries.length;
+  // Same MODAL-gap cadence the series card shows. Reading entries[1]-entries[0] made
+  // the sheet disagree with the card the moment a dose was missing — the card said
+  // "every 2 days · 2 missed" while the editor pre-filled 6, so simply opening it and
+  // pressing SAVE rewrote an EOD run to every-6-days.
   var interval = 2;
   if (entries.length >= 2) {
-    var p0 = (entries[0].date||'').split('-'), p1 = (entries[1].date||'').split('-');
-    var d0 = new Date(+p0[0],+p0[1]-1,+p0[2]), d1 = new Date(+p1[0],+p1[1]-1,+p1[2]);
-    interval = Math.max(1, Math.round((d1-d0)/86400000));
+    var _eg = {}, _eBest = 0, _eBestN = 0;
+    for (var _ei = 1; _ei < entries.length; _ei++) {
+      var _p0 = (entries[_ei-1].date||'').split('-'), _p1 = (entries[_ei].date||'').split('-');
+      var _g = Math.round((new Date(+_p1[0],+_p1[1]-1,+_p1[2]) - new Date(+_p0[0],+_p0[1]-1,+_p0[2]))/86400000);
+      if (!(_g > 0)) continue;
+      _eg[_g] = (_eg[_g]||0) + 1;
+      if (_eg[_g] > _eBestN || (_eg[_g] === _eBestN && _g < _eBest)) { _eBest = _g; _eBestN = _eg[_g]; }
+    }
+    interval = Math.max(1, _eBest || 2);
   }
   _tcEditSeriesId = sid;
   var comps = _tcManualComps();
@@ -2210,13 +2277,47 @@ async function _tcSaveEditSeries() {
   var count=countEl?Math.max(2,parseInt(countEl.value)||10):10;
   var intervalDays=intervalEl?Math.max(1,parseInt(intervalEl.value)||2):2;
   if(!compId||!startDate||!(doseMg>0)){return;}
+  var _prev=_tcp.manualLog.filter(function(e){ return e.seriesId === sid; });
   _tcp.manualLog = _tcp.manualLog.filter(function(e){ return e.seriesId !== sid; });
   var sp=startDate.split('-');
+  var _dates=[];
   for(var i=0;i<count;i++){
     var sd=new Date(+sp[0],+sp[1]-1,+sp[2]+i*intervalDays);
-    var ds=sd.getFullYear()+'-'+String(sd.getMonth()+1).padStart(2,'0')+'-'+String(sd.getDate()).padStart(2,'0');
-    _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:sid,draft:true});
+    _dates.push(sd.getFullYear()+'-'+String(sd.getMonth()+1).padStart(2,'0')+'-'+String(sd.getDate()).padStart(2,'0'));
   }
+  // ── THE PAST HALF OF AN EDITED SERIES IS RECONCILED, NOT DISCARDED ──────────
+  // Every dose used to be pushed as draft:true. _tcSyncLogToBackend only writes from
+  // today forward and _tcLoadLogFromStack only carries drafts from today forward, so
+  // each save deleted the past-dated doses that were not already logged records —
+  // "10 injections every 2 days" came back as 8, and every further edit shed two more.
+  //
+  // A past-dated dose is written as a PLAN row (logged:false), never as a record. The
+  // user re-typed a cadence; that is not a statement that they injected on those days,
+  // and only Today may turn a plan into a record. Doses already ticked are left exactly
+  // as they are — the record owns the past.
+  var _editTodayK=dateKey(NOW);
+  var _pastDates=_dates.filter(function(d){ return d < _editTodayK; });
+  var _loggedOn={};
+  _tcLoggedHistory().forEach(function(e){ _loggedOn[e.compId+'|'+e.date]=true; });
+  var _storedPast={};
+  (_tcSkippedPast||[]).forEach(function(e){ if(e.seriesId===sid) _storedPast[e.compId+'|'+e.date]=e; });
+  // Retire stored plan rows this edit removed from the run. Only unticked ones — a
+  // ticked dose is a record and an edit to a schedule never deletes one.
+  var _stale=Object.keys(_storedPast).filter(function(k){
+    return _pastDates.indexOf(_storedPast[k].date)<0 || _storedPast[k].compId!==compId;
+  }).map(function(k){ return _storedPast[k]; });
+  var _toCreate=_pastDates.filter(function(d){
+    return !_loggedOn[compId+'|'+d] && !_storedPast[compId+'|'+d];
+  });
+  for(var _si=0;_si<_stale.length;_si++){
+    if(_stale[_si].injId) await _tcDeleteStoredInjection(_stale[_si].injId);
+  }
+  if(_toCreate.length) await _tcCreatePlannedInjections(compId,doseMg,_toCreate,sid);
+  // The future half stays a draft until it is synced, exactly as before.
+  _dates.forEach(function(ds){
+    if(ds < _editTodayK) return;
+    _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:sid,draft:true});
+  });
   _tcp.manualLog.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
   _tcSaveProfile();
   _tcCloseEditSeriesSheet();
@@ -4094,8 +4195,11 @@ function buildTCalc() {
       if(!e.seriesId)return;
       var sid=e.seriesId;
       _seriesTotals[sid]=(_seriesTotals[sid]||0)+1;
-      if(!_seriesMeta[sid]){_seriesMeta[sid]={compId:e.compId,doseMg:e.doseMg,firstDate:e.date,lastDate:e.date};}
+      if(!_seriesMeta[sid]){_seriesMeta[sid]={compId:e.compId,doseMg:e.doseMg,firstDate:e.date,lastDate:e.date,unticked:0};}
       else{if(e.date<_seriesMeta[sid].firstDate)_seriesMeta[sid].firstDate=e.date;if(e.date>_seriesMeta[sid].lastDate)_seriesMeta[sid].lastDate=e.date;}
+      // Past-dated doses in the run that were never ticked. They are in the plan (and
+      // in this count) but out of the curve, so the card has to say so.
+      if(e.unticked)_seriesMeta[sid].unticked++;
     });
     Object.keys(_seriesMeta).forEach(function(sid){
       if((_seriesTotals[sid]||0)<2)return;
@@ -4148,7 +4252,11 @@ function buildTCalc() {
         html += '<span style="font-size:10px;font-weight:800;letter-spacing:1px;color:#6688cc;text-transform:uppercase">⛓ SERIES</span>';
         html += '<span style="font-size:10px;color:var(--muted2)">' + total + ' injections' + ivLabel + '</span>';
         // A hole in the run, stated rather than absorbed into the cadence label.
-        if (meta.missing > 0)
+        // `unticked` = scheduled, in the past, never ticked: in the plan, out of the
+        // curve. `missing` = dates the span does not hold at all.
+        if (meta.unticked > 0)
+          html += '<span style="font-size:10px;font-weight:700;color:#e8a020">· ' + meta.unticked + ' not ticked</span>';
+        else if (meta.missing > 0)
           html += '<span style="font-size:10px;font-weight:700;color:#e8a020">· ' + meta.missing + ' missed</span>';
         html += '</div>';
         html += '<div style="display:flex;align-items:center;gap:6px;">';
