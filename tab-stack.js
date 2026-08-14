@@ -513,7 +513,7 @@ async function saveEditBuf(){
     var _cycId=_stackCycleId(_editBuf);
     for(var _pi=0;_pi<_oldProtoCids.length;_pi++){
       if(!_newProtoCids.includes(_oldProtoCids[_pi])){
-        try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cycId)+'&compound_id='+encodeURIComponent(_oldProtoCids[_pi])+'&from='+dateKey(_editToday0),{method:'DELETE',headers:authHeaders()});}catch(e){_logErr('delOrphanInj',e);}
+        try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cycId)+'&compound_id='+encodeURIComponent(_oldProtoCids[_pi])+'&from='+dateKey(_editToday0)+'&unlogged_only=true',{method:'DELETE',headers:authHeaders()});}catch(e){_logErr('delOrphanInj',e);}
       }
     }
     _trtLogCache={};

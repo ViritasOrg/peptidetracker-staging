@@ -10332,6 +10332,59 @@ console.log('\n─────────────────────�
   check('  …rather than a silently invented protocol', /Build your first protocol|openTemplatePicker/.test(today));
 }
 
+
+// ── DELETES MUST NEVER REACH ANOTHER COMPOUND, OR A RECORD ───────────────────
+// 2026-08-14, the worst incident of the session. Binding T-Calc to a protocol for
+// the FIRST time destroyed the account's entire forward schedule: 106 HGH rows,
+// every forward peptide row, and a logged dose — none of them testosterone.
+//
+// _tcSetTargetStack cleared its "old home" with
+//     DELETE /injections?cycle_id=<oldCid>&from_date=<today>
+// and oldCid is '' when nothing is bound yet. The backend filters with
+// `if cycle_id and ...`, so an empty value is NO filter: it deleted every injection
+// in the account from today on, across every protocol, logged included.
+console.log('\n── injection deletes: scoped, and never a record ──────────');
+{
+  const _dsSave = { f: G.fetch, tp: G._tcp, us: G._userStacks, ah: G.authHeaders };
+  const dels = [];
+  // The stub records synchronously as the call is made, so the first DELETE lands
+  // even without awaiting the async function under test.
+  G.fetch = (url, opt) => {
+    if ((opt || {}).method === 'DELETE') dels.push(String(url));
+    return Promise.resolve({ ok: true, status: 200, json: async () => ([]) });
+  };
+  G.authHeaders = () => ({});
+  G._userStacks = [{ id:'protocol_2_nostart', name:'Protocol 2', cycle_start:'2026-05-18' }];
+  G._tcp = { manualLog: [], targetStackId: '' };      // unbound — the incident's state
+  if (typeof G._tcSetTargetStack === 'function') {
+    try { G._tcSetTargetStack('protocol_2_nostart'); } catch (e) {}
+  }
+  const inj = dels.filter(u => u.indexOf('/injections?') >= 0);
+  check('binding from unbound issues NO cycle-wide delete',
+    !inj.some(u => /cycle_id=(&|$)/.test(u)), inj.join(' | ') || '(none issued)');
+  check('  …and no delete is unscoped by compound',
+    inj.every(u => u.indexOf('compound_id=') >= 0),
+    inj.filter(u => u.indexOf('compound_id=') < 0).join(' | ') || 'ok');
+  check('  …and none may take a logged record',
+    inj.every(u => u.indexOf('unlogged_only=true') >= 0),
+    inj.filter(u => u.indexOf('unlogged_only=true') < 0).join(' | ') || 'ok');
+  G.fetch = _dsSave.f; G._tcp = _dsSave.tp; G._userStacks = _dsSave.us; G.authHeaders = _dsSave.ah;
+
+  // Structural backstop across all three files. A plan-clear that forgets
+  // unlogged_only downgrades a record to a schedule; one that forgets compound_id
+  // reaches a protocol's peptides and HGH. This holds for deletes added later.
+  const _dsDir = path.dirname(path.resolve(htmlPath));
+  ['tab-tcalc.js','tab-stack.js','index.html'].forEach(function(f){
+    const src = fs.readFileSync(path.join(_dsDir,f),'utf8');
+    const bad = (src.match(/'\/injections\?[^\n]*method:'DELETE'/g) || [])
+      .filter(l => l.indexOf('unlogged_only=true') < 0);
+    check(f + ': every /injections DELETE passes unlogged_only',
+      bad.length === 0, bad.join(' | ').slice(0, 200));
+  });
+  check('_tcSetTargetStack guards against an empty old cycle id',
+    /if\(oldCid&&oldCid!==newCid\)/.test(fs.readFileSync(path.join(_dsDir,'tab-tcalc.js'),'utf8')));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
