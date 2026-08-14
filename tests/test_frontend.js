@@ -10363,12 +10363,22 @@ console.log('\n── T-Calc: unsaved drafts are announced ───────
   // Unbound + drafts → the banner appears, counts them, and offers the real action.
   G._tcp = { manualLog: drafts };            // no targetStackId at all — the real shape
   G._userStacks = [{ id:'protocol_2_nostart', name:'Protocol 2' }];
+  const _saveIsActive = G._isActiveStack;
+  G._isActiveStack = function(i){ return i === 0; };
   const unbound = banner();
   check('an unbound plan with drafts is announced', /Not scheduled yet/.test(unbound));
   check('  …counting them', /7 planned doses/.test(unbound));
   check('  …naming the span, not just a number', /14 Aug/.test(unbound) && /26 Aug/.test(unbound));
   check('  …saying Today will not show them', /do not appear in Today/.test(unbound));
-  check('  …and offering Save to protocol', /_tcOpenSaveToStack\(\)/.test(unbound));
+  check('  …and offering the save action', /_tcOpenSaveToStack\(\)/.test(unbound));
+  // "Save to protocol" alone reads as if the app already knows where. It does not,
+  // and there is deliberately no default — picking one for the user is what put a
+  // protocol's injections into a new empty stack (2026-08-14).
+  check('  …saying there is NO destination yet', /no destination yet/.test(unbound));
+  check('  …that the user picks it next', /You pick it in the next step/.test(unbound));
+  check('  …naming the protocols on offer, active marked',
+    /Protocol 2 \(active\)/.test(unbound), unbound.replace(/<[^>]*>/g,'').slice(0,200));
+  check('  …and the button says a choice follows', /Choose a protocol/.test(unbound));
 
   // Bound → it must NAME the protocol. "Save to protocol" never said which one, and
   // the only place the target was shown was the simple planner's card header, which
@@ -10404,6 +10414,7 @@ console.log('\n── T-Calc: unsaved drafts are announced ───────
   check('buildTCalc renders it above the curve',
     /html \+= _tcUnsavedDraftBanner\(\);[\s\S]{0,200}PLASMA CURVE/.test(_tcSrc));
 
+  G._isActiveStack = _saveIsActive;
   G._tcp = save.tp; G._userStacks = save.us;
 }
 

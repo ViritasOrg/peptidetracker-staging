@@ -4148,6 +4148,20 @@ function _tcCloseSaveToStack(){
 // _tcSimplePlanStack, which additionally requires the stack to carry exactly one TRT
 // compound because it drives the SIMPLE planner's card. Binding is binding: this
 // answers "where do my doses go" for any planner mode.
+// The protocols the save sheet will offer, named, with the active one marked — so the
+// destination is knowable before the sheet is opened. Empty string when there are no
+// protocols yet (the sheet then only offers to create one).
+function _tcSaveTargetsHint(){
+  var stacks=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks:[];
+  var names=[];
+  stacks.forEach(function(s,i){
+    if(!s)return;
+    var act=(typeof _isActiveStack==='function'&&_isActiveStack(i))?' (active)':'';
+    names.push(_esc(s.name||('Protocol '+(i+1)))+act);
+  });
+  if(!names.length)return '';
+  return names.join(', ');
+}
 function _tcBoundStack(){
   var tid=_tcp&&_tcp.targetStackId;
   if(!tid||typeof _userStacks==='undefined'||!_userStacks)return null;
@@ -4188,7 +4202,16 @@ function _tcUnsavedDraftBanner(){
       +'<b>'+drafts.length+' planned dose'+(drafts.length===1?'':'s')+'</b> ('+_esc(span)+') '
       +'show on this curve but are <b>not saved to a protocol</b>, so they do not appear in Today and nothing is scheduled from them.'
     +'</div>'
-    +'<button onclick="_tcOpenSaveToStack()" style="width:100%;background:#e8a020;border:none;border-radius:9px;color:#0a0a0a;font-size:13px;font-weight:800;letter-spacing:0.4px;padding:11px;cursor:pointer;font-family:inherit">Save to protocol</button>'
+    // Name the destination, or say plainly that there isn't one yet. "Save to
+    // protocol" alone reads as if the app already knows where — it does not, and
+    // there is deliberately no default: picking one for the user is what put a
+    // protocol's injections into a new empty stack. So the button states that the
+    // next step is the choice, and lists what is on offer.
+    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:9px">'
+      +'They have no destination yet. You pick it in the next step'
+      +(_tcSaveTargetsHint()?(' — '+_tcSaveTargetsHint()):'')+'.'
+    +'</div>'
+    +'<button onclick="_tcOpenSaveToStack()" style="width:100%;background:#e8a020;border:none;border-radius:9px;color:#0a0a0a;font-size:13px;font-weight:800;letter-spacing:0.4px;padding:11px;cursor:pointer;font-family:inherit">Choose a protocol…</button>'
   +'</div>';
 }
 
