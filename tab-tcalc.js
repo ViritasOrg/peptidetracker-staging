@@ -4125,6 +4125,43 @@ function _tcCloseSaveToStack(){
   if(ov&&ov.parentNode)ov.parentNode.removeChild(ov);
 }
 
+// ── A DRAFT THAT IS NOT BOUND IS NOT SCHEDULED — SAY SO ──────────────────────
+// _tcSyncLogToBackend() opens with `var _cid=_tcTargetCycleId(); if(!_cid)return;`.
+// With no protocol bound it therefore writes NOTHING, silently: the add sheet closes
+// as though it succeeded, the curve redraws (drafts are carried forward by
+// _tcLoadLogFromStack), and injections.json never hears about any of it. Today reads
+// the record, so it stays empty while the planner looks perfectly correct.
+//
+// Reported 2026-08-14: "no injections show up from today in Today view even if T-calc
+// graph looks fine." The record settled it in one read — 7 draft doses (14–26 Aug) in
+// tcalc_profiles.json and `targetStackId` absent from the profile entirely.
+//
+// The pre-existing "not saved to a protocol" text sits on the SIMPLE planner's card
+// header only. In the manual planner — the one those 7 doses were added from — that
+// header reads "off — advanced planner is on", so there was no indication anywhere.
+//
+// This states the situation and offers the existing action. It deliberately does NOT
+// auto-bind or auto-write: the stack is still the container and Save to protocol is
+// still the moment of persistence. Degrade the visibility of a state, never invent a
+// fallback that silently changes what is stored.
+function _tcUnsavedDraftBanner(){
+  if(typeof _tcTargetCycleId==='function'&&_tcTargetCycleId())return '';  // bound → sync writes
+  var drafts=((_tcp&&_tcp.manualLog)||[]).filter(function(e){return e&&e.draft&&e.date;});
+  if(!drafts.length)return '';
+  var dates=drafts.map(function(e){return e.date;}).sort();
+  var fmt=function(k){var p=String(k).split('-');var d=new Date(+p[0],(+p[1]||1)-1,+p[2]||1);
+    return isNaN(d)?k:d.toLocaleDateString('en-GB',{day:'numeric',month:'short'});};
+  var span=fmt(dates[0])+(dates.length>1?' – '+fmt(dates[dates.length-1]):'');
+  return '<div style="background:rgba(232,168,32,0.10);border:1px solid rgba(232,168,32,0.45);border-left:3px solid #e8a020;border-radius:10px;padding:12px 14px;margin-bottom:12px">'
+    +'<div style="font-size:11px;font-weight:800;letter-spacing:0.5px;text-transform:uppercase;color:#e8a020;margin-bottom:5px">Not scheduled yet</div>'
+    +'<div style="font-size:12px;color:var(--text);line-height:1.55;margin-bottom:10px">'
+      +'<b>'+drafts.length+' planned dose'+(drafts.length===1?'':'s')+'</b> ('+_esc(span)+') '
+      +'show on this curve but are <b>not saved to a protocol</b>, so they do not appear in Today and nothing is scheduled from them.'
+    +'</div>'
+    +'<button onclick="_tcOpenSaveToStack()" style="width:100%;background:#e8a020;border:none;border-radius:9px;color:#0a0a0a;font-size:13px;font-weight:800;letter-spacing:0.4px;padding:11px;cursor:pointer;font-family:inherit">Save to protocol</button>'
+  +'</div>';
+}
+
 function _tcOpenSaveToStack(){
   _tcCloseSaveToStack();
   var stacks=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks:[];
@@ -4261,6 +4298,9 @@ function buildTCalc() {
   var mftNum   = parseDec(_tcp.measuredFT) || 0;
 
   var html = '';
+
+  // Above the curve, because it is about whether the curve means anything yet.
+  html += _tcUnsavedDraftBanner();
 
   // ── 1. PLASMA CURVE (top — main feature) ─────────────────────────────────────
   var chartDot = (validLog.length > 0 && validLog[0].compId)
