@@ -1429,7 +1429,14 @@ console.log(`\n${'─'.repeat(59)}`);
   check('  …and a unit with no period passes straight through',
     dpi({dose:'100',unit:'mg'}).dose === '100' && dpi({dose:'100',unit:'mg'}).unit === 'mg');
 
-  // ── B. one testosterone stream per stack ────────────────────────────────────
+  // ── B. T-CALC OWNS TESTOSTERONE (rule 2026-08-14) ───────────────────────────
+  // Henrik: "I want T-calc to own all testosterone injections, in stack wizard TRT and
+  // Enhanced should use T-calc. The only way to schedule testo must be using t-calc."
+  //
+  // The predecessor of this block asserted that the TRT tier won over Enhanced. That
+  // gave ONE stream but the wrong owner — T-Calc was scheduling a third one of its
+  // own, which is how a protocol ended up with 27 `enhanced/test_u` rows alongside
+  // 23 `trt/nebido` rows for the same molecule. Neither tier generates it now.
   const mkStack = (trtOn) => ({
     id:'s1', name:'Protocol 1', cycle_start:'2026-08-01', cycle_length:12,
     trt:{enabled:trtOn, compounds:trtOn?[{id:'nebido',name:'Nebido',dose:'100',unit:'mg',freqVal:5,freqUnit:'days'}]:[]},
@@ -1440,21 +1447,51 @@ console.log(`\n${'─'.repeat(59)}`);
   });
   const idsOf = st => G._genInjBatches(st,'s1',null).map(b => b.compound_id);
 
-  check('a stack with TRT testosterone does not also inject it from Enhanced',
-    idsOf(mkStack(true)).indexOf('test-u') === -1);
+  check('the Enhanced tier never schedules testosterone',
+    idsOf(mkStack(true)).indexOf('test-u') === -1 &&
+    idsOf(mkStack(false)).indexOf('test-u') === -1);
+  check('  …and neither does the TRT tier — T-Calc owns it',
+    idsOf(mkStack(true)).indexOf('nebido') === -1);
   check('  …while the rest of the Enhanced tier is untouched',
-    idsOf(mkStack(true)).indexOf('hgh') !== -1);
-  check('  …and the TRT ester itself still generates',
-    idsOf(mkStack(true)).indexOf('nebido') !== -1);
-  check('  …but with no TRT testosterone the Enhanced entry generates again',
-    idsOf(mkStack(false)).indexOf('test-u') !== -1);
+    idsOf(mkStack(true)).indexOf('hgh') !== -1 && idsOf(mkStack(false)).indexOf('hgh') !== -1);
+
+  // Every TRT_CAT id is a testosterone ester, and the brand names do NOT all contain
+  // the word — so the tier, not the name, is what identifies them there.
+  check('  …for EVERY ester in the TRT catalogue, brand-named or not',
+    G.TRT_CAT.every(cat => idsOf({
+      id:'s1', cycle_start:'2026-08-01', cycle_length:12,
+      trt:{enabled:true, compounds:[{id:cat.id,name:cat.name,dose:'100',unit:'mg',freqVal:1,freqUnit:'weeks',days:[1]}]},
+    }).length === 0),
+    G.TRT_CAT.map(c => c.id).join(','));
+  check('  …and the predicate says so directly',
+    G.TRT_CAT.every(c => G._isTestosteroneComp('trt', c) === true) &&
+    G._isTestosteroneComp('enhanced', {name:'Testosterone Undecanoate (Nebido)'}) === true &&
+    G._isTestosteroneComp('enhanced', {name:'HGH'}) === false &&
+    G._isTestosteroneComp('peptide',  {name:'Testosterone'}) === false);
+
+  // Peptides are a separate tier and must keep generating — the guard is scoped to
+  // testosterone, not "anything in a stack that also has TRT configured".
+  check('  …and peptides still generate alongside a testosterone protocol',
+    idsOf({
+      id:'s1', cycle_start:'2026-08-01', cycle_length:12,
+      peptides:[{id:'reta',name:'Retatrutide',dose_am:'2',unit_am:'mg',times:['AM'],days:[1],active:true}],
+      trt:{enabled:true, compounds:[{id:'nebido',name:'Nebido',dose:'100',unit:'mg',freqVal:5,freqUnit:'days'}]},
+    }).indexOf('reta') !== -1);
+
   idsOf(mkStack(true));   // _injSuppressed reflects the LAST generation — regenerate
-  check('  …the suppressed entry is recorded, not silently dropped',
-    (G._injSuppressed['s1']||[]).some(x => x.id === 'test-u'));
-  check('  …and the config says so where the user configured it',
-    /function _enhDormantNoteHtml\(/.test(stackJs) &&
+  check('  …both suppressed entries are recorded, not silently dropped',
+    (G._injSuppressed['s1']||[]).some(x => x.id === 'test-u' && x.reason === 'tcalc') &&
+    (G._injSuppressed['s1']||[]).some(x => x.id === 'nebido' && x.reason === 'tcalc'));
+  check('  …and the config says so where the user configured it, naming T-Calc',
+    /function _tcalcOwnsTestoNote\(/.test(stackJs) &&
+    /Scheduled in T-Calc/.test(stackJs) &&
     /_enhDormantNoteHtml\(c,_editBuf\)/.test(stackJs) &&
     /_enhDormantNoteHtml\(c,_wiz\)/.test(stackJs));
+  check('  …in the TRT tier too — editor, wizard and read-only view',
+    (stackJs.match(/_tcalcOwnsTestoNote\('Testosterone'\)/g)||[]).length >= 3);
+  check('  …and the note is unconditional for a testosterone entry',
+    G._enhDormantNoteHtml({id:'test-u',name:'Testosterone Undecanoate (Nebido)'},{trt:{enabled:false,compounds:[]}}).indexOf('T-Calc') !== -1 &&
+    G._enhDormantNoteHtml({id:'hgh',name:'HGH'},{trt:{enabled:true,compounds:[{id:'nebido'}]}}) === '');
 
   // No generated injection may carry a rate unit — that is the "350 mg/week" row.
   const units = G._genInjBatches(mkStack(false),'s1',null)
@@ -1462,9 +1499,13 @@ console.log(`\n${'─'.repeat(59)}`);
   check('no generated injection carries a "/period" unit',
     units.every(u => u.indexOf('/') === -1), units.join(','));
 
-  // The free-T curve aggregates both tiers, so it double-counted the same way.
-  check('the free-T log applies the same one-stream rule',
-    /_trtOwnsTesto/.test(bloodJs) && /st\.enhanced\.enabled && !_trtOwnsTesto/.test(bloodJs));
+  // The free-T preview curve must show the doses that WILL be injected. Deriving a
+  // schedule from stack config would plot a stream nothing generates, and double it
+  // against the T-Calc plan — the same double the one-stream rule always forbade.
+  check('the free-T log takes testosterone from T-Calc alone',
+    /_blTcalcTestosterone\(\)/.test(bloodJs) &&
+    !/_trtOwnsTesto/.test(bloodJs) &&
+    !/st\.trt && st\.trt\.enabled/.test(bloodJs));
 
   // ── The blood/free-T curves use the SAME conversion, not a second copy ──────
   // tab-blood.js kept its own rate maths and only ever understood "mg/week" on a
@@ -2620,37 +2661,48 @@ if (typeof G._genInjBatches === 'function') {
   const _d = (o) => _dk(new Date(_n.getTime() + o*86400000));
   const _flat = (b) => b.reduce((a,x) => a.concat(x.entries), []);
 
-  // TRT tier -> tier:'trt', at the compound's own cadence.
+  // A PEPTIDE generates tier:'peptide', at the compound's own cadence. This is the
+  // shape assertion the TRT tier used to carry, moved to a tier that still generates.
   let _b = G._genInjBatches({id:'s1', cycle_start:_d(-10), cycle_length:4,
-    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
-      freqVal:2, freqUnit:'days'}]}}, 'cyc1', null);
+    peptides:[{id:'reta', name:'Retatrutide', dose_am:'2', unit_am:'mg',
+      times:['AM'], days:[0,2,4,6], active:true}]}, 'cyc1', null);
   let _e = _flat(_b);
-  check('a TRT-tier compound generates tier "trt"', _e.length > 0 && _e.every(x => x.tier === 'trt'));
-  check('  …at the stated cadence (every 2 days)',
-    _e.length >= 3 && (new Date(_e[1].date) - new Date(_e[0].date)) === 2*86400000);
-  check('  …carrying the compound id unchanged', _e.every(x => x.compound_id === 'nebido'));
-  check('  …and a PK snapshot for the history to read', _e.every(x => 'half_life_days' in x));
+  check('a peptide generates tier "peptide"', _e.length > 0 && _e.every(x => x.tier === 'peptide'));
+  check('  …carrying the compound id unchanged', _e.every(x => x.compound_id === 'reta'));
+  check('  …and a PK snapshot field for the history to read', _e.every(x => 'half_life_days' in x));
 
-  // Enhanced tier -> tier:'enhanced'. THE ROOT CAUSE, pinned so it is visible in the
-  // suite rather than discovered from a user's data again.
+  // ── T-CALC OWNS TESTOSTERONE (rule 2026-08-14) ────────────────────────────
+  // These three checks previously asserted the opposite: that the TRT tier generated
+  // `tier:'trt'`, that the Enhanced tier generated `tier:'enhanced'`, and that when
+  // both held testosterone the TRT tier won. That was ONE stream but the wrong owner
+  // — T-Calc was scheduling a third of its own, and a real protocol ended up with 27
+  // `enhanced/test_u` rows beside 23 `trt/nebido` rows for the same molecule.
+  // Henrik: "The only way to schedule testo must be using t-calc."
   _b = G._genInjBatches({id:'s2', cycle_start:_d(-10), cycle_length:4,
-    enhanced:{enabled:true, compounds:[{id:'test_u', name:'Testosterone Undecanoate',
-      dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]}}, 'cyc2', null);
-  _e = _flat(_b);
-  check('an Enhanced-tier testosterone generates tier "enhanced", NOT "trt"',
-    _e.length > 0 && _e.every(x => x.tier === 'enhanced' && x.compound_id === 'test_u'),
-    'this is what the free-T model must be able to read — see _tcIsTestoRow');
+    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
+      freqVal:2, freqUnit:'days'}]}}, 'cyc2', null);
+  check('the TRT tier generates NO injections — T-Calc schedules testosterone',
+    _flat(_b).length === 0, 'ids: ' + _flat(_b).map(x => x.compound_id).join(','));
 
-  // ONE testosterone stream per stack: TRT wins, Enhanced is suppressed, not deleted.
   _b = G._genInjBatches({id:'s3', cycle_start:_d(-10), cycle_length:4,
+    enhanced:{enabled:true, compounds:[{id:'test_u', name:'Testosterone Undecanoate',
+      dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]}}, 'cyc3', null);
+  check('  …and neither does Enhanced-tier testosterone',
+    _flat(_b).length === 0, 'ids: ' + _flat(_b).map(x => x.compound_id).join(','));
+
+  _b = G._genInjBatches({id:'s3b', cycle_start:_d(-10), cycle_length:4,
     trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
       freqVal:2, freqUnit:'days'}]},
     enhanced:{enabled:true, compounds:[{id:'test_u', name:'Testosterone Undecanoate',
-      dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]}}, 'cyc3', null);
+      dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]}}, 'cyc3b', null);
   _e = _flat(_b);
-  check('testosterone in BOTH tiers schedules once, from the TRT tier',
-    _e.some(x => x.compound_id === 'nebido') && !_e.some(x => x.compound_id === 'test_u'),
+  check('  …so testosterone in BOTH tiers schedules ZERO times here, not once',
+    _e.length === 0,
     'ids generated: ' + [...new Set(_e.map(x => x.compound_id))].join(','));
+  check('  …and both are recorded as suppressed, naming T-Calc',
+    (G._injSuppressed['s3b']||[]).length === 2 &&
+    (G._injSuppressed['s3b']||[]).every(x => x.reason === 'tcalc'));
+
   // A non-testosterone Enhanced compound is never suppressed by that rule.
   _b = G._genInjBatches({id:'s4', cycle_start:_d(-10), cycle_length:4,
     trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
@@ -5041,8 +5093,15 @@ console.log('\n── T-Calc simple planner ────────────
     /function wizStepTRT\(body,footer\)/.test(_stSrc) && /wizToggleTrtClassic/.test(_stSrc));
   check('saving a TRT protocol routes to T-Calc and links the stack',
     /_tcp\.targetStackId=_savedStack\.id/.test(_stSrc) && /switchTab\('tcalc'/.test(_stSrc));
-  check('a protocol with inline TRT compounds still lands on Protocols',
-    /_trtInline/.test(_stSrc));
+  // Superseded 2026-08-14. This asserted that a protocol configured through the
+  // classic multi-compound step "still lands on Protocols" — correct while that step
+  // generated its own injections, a dead end now that it does not: settings saved,
+  // nothing scheduled, and no route to the only tab that can schedule it.
+  check('the classic TRT step routes to T-Calc as well — it schedules nothing itself',
+    !/_wantsTrt && !_trtInline && typeof _tcp/.test(_stSrc),
+    'the inline-config path is skipping the T-Calc hand-off again');
+  check('  …while a classic configuration still wins over a half-filled planner',
+    /_wantsTrt && !_trtInline && typeof _wizTrtPlanComplete/.test(_stSrc));
 }
 
 // ── T-Calc is populated by the planned TRT protocol ──────────────────────────
@@ -7887,7 +7946,19 @@ if (typeof G._blBuildLines === 'function') {
   G._tcp.measuredFT = '217';        // calibrate the aggregated Free T line to pmol/L
   G._tcp.currentDoseMgWk = '';      // no prior protocol → curve starts at the baseline
   G._tcBwEntries = [{date:'2026-05-25', free_t:217}];  // pre-cycle baseline draw → day-0 anchors at 217
-  G._injectionsCache = {};
+  // Testosterone reaches this chart as INJECTIONS, never as stack config (rule
+  // 2026-08-14 — T-Calc owns the schedule). The stack below still carries a TRT ester
+  // so the fixture also proves that config alone draws nothing.
+  G._injectionsCache = (function(){
+    var c = {};
+    for (var i = 0; i < 12; i++) {
+      var d = new Date(new Date('2026-06-01').getTime() + i*3.5*86400000);
+      var k = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+      c[k] = [{cycle_id:'test_20260601', compound_id:'testoviron', compound_name:'Testoviron',
+               tier:'trt', date:k, dose:'125', unit:'mg', active:true}];
+    }
+    return c;
+  })();
   G._userStacks = [{
     name:'Test', cycle_length:12, cycle_start:'2026-06-01',
     peptides:[{id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0,3],times:['AM'],dose_am:'3',unit_am:'mg',active:true}],
@@ -8023,21 +8094,32 @@ if (typeof G._blBuildLines === 'function') {
     G._blZoom='week';
   })();
 
-  // Free T aggregates ALL testosterone sources (stack esters + T-Calc plan) into
-  // one line, even with no stack TRT configured, and folds multiple esters together.
+  // Free T aggregates every testosterone injection into one line and folds multiple
+  // esters together. The source is T-Calc ALONE (rule 2026-08-14): this block used to
+  // seed one ester through `stack.trt` and one through T-Calc and assert both landed.
+  // The stack tiers no longer schedule testosterone, so deriving a curve from that
+  // config would plot doses nothing will ever inject — both esters come from the
+  // record now, under a STACK cycle id, which is where T-Calc writes them.
   (function(){
     var _saveInj = G._injectionsCache, _saveStacks2 = G._userStacks, _saveIdx2 = G._activeStackIndices, _saveSupp2 = G._supplements;
-    // stack TRT (testoviron) + T-Calc plan (nebido) — two different esters, one Free T line
     G._userStacks = [{ name:'T', cycle_length:12, cycle_start:'2026-06-01',
       peptides:[], trt:{enabled:true,compounds:[{id:'testoviron',name:'Testoviron',dose:'125',unit:'mg',days:[0,3]}]},
       enhanced:{enabled:false,compounds:[]} }];
     G._activeStackIndices = [0]; G._supplements = [];
     G._injectionsCache = {
-      '2026-06-10':[{cycle_id:'tcalc',compound_id:'nebido',compound_name:'Nebido',tier:'trt',date:'2026-06-10',dose:'1000',unit:'mg',active:true}]
+      '2026-06-08':[{cycle_id:'protocol_1_20260601',compound_id:'testoviron',compound_name:'Testoviron',tier:'trt',date:'2026-06-08',dose:'125',unit:'mg',active:true}],
+      '2026-06-10':[{cycle_id:'protocol_1_20260601',compound_id:'nebido',compound_name:'Nebido',tier:'trt',date:'2026-06-10',dose:'1000',unit:'mg',active:true}]
     };
     var _tlog = G._blTestosteroneLog();
-    check('_blTestosteroneLog: merges stack esters + T-Calc into one dated log',
+    check('_blTestosteroneLog: merges every ester into one dated log',
       _tlog.length > 1 && _tlog.some(function(e){return e.compId==='testoviron';}) && _tlog.some(function(e){return e.compId==='nebido';}));
+    // The stack above HAS a TRT ester configured. It must contribute nothing.
+    check('_blTestosteroneLog: stack TRT config contributes no doses of its own',
+      _tlog.length === 2, 'got ' + _tlog.length + ' doses from 2 stored injections');
+    // …and a plan filed under a stack cycle id is found, which the old
+    // `cycle_id==="tcalc"` selector would have discarded outright.
+    check('_blTestosteroneLog: finds a plan bound to a protocol, not just legacy "tcalc"',
+      _tlog.some(function(e){return e.compId==='nebido';}));
     check('_blTestosteroneLog: sorted ascending by date', _tlog.every(function(e,i){ return i===0 || _tlog[i-1].date <= e.date; }));
     var _tl = G._blBuildLines();
     var _fts = _tl.filter(function(l){ return l.kind==='freet'; });
@@ -8047,22 +8129,34 @@ if (typeof G._blBuildLines === 'function') {
     G._injectionsCache = _saveInj; G._userStacks = _saveStacks2; G._activeStackIndices = _saveIdx2; G._supplements = _saveSupp2;
   })();
 
-  // Regression (Option B): T-Calc testosterone ASSIGNED to a stack has cycle_id
-  // 'tcalc:<stackId>' (not the bare 'tcalc'). _blTcalcTestosterone must still pick
-  // it up so the Blood Levels Free T curve stays as complete as the T-Calc tab.
-  // _injectionsCache is already visibility-filtered, so both forms belong on the line.
+  // Selection is on WHAT THE ROW IS, never on which cycle it was filed under.
+  //
+  // The last check in this block used to assert the opposite — that a stack cycle_id
+  // was IGNORED, "so a stack's own config injections are not double-counted here."
+  // That guarded a double-count between two writers, and there is only one writer now
+  // (rule 2026-08-14). Meanwhile "the stack is the container" (2026-08-06) moved
+  // T-Calc's own writes onto the stack's cycle id, so the old selector excluded
+  // exactly the rows it exists to find. It survived only because the stack-config
+  // derivation was quietly covering for it.
   if (typeof G._blTcalcTestosterone === 'function') {
     var _sInjA = G._injectionsCache;
     G._injectionsCache = {
-      '2026-06-10':[{cycle_id:'tcalc',      compound_id:'nebido',  compound_name:'Nebido',       tier:'trt', date:'2026-06-10', dose:'1000', unit:'mg', active:true}],
-      '2026-06-12':[{cycle_id:'tcalc:mystack', compound_id:'test-e', compound_name:'Testosterone E', tier:'trt', date:'2026-06-12', dose:'50',  unit:'mg', active:true}]
+      '2026-06-10':[{cycle_id:'tcalc',         compound_id:'nebido', compound_name:'Nebido',        tier:'trt', date:'2026-06-10', dose:'1000', unit:'mg', active:true}],
+      '2026-06-12':[{cycle_id:'tcalc:mystack', compound_id:'test-e', compound_name:'Testosterone E',tier:'trt', date:'2026-06-12', dose:'50',   unit:'mg', active:true}],
+      '2026-06-14':[{cycle_id:'mystack',       compound_id:'test-c', compound_name:'Test C',        tier:'trt', date:'2026-06-14', dose:'80',   unit:'mg', active:true}],
+      '2026-06-16':[{cycle_id:'mystack',       compound_id:'test_u', compound_name:'Testosterone Undecanoate', tier:'enhanced', date:'2026-06-16', dose:'250', unit:'mg', active:true}],
+      '2026-06-18':[{cycle_id:'mystack',       compound_id:'hgh',    compound_name:'HGH',           tier:'enhanced', date:'2026-06-18', dose:'4', unit:'IU', active:true}]
     };
     var _tct = G._blTcalcTestosterone();
-    check('_blTcalcTestosterone: includes unassigned tcalc plan',      _tct.some(function(c){ return c.id==='nebido'; }));
-    check('_blTcalcTestosterone: includes stack-assigned tcalc:<id>',  _tct.some(function(c){ return c.id==='test-e'; }));
-    // a non-tcalc cycle_id (a stack's own config injections) must NOT be double-counted here
-    G._injectionsCache = { '2026-06-14':[{cycle_id:'mystack', compound_id:'test-c', compound_name:'Test C', tier:'trt', date:'2026-06-14', dose:'80', unit:'mg', active:true}] };
-    check('_blTcalcTestosterone: ignores non-tcalc (stack-config) cycle_ids', G._blTcalcTestosterone().every(function(c){ return c.id!=='test-c'; }));
+    check('_blTcalcTestosterone: includes a legacy unassigned tcalc plan', _tct.some(function(c){ return c.id==='nebido'; }));
+    check('_blTcalcTestosterone: includes a legacy tcalc:<id> plan',       _tct.some(function(c){ return c.id==='test-e'; }));
+    check('_blTcalcTestosterone: includes a plan filed under a STACK cycle id',
+      _tct.some(function(c){ return c.id==='test-c'; }),
+      'this is where T-Calc writes since 2026-08-06 — excluding it blanked the curve');
+    check('_blTcalcTestosterone: includes an enhanced-tier testosterone row',
+      _tct.some(function(c){ return c.id==='test_u'; }));
+    check('_blTcalcTestosterone: and still excludes non-testosterone rows',
+      _tct.every(function(c){ return c.id!=='hgh'; }));
     G._injectionsCache = _sInjA;
   }
 
@@ -8137,7 +8231,11 @@ if (typeof G._blBuildLines === 'function') {
                    vitd3:{marker:'vitamin_d_25oh',assay:true,model:{type:'linear',baseline:50,perUnitPerDay:0.017,unit:'IU'}},
                    retatrutide:{marker:null,assay:false} }
     };
-    G._tcp.measuredFT='217'; G._tcp.currentDoseMgWk=''; G._tcBwEntries=[{date:'2026-05-25',free_t:217}]; G._injectionsCache={};
+    G._tcp.measuredFT='217'; G._tcp.currentDoseMgWk=''; G._tcBwEntries=[{date:'2026-05-25',free_t:217}];
+    // Testosterone comes from the injection record, not from the stack's TRT config
+    // (rule 2026-08-14) — without a stored injection there is no Free T line to check.
+    G._injectionsCache={ '2026-06-08':[{cycle_id:'p2_20260601', compound_id:'testoviron',
+      compound_name:'Testoviron', tier:'trt', date:'2026-06-08', dose:'125', unit:'mg', active:true}] };
     G._userStacks=[{ name:'P2', cycle_length:12, cycle_start:'2026-06-01',
       peptides:[{id:'retatrutide',name:'Retatrutide',dot:'#e8ff3c',days:[0,3],times:['AM'],dose_am:'3',unit_am:'mg',active:true}],
       trt:{enabled:true,compounds:[{id:'testoviron',name:'Testoviron',dose:'125',unit:'mg',days:[0,3]}]},
