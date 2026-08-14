@@ -141,30 +141,44 @@ function _blTmax(halfLifeDays) {
 
 // T-Calc-planned testosterone — planned via the T-Calc planner rather than
 // configured as a stack TRT compound, so it is otherwise absent from the chart.
-// Covers both the unassigned plan (cycle_id 'tcalc') and a plan assigned to a
-// stack (cycle_id 'tcalc:<stackId>'). _injectionsCache is already filtered to
-// visible entries (unassigned + active-stack-owned), so any 'tcalc'-prefixed
-// entry here belongs on the aggregated Free T line. Gather dated doses per compound.
+// _injectionsCache is already filtered to visible entries (unassigned +
+// active-stack-owned). Gather dated doses per compound.
+//
+// This applies the SAME two rules as _tcCurveLog, and it has to, because it now sees
+// the same rows: the compound id is CANONICALISED, and one (compound, date) pair is
+// one injection however many rows describe it. A real account holds `enhanced/test_u`
+// under a protocol and `trt/nebido` under T-Calc's legacy `manual` cycle, on the same
+// days — one molecule, two ids, two rows. Grouping on the raw id would draw a free-T
+// curve at double the real dose.
 function _blTcalcTestosterone() {
   if (typeof _injectionsCache === 'undefined' || !_injectionsCache) return [];
-  var byComp = {};
+  var byComp = {}, seen = {};
+  // Logged first, so a recorded injection outranks a plan for the same day — the
+  // ordering _tcCurveLog uses, for the same reason.
+  var rows = [];
   Object.keys(_injectionsCache).forEach(function(dk){
-    (_injectionsCache[dk]||[]).forEach(function(e){
-      // Select on WHAT THE ROW IS, not on which cycle it was filed under. This used to
-      // require cycle_id 'tcalc' / 'tcalc:<id>' — the namespace T-Calc wrote before
-      // "the stack is the container" (2026-08-06) moved it to the stack's own cycle
-      // id. Every properly bound T-Calc plan was therefore invisible here, which only
-      // stopped mattering because the stack config was being derived as well. It is
-      // not any more (see _blTestosteroneLog), so this is the sole selector.
-      if (!(typeof _tcIsTestoRow === 'function' ? _tcIsTestoRow(e.tier, e.compound_id)
-                                                : (!e.tier || e.tier === 'trt'))) return;
-      if (e.active === false) return;
-      var cid = e.compound_id || e.compound_name || 'testosterone';
-      var c = byComp[cid] || (byComp[cid] = { id:cid, name:e.compound_name||cid, unit:e.unit||'mg', doses:[] });
-      var dose = parseDec(e.dose) || 0;
-      var d = (typeof parseLocalDate === 'function') ? parseLocalDate(e.date) : new Date(e.date);
-      if (d && dose > 0) c.doses.push({ date:d, dose:dose });
-    });
+    (_injectionsCache[dk]||[]).forEach(function(e){ if(e) rows.push(e); });
+  });
+  rows.sort(function(a,b){ return (b.logged?1:0) - (a.logged?1:0); });
+  rows.forEach(function(e){
+    // Select on WHAT THE ROW IS, not on which cycle it was filed under. This used to
+    // require cycle_id 'tcalc' / 'tcalc:<id>' — the namespace T-Calc wrote before
+    // "the stack is the container" (2026-08-06) moved it to the stack's own cycle
+    // id. Every properly bound T-Calc plan was therefore invisible here, which only
+    // stopped mattering because the stack config was being derived as well. It is
+    // not any more (see _blTestosteroneLog), so this is the sole selector.
+    if (!(typeof _tcIsTestoRow === 'function' ? _tcIsTestoRow(e.tier, e.compound_id)
+                                              : (!e.tier || e.tier === 'trt'))) return;
+    if (e.active === false) return;
+    var raw = e.compound_id || e.compound_name || 'testosterone';
+    var cid = (typeof _tcCanonCompId === 'function') ? _tcCanonCompId(raw) : raw;
+    var k = cid + '|' + e.date;
+    if (seen[k]) return;
+    seen[k] = true;
+    var c = byComp[cid] || (byComp[cid] = { id:cid, name:e.compound_name||cid, unit:e.unit||'mg', doses:[] });
+    var dose = parseDec(e.dose) || 0;
+    var d = (typeof parseLocalDate === 'function') ? parseLocalDate(e.date) : new Date(e.date);
+    if (d && dose > 0) c.doses.push({ date:d, dose:dose });
   });
   return Object.keys(byComp).map(function(k){ return byComp[k]; }).filter(function(c){ return c.doses.length; });
 }
