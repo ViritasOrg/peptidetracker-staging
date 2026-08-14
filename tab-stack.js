@@ -120,9 +120,17 @@ async function wizSave(){
   buildStackStore();
   closeWizard();
   // Hand off to T-Calc when this protocol involves testosterone: it is where the
-  // schedule is built, and the stack is assigned as the T-Calc target so the plan
-  // and the protocol stay linked. Only for a TRT protocol, and only when the user
-  // did not configure testosterone inline in the classic step.
+  // schedule is built, and the stack is assigned as the T-Calc target so the plan and
+  // the protocol stay linked.
+  //
+  // The handoff used to be skipped when the user had configured testosterone inline in
+  // the classic multi-compound step, because that config generated its own injections.
+  // It does not any more (rule 2026-08-14 — T-Calc is the only scheduler), so skipping
+  // it left the classic path a dead end: settings saved, nothing scheduled, and no
+  // route to the tab that would schedule it. The classic step still owns what the
+  // protocol RECORDS; T-Calc owns when it is injected, and the user lands there either
+  // way. `_trtInline` still guards the plan commit below, so a classic configuration
+  // is never silently overwritten by a half-filled planner.
   var _wantsTrt = (_wiz.goals||[]).indexOf('trt')>=0;
   var _trtInline = !!(_savedStack && _savedStack.trt && _savedStack.trt.compounds && _savedStack.trt.compounds.length);
   // The wizard's TRT step edits the T-Calc simple plan. Commit it here, so the
@@ -133,7 +141,7 @@ async function wizSave(){
     _tcp.simplePlan={compId:_wp.compId,doseMg:String(_wp.doseMg),cadenceN:parseInt(_wp.cadenceN,10)||0,cadenceUnit:_wp.cadenceUnit||'week',cadenceDays:parseDec(_wp.cadenceDays),startDate:_wp.startDate};
     _tcp.plannerMode='simple';
   }
-  if(_wantsTrt && !_trtInline && typeof _tcp!=='undefined' && _tcp && _savedStack && _savedStack.id &&
+  if(_wantsTrt && typeof _tcp!=='undefined' && _tcp && _savedStack && _savedStack.id &&
      typeof buildTCalc==='function' && document.getElementById('tab-btn-tcalc')){
     _tcp.targetStackId=_savedStack.id;
     if(typeof _tcSaveProfile==='function')_tcSaveProfile();
@@ -421,7 +429,7 @@ function editToggleDay(el,pi,di){
 function editRemovePeptide(pi){_editBuf.peptides.splice(pi,1);renderStackEditor();}
 function editToggleTRT(){if(!_editBuf.trt)_editBuf.trt={};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];_editBuf.trt.enabled=!_editBuf.trt.enabled;_collectEditInputs();renderStackEditor();}
 function editToggleTRTCompound(id){if(!_editBuf.trt)_editBuf.trt={enabled:true,compounds:[]};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];var idx=_editBuf.trt.compounds.findIndex(function(c){return c.id===id;});if(idx!==-1){_editBuf.trt.compounds.splice(idx,1);}else{var cat=TRT_CAT.find(function(c){return c.id===id;});if(cat)_editBuf.trt.compounds.push({id:id,name:cat.name,dose:cat.defaultDose||'',unit:cat.unit||'mg',freqVal:cat.freqVal||1,freqUnit:cat.freqUnit||'weeks',days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});}_collectEditInputs();renderStackEditor();}
-function _renderEditTRT(trt){if(!trt)trt={};var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>TRT Protocol</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+c.sub+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+['mg','ml','IU','%'].map(function(u){return'<option'+(u===(selData.unit||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';if(c.id!=='nebido'){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqVal=parseInt(x)||1;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)" style="max-width:70px;"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqUnit=x;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)"><option'+('days'===(selData.freqUnit||'weeks')?' selected':'')+'>days</option><option'+('weeks'===(selData.freqUnit||'weeks')?' selected':'')+'>weeks</option></select></div></div>';}html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
+function _renderEditTRT(trt){if(!trt)trt={};var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>TRT Protocol</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+c.sub+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+['mg','ml','IU','%'].map(function(u){return'<option'+(u===(selData.unit||'mg')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';if(c.id!=='nebido'){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqVal=parseInt(x)||1;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)" style="max-width:70px;"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqUnit=x;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)"><option'+('days'===(selData.freqUnit||'weeks')?' selected':'')+'>days</option><option'+('weeks'===(selData.freqUnit||'weeks')?' selected':'')+'>weeks</option></select></div></div>';}html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
 function editSetTRTTime(id,tm){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.time=(tm==='PM'?'PM':'AM');_collectEditInputs();renderStackEditor();}
 function editAddPeptide(){
   var currentIds=(_editBuf.peptides||[]).map(function(p){return p.id;});
@@ -795,6 +803,40 @@ function _enhDosePerInjection(c){
 // the same predicate tab-blood.js uses to route testosterone into the free-T line.
 function _isEnhTestosterone(c){
   return String((c&&c.name)||'').toLowerCase().indexOf('testosterone')!==-1;
+}
+// ── T-CALC OWNS TESTOSTERONE (rule 2026-08-14) ───────────────────────────────
+// Henrik: "I want T-calc to own all testosterone injections, in stack wizard TRT and
+// Enhanced should use T-calc. The only way to schedule testo must be using t-calc."
+//
+// Is this compound testosterone, whichever tier it was configured in?
+//  · Enhanced — matched on the NAME, because the enhanced catalogue keys esters by its
+//    own ids (test_u / test_e / …) and the name is the only thing that identifies them.
+//  · TRT — matched on the TIER, because every entry in TRT_CAT is a testosterone ester
+//    and the brand names do NOT all contain the word ("Nebido", "Testoviron Depot",
+//    "Sustanon 250"). The tier is the testosterone tier; there is nothing else in it.
+function _isTestosteroneComp(tier,c){
+  if(tier==='enhanced')return _isEnhTestosterone(c);
+  return tier==='trt';
+}
+// Record a compound the generator deliberately did not schedule, so the UI can name it.
+// A row that vanishes with no explanation is the bug, not the fix — see
+// _tcalcOwnsTestoNote / _enhDormantNoteHtml, which are what read this rule back out.
+function _noteInjSuppressed(stack,cycleId,c,reason){
+  if(typeof _injSuppressed==='undefined'||!_injSuppressed)return;
+  var k=(stack&&stack.id)||cycleId;
+  if(!_injSuppressed[k])_injSuppressed[k]=[];
+  _injSuppressed[k].push({id:c&&c.id,name:(c&&(c.name||c.id))||'',reason:reason});
+}
+// The banner shown wherever testosterone is configured but not scheduled. Deep-links
+// to T-Calc, which is where the dose, cadence and dates actually live now.
+function _tcalcOwnsTestoNote(what){
+  return '<div onclick="var b=document.getElementById(\'tab-btn-tcalc\');if(b)b.click();" style="cursor:pointer;background:rgba(102,136,204,0.08);border:1px solid #6688cc44;border-left:3px solid #6688cc;border-radius:8px;padding:10px 12px;margin-bottom:10px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:3px">'
+      +'<div style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#6688cc">Scheduled in T-Calc</div>'
+      +'<div style="font-size:11px;color:#6688cc;flex-shrink:0">Open →</div>'
+    +'</div>'
+    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5">'+_esc(what||'Testosterone')+' is planned in T-Calc, which is the only place testosterone is scheduled — one stream, one plasma curve. The settings here are kept for reference and generate no injections. Tap to set the ester, dose and cadence.</div>'
+  +'</div>';
 }
 // Renders the schedule control: mode chips, then either weekday chips or an interval
 // input. `pfx` is 'edit' or 'wiz' so the same markup drives both the stack editor and
@@ -1193,8 +1235,13 @@ function _tcalcTrtSummary(){
   var byComp={};
   Object.keys(_injectionsCache).forEach(function(dk){
     (_injectionsCache[dk]||[]).forEach(function(e){
-      if(!e||e.cycle_id!=='tcalc') return;
-      if(e.tier&&e.tier!=='trt') return;
+      // Same selector as _blTcalcTestosterone: what the row IS, not the cycle it was
+      // filed under. The old `cycle_id!=='tcalc'` test predates "the stack is the
+      // container" (2026-08-06) and hid every T-Calc plan bound to a protocol — which
+      // is now the only way testosterone is scheduled at all.
+      if(!e) return;
+      if(!(typeof _tcIsTestoRow==='function'?_tcIsTestoRow(e.tier,e.compound_id)
+                                            :(!e.tier||e.tier==='trt'))) return;
       var cid=e.compound_id||e.compound_name||'testosterone';
       var c=byComp[cid]||(byComp[cid]={name:e.compound_name||cid,dot:e.dot||'#e8a020',unit:e.unit||'mg',count:0,next:null,nextDose:''});
       c.count++;
@@ -1236,6 +1283,7 @@ function _renderTRTViewTab(st){
   if(!compounds.length){
     if(!_tcCard) html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No TRT configured for this protocol.</div>';
   }else{
+    html+=_tcalcOwnsTestoNote('Testosterone');
     html+='<div class="wiz-section" style="margin-bottom:10px;">Protocol</div>';
     compounds.forEach(function(c){
       var cat=TRT_CAT.find(function(t){return t.id===c.id;})||{};
@@ -1717,6 +1765,9 @@ function wizStepTRT(body,footer){
   var hasNebido=selIds.includes('nebido');
   var maxReached=hasNebido?(sel.length>=2):(sel.length>=1);
   var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">Select your testosterone compound and configure the protocol.</div>';
+  // The classic multi-compound editor still exists, but it no longer schedules: it
+  // records what the protocol runs, and T-Calc injects it (rule 2026-08-14).
+  html+=_tcalcOwnsTestoNote('Testosterone');
   if((_wiz.goals||[]).includes('enhanced')){
     html+='<div style="background:rgba(224,80,80,0.06);border-left:3px solid #e05050;border-radius:8px;padding:11px 13px;margin-bottom:12px;font-size:11.5px;color:var(--muted2);line-height:1.6"><b style="color:var(--text)">Combined cycle</b> — with a second anabolic driving growth, testosterone is often run at a <b>physiological base</b> (the Standard TRT tier below) to hold libido, mood and function while limiting dose-dependent sides (estrogen, haematocrit). Testosterone is dose-dependently anabolic (Bhasin 2001), so a lower base still contributes to the load. <i>The reduce-test-while-stacking approach is common practice but has no controlled-trial evidence — treat it as guidance, not fact.</i></div>';
   }
@@ -1836,16 +1887,15 @@ function wizToggleEnhTime(id,t){
 }
 function editSetEnhAmPm(id,on){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.amPm=!!on;_collectEditInputs();renderStackEditor();}
 function editSetEnhDays(id,di){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});renderStackEditor();}
-// Why an enhanced testosterone entry is sitting dormant. Reads the buffer being
-// edited, so the note appears and disappears as the TRT tier is changed rather than
-// lagging a save behind. Empty string when the entry does generate injections.
+// Why an enhanced testosterone entry generates no doses: T-Calc schedules testosterone
+// (rule 2026-08-14). Empty string for everything that is not testosterone — the rest of
+// the Enhanced tier is generated from here exactly as before.
+// `stackLike` is the buffer being edited; it is no longer consulted, because the answer
+// no longer depends on what the TRT tier holds. The parameter stays so the three call
+// sites (editor, wizard, view) keep their shape.
 function _enhDormantNoteHtml(c,stackLike){
-  if(!_isEnhTestosterone(c))return '';
-  if(!(stackLike&&stackLike.trt&&stackLike.trt.enabled&&(stackLike.trt.compounds||[]).length))return '';
-  return '<div style="background:rgba(232,168,32,0.08);border:1px solid rgba(232,168,32,0.35);border-radius:8px;padding:8px 10px;margin-bottom:8px">'
-    +'<div style="font-size:11px;font-weight:700;color:#e8a020;margin-bottom:2px">Not scheduled — the TRT tier carries testosterone</div>'
-    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5">A protocol injects testosterone from one tier only, so this entry generates no doses while the TRT tier has an ester configured. Its settings are kept — remove the TRT ester and it starts scheduling again.</div>'
-    +'</div>';
+  if(!_isTestosteroneComp('enhanced',c))return '';
+  return _tcalcOwnsTestoNote(c&&(c.name||c.id));
 }
 function _renderEditEnhanced(enh){
   if(!enh)enh={enabled:false,compounds:[]};
@@ -2533,9 +2583,26 @@ function _genInjBatches(stack,cycleId,fromDate){
     if(compEntries.length)batches.push({compound_id:p.id,from_date:dateKey(genStart),entries:compEntries});
   });
 
+  // ── Testosterone is scheduled by T-CALC and by nothing else ────────────────
+  // Henrik, 2026-08-14: "I want T-calc to own all testosterone injections […] The only
+  // way to schedule testo must be using t-calc."
+  //
+  // Both tiers used to generate their own testosterone, which put two rows for the
+  // same molecule on the same day (reported 2026-08-07). The first fix made the TRT
+  // tier win over Enhanced — one stream, but still the wrong owner: T-Calc holds the
+  // PK model, the ester, the cadence and the curve, and it was scheduling a third
+  // stream of its own. So neither tier generates testosterone now.
+  //
+  // Nothing is deleted or hidden. The compound stays in the stack, still renders in
+  // its tier's config with a note naming T-Calc as the scheduler, and every injection
+  // already stored stays exactly as it is — the injection log is the record of what
+  // was injected and this changes only what is generated from here on.
+  if(typeof _injSuppressed!=='undefined'&&_injSuppressed)_injSuppressed[stack.id||cycleId]=[];
+
   // TRT compounds
   if(stack.trt&&stack.trt.enabled){
     (stack.trt.compounds||[]).forEach(function(c){
+      if(_isTestosteroneComp('trt',c)){_noteInjSuppressed(stack,cycleId,c,'tcalc');return;}
       var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(t){return t.id===c.id;}):null;
       var dot=cat?cat.dot:'#e8a020';
       var cStart=c.start_date?new Date(Math.max(parseLocalDate(c.start_date).getTime(),genStart.getTime())):new Date(genStart);
@@ -2553,30 +2620,12 @@ function _genInjBatches(stack,cycleId,fromDate){
     });
   }
 
-  // ── One testosterone stream per stack ──────────────────────────────────────
-  // Testosterone in the TRT tier and testosterone in the Enhanced tier of the SAME
-  // stack are one molecule in one body. Both tiers generated their own injections, so
-  // a single protocol put two testosterone rows on the same day — reported 2026-08-07,
-  // "In Today view I see double injections with Nebido (ie from TRT AND Enhanced)".
-  // The stack is the container, and it schedules testosterone once.
-  //
-  // The TRT tier wins because it is the tier T-Calc, the free-T model and the Levels
-  // views all read. The Enhanced entry is NOT deleted, edited or hidden: it stays in
-  // the stack, still renders in the Enhanced config with a note saying who is
-  // scheduling it, and starts generating again by itself the moment the TRT tier stops
-  // carrying testosterone. Suppressed entries are recorded so the UI can name them —
-  // a row that vanishes with no explanation is the bug, not the fix.
-  var _trtOwnsTesto=!!(stack.trt&&stack.trt.enabled&&(stack.trt.compounds||[]).length);
-  if(typeof _injSuppressed!=='undefined'&&_injSuppressed)_injSuppressed[stack.id||cycleId]=[];
-
   // Enhanced compounds
   if(stack.enhanced&&stack.enhanced.enabled){
     (stack.enhanced.compounds||[]).forEach(function(c){
-      if(_trtOwnsTesto&&_isEnhTestosterone(c)){
-        if(typeof _injSuppressed!=='undefined'&&_injSuppressed&&_injSuppressed[stack.id||cycleId])
-          _injSuppressed[stack.id||cycleId].push({id:c.id,name:c.name||c.id,reason:'trt'});
-        return;
-      }
+      // Testosterone belongs to T-Calc — see the block above the TRT loop. Everything
+      // else in the Enhanced tier (nandrolone, GH, orals…) generates as before.
+      if(_isTestosteroneComp('enhanced',c)){_noteInjSuppressed(stack,cycleId,c,'tcalc');return;}
       var dot=c.dot||'#a855f7';
       var eCat=(typeof ENHANCEMENT_COMPOUNDS!=='undefined')?(ENHANCEMENT_COMPOUNDS||[]).find(function(ec){return ec.id===c.id;}):null;
       var isAmPm=c.amPm||(eCat&&eCat.amPm);
