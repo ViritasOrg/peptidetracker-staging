@@ -1341,9 +1341,19 @@ console.log(`\n${'─'.repeat(59)}`);
   check('the picker no longer offers "Unassigned"', !/>Unassigned</.test(tc));
 
   check('Save to protocol lists existing protocols', /_tcSaveToExistingStack\(/.test(tc));
-  check('  …and offers a new TRT one', /newBtn\('trt','TRT',true\)/.test(tc));
-  check('  …and a new Enhanced one', /newBtn\('enhanced','Enhanced',enhOk\)/.test(tc));
-  check('  …both wired to the creator', /_tcCreateStackForTesto\(\\''\+tier\+'\\'\)/.test(tc));
+  // SUPERSEDED 2026-08-14 by explicit request: "remove the create new protocol
+  // choices". The three checks here asserted that the sheet offered "New protocol →
+  // TRT / Enhanced" wired to _tcCreateStackForTesto. Those buttons created an EMPTY
+  // protocol and made it the only active one — one tap blanked Today and the bind
+  // that followed destroyed the account's forward schedule. Creating a protocol
+  // belongs in Plan, where it is built with its compounds. The creator function is
+  // deliberately left in the file; it is simply unreachable from this sheet.
+  check('the save sheet does NOT offer to create a protocol',
+    !/newBtn\('trt'/.test(tc) && !/newBtn\('enhanced'/.test(tc));
+  check('  …and never reaches the creator from the sheet',
+    tc.indexOf('_tcOpenSaveToStack') < 0 ||
+    tc.slice(tc.indexOf('function _tcOpenSaveToStack'),
+             tc.indexOf('async function _tcSaveToExistingStack')).indexOf('_tcCreateStackForTesto') < 0);
 
   check('Enhanced is gated on tier 3', /_userTier>=3/.test(tc));
   check('  …and refuses on the action, not just the button',
@@ -10373,6 +10383,48 @@ console.log('\n── injection deletes: scoped, and never a record ────
   // Structural backstop across all three files. A plan-clear that forgets
   // unlogged_only downgrades a record to a schedule; one that forgets compound_id
   // reaches a protocol's peptides and HGH. This holds for deletes added later.
+  // ── The save sheet: one dropdown, one button, no create-a-protocol ─────────
+  // "this is a fucked up dialog. remove the create new protocol choices, only
+  // input is a drop down with existing protocols, active protocol prechosen, and
+  // a big colored Save button." The New protocol buttons made an EMPTY protocol
+  // the active one — a destructive option inside a dialog whose job is "file
+  // these doses somewhere".
+  {
+    const _shSave = { us: G._userStacks, tp: G._tcp, ia: G._isActiveStack, doc: G.document };
+    let built = '';
+    G.document = Object.assign({}, G.document, {
+      createElement: () => ({ style:{cssText:''}, set innerHTML(v){ built = v; }, get innerHTML(){ return built; } }),
+      body: { appendChild(){}, removeChild(){} },
+      getElementById: () => null
+    });
+    G._userStacks = [{id:'my_stack_nostart',name:'My Stack'},{id:'protocol_2_nostart',name:'Protocol 2'}];
+    G._isActiveStack = (i) => i === 1;                 // Protocol 2 is active
+    G._tcp = { manualLog: [] };                        // nothing bound yet
+    if (typeof G._tcOpenSaveToStack === 'function') { try { G._tcOpenSaveToStack(); } catch(e) { built = 'THREW: '+e.message; } }
+    check('the save sheet offers a dropdown', /<select id="tc-save-stack-sel"/.test(built), built.slice(0,160));
+    check('  …with the ACTIVE protocol preselected',
+      /<option value="protocol_2_nostart" selected>/.test(built),
+      (built.match(/<option[^>]*>/g)||[]).join(' '));
+    check('  …listing every protocol', /My Stack/.test(built) && /Protocol 2/.test(built));
+    check('  …and one Save button', />Save<\/button>/.test(built));
+    check('  …with NO create-a-protocol buttons',
+      !/_tcCreateStackForTesto/.test(built) && !/New protocol/.test(built), built.slice(0,200));
+
+    // A bound protocol wins over the active one — that is the current destination.
+    G._tcp = { manualLog: [], targetStackId:'my_stack_nostart' };
+    built=''; try { G._tcOpenSaveToStack(); } catch(e) {}
+    check('  …a bound protocol is preselected over the active one',
+      /<option value="my_stack_nostart" selected>/.test(built));
+
+    // No protocols at all: point at Plan rather than offering to create an empty one.
+    G._userStacks = []; G._tcp = { manualLog: [] };
+    built=''; try { G._tcOpenSaveToStack(); } catch(e) {}
+    check('  …with no protocols it points at Plan, not a create button',
+      /Build one in <b>Plan<\/b>/.test(built) && !/_tcCreateStackForTesto/.test(built));
+
+    G._userStacks=_shSave.us; G._tcp=_shSave.tp; G._isActiveStack=_shSave.ia; G.document=_shSave.doc;
+  }
+
   const _dsDir = path.dirname(path.resolve(htmlPath));
   ['tab-tcalc.js','tab-stack.js','index.html'].forEach(function(f){
     const src = fs.readFileSync(path.join(_dsDir,f),'utf8');
@@ -10528,9 +10580,14 @@ console.log('\n── T-History: as-of cursor follows new points ─────
 {
   const _tcSrc2 = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
   check('the save sheet marks the active protocol in words', /· active/.test(_tcSrc2));
-  check('  …and marks the current save target', /· current target/.test(_tcSrc2));
-  check('  …and warns that New protocol creates an EMPTY active one',
-    /Creates an <b>empty<\/b> protocol and makes it the active one/.test(_tcSrc2));
-  check('  …pointing at Existing for a protocol you already run',
-    /pick it under Existing instead/.test(_tcSrc2));
+  // The other three checks here described the New-protocol section and its warning
+  // text. That section is gone by request (2026-08-14) — a dialog for filing doses
+  // no longer carries an option that empties Today. What replaced them is asserted
+  // by rendering the sheet: dropdown, active preselected, single Save, no creator.
+  // Match the MARKUP, not the words: /New protocol/ also hits the comment that
+  // explains why the section was removed. That is the same trap as the earlier
+  // whole-file grep for _thComputeFreeT, which matched the comment saying it is
+  // deliberately absent.
+  check('  …and the destination is a single dropdown, not a list of buttons',
+    /<select id="tc-save-stack-sel"/.test(_tcSrc2) && !/>New protocol<\/div>/.test(_tcSrc2));
 }
