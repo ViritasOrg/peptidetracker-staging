@@ -10341,3 +10341,55 @@ console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // exitCode lets the queue drain; the async block prints the full total and exits
 // with the true aggregate.
 process.exitCode = failed > 0 ? 1 : 0;
+
+// ── A DRAFT THAT IS NOT BOUND IS NOT SCHEDULED — THE UI MUST SAY SO ──────────
+// 2026-08-14: "no injections show up from today in Today view even if T-calc graph
+// looks fine." The record settled it — 7 draft doses (14–26 Aug) in the profile and
+// `targetStackId` absent, so _tcSyncLogToBackend returned at `if(!_cid)return;` and
+// wrote nothing. The add sheet closed as if it had worked and the curve redrew from
+// the drafts, so nothing anywhere indicated the doses were not scheduled.
+console.log('\n── T-Calc: unsaved drafts are announced ───────────────────');
+{
+  const save = { tp: G._tcp, us: G._userStacks };
+  const drafts = ['2026-08-14','2026-08-16','2026-08-18','2026-08-20','2026-08-22','2026-08-24','2026-08-26']
+    .map(d => ({ compId:'nebido', doseMg:'100', date:d, draft:true }));
+
+  check('_tcUnsavedDraftBanner exists', typeof G._tcUnsavedDraftBanner === 'function');
+  // Call through a shim, not directly: on a source without the fix the bare call
+  // throws and aborts the whole run at the first assertion, hiding the rest. Every
+  // check below must be able to report its own failure.
+  const banner = () => (typeof G._tcUnsavedDraftBanner === 'function') ? G._tcUnsavedDraftBanner() : '';
+
+  // Unbound + drafts → the banner appears, counts them, and offers the real action.
+  G._tcp = { manualLog: drafts };            // no targetStackId at all — the real shape
+  G._userStacks = [{ id:'protocol_2_nostart', name:'Protocol 2' }];
+  const unbound = banner();
+  check('an unbound plan with drafts is announced', /Not scheduled yet/.test(unbound));
+  check('  …counting them', /7 planned doses/.test(unbound));
+  check('  …naming the span, not just a number', /14 Aug/.test(unbound) && /26 Aug/.test(unbound));
+  check('  …saying Today will not show them', /do not appear in Today/.test(unbound));
+  check('  …and offering Save to protocol', /_tcOpenSaveToStack\(\)/.test(unbound));
+
+  // Bound → silent. The sync writes normally; a banner here would be noise.
+  G._tcp = { targetStackId:'protocol_2_nostart', manualLog: drafts };
+  check('a bound plan shows no banner', typeof G._tcUnsavedDraftBanner === 'function' && banner() === '');
+
+  // targetStackId naming a stack that no longer exists is NOT bound — _tcTargetCycleId
+  // returns '' for it, so the sync silently no-ops and the banner must fire.
+  G._tcp = { targetStackId:'deleted_stack', manualLog: drafts };
+  check('  …but a dangling stack id still counts as unbound',
+    /Not scheduled yet/.test(banner()));
+
+  // No drafts → nothing to warn about, bound or not.
+  G._tcp = { manualLog: [{compId:'nebido',doseMg:'100',date:'2026-08-14'}] };
+  check('a log with no drafts shows no banner', typeof G._tcUnsavedDraftBanner === 'function' && banner() === '');
+  G._tcp = { manualLog: [] };
+  check('an empty log shows no banner', typeof G._tcUnsavedDraftBanner === 'function' && banner() === '');
+
+  // It must be rendered, not merely defined.
+  const _tcSrc = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+  check('buildTCalc renders it above the curve',
+    /html \+= _tcUnsavedDraftBanner\(\);[\s\S]{0,200}PLASMA CURVE/.test(_tcSrc));
+
+  G._tcp = save.tp; G._userStacks = save.us;
+}
