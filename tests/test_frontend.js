@@ -2301,6 +2301,38 @@ if (typeof G._tcConfirmAddSheet === 'function' && typeof G._tcSaveEditSeries ===
     [_stored(_d(-6),1,'sA'), _stored(_d(-4),2,'sA')],
     () => G._tcRemoveSeries('sA'), 0, false);
 
+
+  // ── NEVER CREATE A DOSE THE RECORD ALREADY HOLDS ──────────────────────────
+  // Reported: "even if I go and check those they are gone after app restart."
+  // The existence check was keyed on (compound, date, seriesId). A run split across
+  // two cards — or rows carrying no series_id — failed to match, so the edit POSTed a
+  // SECOND row for a date already stored. Today de-dupes on (compound, slot) and
+  // prefers the logged one, so ticking marked one row and left its twin unlogged:
+  // _tcSkippedPast kept reporting it, the curve kept flat-lining, and the tick looked
+  // discarded on restart. Existence is (compound, date); seriesId only governs what
+  // this edit may RETIRE.
+  const _dupCase = async (storedSeriesId) => {
+    _reset();
+    G._tcp.manualLog = [{compId:'nebido',doseMg:'100',date:_d(-6),seriesId:'sX'},
+                        {compId:'nebido',doseMg:'100',date:_d(-4),seriesId:'sX'}];
+    G._tcSkippedPast = [
+      {compId:'nebido',doseMg:'100',date:_d(-6),injId:'a1',cycleId:'s1',seriesId:storedSeriesId},
+      {compId:'nebido',doseMg:'100',date:_d(-4),injId:'a2',cycleId:'s1',seriesId:storedSeriesId}];
+    G._tcEditSeriesId = 'sX';
+    const calls = _arm({'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-6),
+                        'tc-es-count':'6','tc-es-interval':'2'});
+    await G._tcSaveEditSeries();
+    return _plans(calls).map(x => x.body.date);
+  };
+  for (const [lbl, sidv] of [['same series id','sX'],['a different series id','sOld'],['no series id',undefined]]) {
+    const made = await _dupCase(sidv);
+    check('edit · no duplicate row when the record already holds the dose (' + lbl + ')',
+      made.indexOf(_d(-6)) < 0 && made.indexOf(_d(-4)) < 0,
+      'POSTed ' + JSON.stringify(made) + ' — ' + _d(-6) + '/' + _d(-4) + ' already exist');
+  }
+  check('edit · …while the genuinely new date is still created',
+    (await _dupCase('sOld')).indexOf(_d(-2)) >= 0);
+
   // THE REGRESSION, stated as the invariant it broke: an edit writes as many doses as
   // it was asked for. The old code wrote only the future half, so "10 every 2 days"
   // starting four days ago persisted 8 — and each further save shed two more.

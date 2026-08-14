@@ -2296,18 +2296,40 @@ async function _tcSaveEditSeries() {
   // and only Today may turn a plan into a record. Doses already ticked are left exactly
   // as they are — the record owns the past.
   var _editTodayK=dateKey(NOW);
+  var cidNow=_tcTargetCycleId();
   var _pastDates=_dates.filter(function(d){ return d < _editTodayK; });
   var _loggedOn={};
   _tcLoggedHistory().forEach(function(e){ _loggedOn[e.compId+'|'+e.date]=true; });
-  var _storedPast={};
-  (_tcSkippedPast||[]).forEach(function(e){ if(e.seriesId===sid) _storedPast[e.compId+'|'+e.date]=e; });
-  // Retire stored plan rows this edit removed from the run. Only unticked ones — a
-  // ticked dose is a record and an edit to a schedule never deletes one.
-  var _stale=Object.keys(_storedPast).filter(function(k){
-    return _pastDates.indexOf(_storedPast[k].date)<0 || _storedPast[k].compId!==compId;
-  }).map(function(k){ return _storedPast[k]; });
+  // TWO DIFFERENT QUESTIONS, TWO DIFFERENT KEYS. Getting this wrong duplicated rows.
+  //
+  //  _storedAny — "does the record already hold this dose?" Keyed on (compound, date)
+  //  across EVERY series. A dose is a dose: the series it happens to be filed under is
+  //  irrelevant to whether it exists. Filtering this by seriesId meant a run that had
+  //  been split across two cards (or whose rows carried no series_id at all) failed to
+  //  match, so the edit POSTed a SECOND row for a date the record already had. Today
+  //  de-dupes on (compound, slot) and prefers the logged one, so ticking the dose
+  //  marked one row and left its twin unlogged — _tcSkippedPast kept reporting it, the
+  //  curve kept flat-lining, and the tick looked like it had been thrown away on
+  //  restart. Reported as "even if I go and check those they are gone after app
+  //  restart".
+  //
+  //  _storedMine — "may this edit retire the row?" Keyed the same way but restricted to
+  //  THIS series. An edit to one run must never delete another run's doses; that is the
+  //  never-merge-cards rule expressed in code.
+  var _storedAny={}, _storedMine={};
+  (_tcSkippedPast||[]).forEach(function(e){
+    if(!e||!e.date)return;
+    if(cidNow&&String(e.cycleId||'')&&String(e.cycleId||'')!==cidNow)return;
+    _storedAny[e.compId+'|'+e.date]=e;
+    if(e.seriesId===sid) _storedMine[e.compId+'|'+e.date]=e;
+  });
+  // Retire stored plan rows this edit removed from the run. Only unticked ones, and
+  // only this series' own — a ticked dose is a record and an edit never deletes one.
+  var _stale=Object.keys(_storedMine).filter(function(k){
+    return _pastDates.indexOf(_storedMine[k].date)<0 || _storedMine[k].compId!==compId;
+  }).map(function(k){ return _storedMine[k]; });
   var _toCreate=_pastDates.filter(function(d){
-    return !_loggedOn[compId+'|'+d] && !_storedPast[compId+'|'+d];
+    return !_loggedOn[compId+'|'+d] && !_storedAny[compId+'|'+d];
   });
   for(var _si=0;_si<_stale.length;_si++){
     if(_stale[_si].injId) await _tcDeleteStoredInjection(_stale[_si].injId);
