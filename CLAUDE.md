@@ -342,6 +342,42 @@ forbidden.
 The backend is the ONLY cross-app source of truth. If data must flow between
 apps, it goes through the backend — never through shared localStorage.
 
+## ⚠️ READ THE RECORD DIRECTLY — NEVER INSTRUMENT THE UI TO INSPECT DATA ⚠️
+Henrik, 2026-08-14: *"solve so you can read backend data sources directly, updating
+the UI to validate data is stupid."*
+
+**`API_SECRET_RO` is already set in Claude's sandbox and the backend is reachable from
+it** — verified 2026-08-14. When a question is about DATA, read the data:
+
+```
+curl -sS -H "x-api-secret: $API_SECRET_RO" \
+  "$AGENT_URL/admin-data/records?app=peptide-stage&file=injections.json&email=<account>&limit=2000"
+```
+
+`app` is a `data_registry.APPS` key — `peptide`, `peptide-stage`, `workout`,
+`workout-stage`, `trt`, `trt-stage`. Rows are at `[r['row'] for r in resp['records']]`.
+The credential is GET/HEAD/OPTIONS only. Full procedure: `claude-agent-backend/CLAUDE.md`.
+
+**Never add a counter, a chip, a debug line or any other UI to find out what is
+stored.** That ships UI nobody asked for to answer a question the record already
+answers.
+
+**What this cost (2026-08-14).** A "flat area" in the free-T curve was chased through
+~10 rounds of screenshots and five UI changes. One `/admin-data/records` call settled
+it: the user's testosterone was filed under the **Enhanced** tier (`test_u`) while
+every entry point into the free-T model filtered `tier === 'trt'`, discarding 4 logged
+and 26 scheduled doses. Intermediate diagnoses — missing doses, unticked doses,
+duplicate rows — were all wrong, and each produced advice that would have corrupted the
+user's data by adding injections that already existed.
+
+**PROD AND STAGING ARE SEPARATE DATA.** `APP_ID = IS_STAGING ? 'stage' : ''`, so the
+two apps write to different namespaces on the same backend. A dose ticked in staging
+does nothing to prod. Never explain a difference between them without reading both.
+
+Reading the record is also how a fix is VALIDATED: replay the real rows through the
+changed filter and state before/after counts per account, rather than asking for
+another screenshot.
+
 ## ⚠️ LOCAL CLONE RULE — NEVER SKIP ⚠️
 Local clones at `/home/user/<repo>` are **NOT automatically up to date**. A
 session can be hours old and the remote may have moved on. **Before reading or
