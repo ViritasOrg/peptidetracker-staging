@@ -448,6 +448,40 @@ function _tcCompInfo(compId) {
 // Sustanon 250 is a blend: 30 mg propionate + 60 phenylpropionate + 60 isocaproate +
 // 100 decanoate (SmPC composition), whose testosterone masses sum to 176.2 mg of the
 // 250 mg label dose -> 0.7046.
+// ── TESTOSTERONE IS TESTOSTERONE, WHATEVER TIER IT IS FILED UNDER ────────────
+// The same drug carries two ids depending on where it was configured: the TRT tier
+// uses the /trt-catalog ids (nebido, enanthate, …) and the Enhanced tier uses the
+// enhanced-catalogue ids (test_u, test_e, …). The free-T model only ever accepted
+// tier === 'trt', so a user whose testosterone lives in an Enhanced protocol had
+// EVERY dose discarded — past and planned.
+//
+// Found 2026-08-14 by reading the record rather than the UI. One account's prod data:
+// 4 logged enhanced doses (8/10/12/14 Aug, 100 mg each) missing from the curve, which
+// is what produced the reported plateau, and 26 scheduled enhanced doses against 0 trt
+// ones, so the entire forward projection decayed to baseline as if the protocol had
+// stopped.
+var _TC_TESTO_ALIAS = {
+  test_u: 'nebido', test_e: 'enanthate', test_c: 'cypionate',
+  test_p: 'propionate', sustanon: 'sustanon'
+};
+// The canonical id for PK lookup and for de-duplication. Returning the same id for
+// both spellings is what stops one injection recorded under both tiers on the same day
+// counting twice — the curve de-duplicates on (compId|date), so the key must not depend
+// on which tier the row came from.
+function _tcCanonCompId(compId){
+  var c = String(compId || '');
+  return Object.prototype.hasOwnProperty.call(_TC_TESTO_ALIAS, c) ? _TC_TESTO_ALIAS[c] : c;
+}
+// Does this row describe injected testosterone the free-T model should account for?
+// tier 'trt' always; tier 'enhanced' only for a known testosterone ester. Everything
+// else in an Enhanced stack (nandrolone, GH, orals) is deliberately NOT testosterone
+// and must not be fed to a testosterone PK model.
+function _tcIsTestoRow(tier, compId){
+  if (tier === 'trt') return true;
+  if (tier !== 'enhanced') return false;
+  return Object.prototype.hasOwnProperty.call(_TC_TESTO_ALIAS, String(compId || ''));
+}
+
 var _TC_T_FRACTION = {
   propionate:  0.8372,
   enanthate:   0.7199,
@@ -1428,13 +1462,16 @@ async function _tcFetchHistory(force){
     var rows = [];
     var _skipped = [], _todayK = dateKey(NOW);
     (Array.isArray(all) ? all : []).forEach(function(e){
-      if (!e || e.tier !== 'trt') return;
+      // Testosterone from EITHER tier — see _tcIsTestoRow. The unit check further down
+      // stays strict: an Enhanced row may carry a weekly RATE ('350', 'mg/week'), which
+      // is not a per-injection dose and must never be treated as one.
+      if (!e || !_tcIsTestoRow(e.tier, e.compound_id)) return;
       // Scheduled, past-dated, never ticked. Recorded for the note only — see
       // _tcSkippedPast. It stays out of the curve, which is the documented rule.
       if (!e.logged && e.active !== false && (e.date || '') < _todayK) {
         var _sm = parseDec(e.dose);
         if ((e.unit || 'mg').toLowerCase() === 'mg' && _sm > 0)
-          _skipped.push({compId: e.compound_id, doseMg: String(_sm), date: e.date,
+          _skipped.push({compId: _tcCanonCompId(e.compound_id), doseMg: String(_sm), date: e.date,
                          seriesId: e.series_id || undefined,
                          // injId and cycleId make the row addressable: the series editor
                          // has to be able to keep, retire or recreate it rather than
@@ -1449,7 +1486,7 @@ async function _tcFetchHistory(force){
       // injId is what makes a stored row deletable. Without it the log list can only
       // splice a cache that is rebuilt from this fetch on the next render, so the row
       // reappears and the delete is a silent no-op (2026-08-07).
-      rows.push({compId: e.compound_id, doseMg: String(mg), date: e.date,
+      rows.push({compId: _tcCanonCompId(e.compound_id), doseMg: String(mg), date: e.date,
                  injId: e.id || undefined,
                  seriesId: e.series_id || undefined, source: 'logged'});
     });
@@ -1501,7 +1538,7 @@ function _tcLoadLogFromStack(){
     var todayKey=dateKey(NOW);
     Object.keys(_injectionsCache).forEach(function(dk){
       (_injectionsCache[dk]||[]).forEach(function(e){
-        if(!e||e.tier!=='trt')return;
+        if(!e||!_tcIsTestoRow(e.tier,e.compound_id))return;
         if(e.logged)return;                       // already covered by the history above
         if(e.active===false)return;
         if((e.date||'')<todayKey)return;          // past + unticked is not the past
@@ -1512,7 +1549,7 @@ function _tcLoadLogFromStack(){
         if(!(mg>0))return;
         if(seen[e.compound_id+'|'+e.date])return;
         seen[e.compound_id+'|'+e.date]=true;
-        rows.push({compId:e.compound_id,doseMg:String(mg),date:e.date,seriesId:e.series_id||undefined});
+        rows.push({compId:_tcCanonCompId(e.compound_id),doseMg:String(mg),date:e.date,seriesId:e.series_id||undefined});
       });
     });
   }
@@ -1565,7 +1602,7 @@ function _tcProtocolInjections(){
   var out = [], todayKey = dateKey(NOW);
   Object.keys(_injectionsCache).forEach(function(dateKeyStr){
     (_injectionsCache[dateKeyStr] || []).forEach(function(e){
-      if (!e || e.tier !== 'trt') return;
+      if (!e || !_tcIsTestoRow(e.tier, e.compound_id)) return;
       if (e.active === false) return;
       if (e.logged) return;                       // the history owns every checked dose
       if ((e.date || '') < todayKey) return;      // past + unticked ≠ the past
@@ -1574,7 +1611,7 @@ function _tcProtocolInjections(){
       if (unit !== 'mg') return;
       var mg = parseDec(e.dose);
       if (!(mg > 0)) return;
-      out.push({ compId: e.compound_id, doseMg: String(mg), date: e.date, source: 'protocol' });
+      out.push({ compId: _tcCanonCompId(e.compound_id), doseMg: String(mg), date: e.date, source: 'protocol' });
     });
   });
   return out;

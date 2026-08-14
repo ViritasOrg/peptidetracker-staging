@@ -2490,6 +2490,65 @@ if (typeof G._tcHistoryNoteHtml === 'function') {
   G._tcHistory = _cnSave.h; G._tcHistoryState = _cnSave.hs; G._tcSkippedPast = _cnSave.sk;
 }
 
+
+// ── Testosterone counts whatever TIER it is filed under ──────────────────────
+// Found 2026-08-14 by reading the injection record directly instead of the UI. The
+// same drug carries two ids: the TRT tier uses /trt-catalog ids (nebido, enanthate),
+// the Enhanced tier uses the enhanced-catalogue ids (test_u, test_e). The model only
+// accepted tier === 'trt', so a user whose testosterone lives in an Enhanced protocol
+// had EVERY dose discarded. On one real account: 4 logged enhanced doses missing from
+// the curve (the reported plateau) and 26 scheduled enhanced doses against 0 trt ones,
+// so the whole forward projection decayed as if the protocol had stopped.
+console.log('\n── T-calc: enhanced-tier testosterone counts too ──────────');
+if (typeof G._tcIsTestoRow === 'function') {
+  check('TRT-tier rows are always testosterone', G._tcIsTestoRow('trt','nebido'));
+  check('enhanced-tier testosterone esters count',
+    G._tcIsTestoRow('enhanced','test_u') && G._tcIsTestoRow('enhanced','test_e') &&
+    G._tcIsTestoRow('enhanced','test_c') && G._tcIsTestoRow('enhanced','test_p') &&
+    G._tcIsTestoRow('enhanced','sustanon'));
+  // The guard that matters: an Enhanced stack is full of things that are NOT
+  // testosterone, and feeding them to a testosterone PK model would be nonsense.
+  check('  …but nothing else in an Enhanced stack does',
+    !G._tcIsTestoRow('enhanced','nandrolone') && !G._tcIsTestoRow('enhanced','hgh') &&
+    !G._tcIsTestoRow('enhanced','anavar') && !G._tcIsTestoRow('peptide','glow'));
+  check('the enhanced id canonicalises to the TRT-catalogue id',
+    G._tcCanonCompId('test_u') === 'nebido' && G._tcCanonCompId('test_e') === 'enanthate' &&
+    G._tcCanonCompId('test_c') === 'cypionate' && G._tcCanonCompId('test_p') === 'propionate');
+  check('  …and a TRT id is left alone', G._tcCanonCompId('nebido') === 'nebido');
+}
+if (typeof G._tcFetchHistory === 'function') {
+  const _etSave = {f:G.fetch, h:G._tcHistory, hs:G._tcHistoryState, sk:G._tcSkippedPast, tp:G._tcp, c:G._injectionsCache};
+  const _row = (o) => Object.assign({id:'x'+Math.random(), active:true, logged:true,
+    unit:'mg', dose:'100', cycle_id:'c1'}, o);
+  const _run = async (rows) => {
+    G.fetch = async () => ({ok:true, status:200, json: async () => rows});
+    G._tcHistory = null; G._tcHistoryState = 'idle'; G._tcSkippedPast = [];
+    await G._tcFetchHistory(true);
+    return G._tcHistory || [];
+  };
+  // A protocol-logged Enhanced dose must reach the history.
+  let _h = await _run([_row({tier:'enhanced', compound_id:'test_u', date:'2026-08-12'})]);
+  check('an Enhanced-tier testosterone dose reaches the history', _h.length === 1, JSON.stringify(_h));
+  check('  …stored under the canonical compound id', _h.length === 1 && _h[0].compId === 'nebido');
+  // A weekly RATE is not a per-injection dose. Enhanced protocols store 350 mg/week;
+  // treating that as an injection would inflate the curve enormously.
+  _h = await _run([_row({tier:'enhanced', compound_id:'test_u', date:'2026-08-12', dose:'350', unit:'mg/week'})]);
+  check('a weekly RATE is never treated as an injected dose', _h.length === 0, JSON.stringify(_h));
+  // Non-testosterone Enhanced compounds stay out.
+  _h = await _run([_row({tier:'enhanced', compound_id:'hgh', date:'2026-08-12', dose:'3', unit:'IU'}),
+                   _row({tier:'peptide', compound_id:'glow', date:'2026-08-12', dose:'0.1', unit:'ml'})]);
+  check('  …and nothing that is not testosterone gets in', _h.length === 0);
+  // THE DOUBLE-COUNT GUARD: one injection recorded under both tiers on the same day.
+  _h = await _run([_row({tier:'enhanced', compound_id:'test_u', date:'2026-08-12'}),
+                   _row({tier:'trt',      compound_id:'nebido', date:'2026-08-12'})]);
+  G._tcp = Object.assign({}, _etSave.tp||{}, {plannerMode:'advanced', manualLog:[]});
+  G._injectionsCache = {};
+  check('the same dose under both tiers counts ONCE in the curve',
+    G._tcCurveLog().length === 1, 'curve log length ' + G._tcCurveLog().length);
+  G.fetch = _etSave.f; G._tcHistory = _etSave.h; G._tcHistoryState = _etSave.hs;
+  G._tcSkippedPast = _etSave.sk; G._tcp = _etSave.tp; G._injectionsCache = _etSave.c;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
