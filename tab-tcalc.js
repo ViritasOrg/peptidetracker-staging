@@ -4144,8 +4144,38 @@ function _tcCloseSaveToStack(){
 // auto-bind or auto-write: the stack is still the container and Save to protocol is
 // still the moment of persistence. Degrade the visibility of a state, never invent a
 // fallback that silently changes what is stored.
+// The protocol these injections are written into, by name, or null. Distinct from
+// _tcSimplePlanStack, which additionally requires the stack to carry exactly one TRT
+// compound because it drives the SIMPLE planner's card. Binding is binding: this
+// answers "where do my doses go" for any planner mode.
+function _tcBoundStack(){
+  var tid=_tcp&&_tcp.targetStackId;
+  if(!tid||typeof _userStacks==='undefined'||!_userStacks)return null;
+  return _userStacks.find(function(s){return s&&s.id===tid;})||null;
+}
 function _tcUnsavedDraftBanner(){
-  if(typeof _tcTargetCycleId==='function'&&_tcTargetCycleId())return '';  // bound → sync writes
+  // ── BOUND: say WHICH protocol, always ──────────────────────────────────────
+  // Henrik, 2026-08-14: "how do I know which protocol the missing injections get
+  // saved to from T-calc? It just says Save to Protocol (which anyone would assume
+  // is the active protocol)."
+  //
+  // It is not the active protocol — it is _tcp.targetStackId, whatever was last
+  // bound, and the sheet's "New protocol" buttons bind a brand-new empty stack. The
+  // only place the target was ever named is the SIMPLE planner's card header, which
+  // reads "off — advanced planner is on" whenever the manual planner is in use. So
+  // in the mode where doses are actually added, nothing named the destination before
+  // saving or after. That is how a tap in that sheet moved a protocol's injections
+  // to a new empty stack without it being visible anywhere.
+  if(typeof _tcTargetCycleId==='function'&&_tcTargetCycleId()){
+    var _bs=_tcBoundStack();
+    if(!_bs)return '';
+    return '<div style="display:flex;align-items:center;gap:8px;background:rgba(90,209,176,0.08);border:1px solid rgba(90,209,176,0.28);border-left:3px solid #5ad1b0;border-radius:10px;padding:10px 12px;margin-bottom:12px">'
+      +'<div style="flex:1;font-size:12px;color:var(--text);line-height:1.5">'
+        +'<span style="color:var(--muted2)">Injections are saved into</span> <b>'+_esc(_bs.name||'this protocol')+'</b>'
+      +'</div>'
+      +'<button onclick="_tcOpenSaveToStack()" style="flex-shrink:0;background:none;border:1px solid var(--border);border-radius:8px;color:var(--muted2);font-size:11px;font-weight:700;padding:6px 10px;cursor:pointer;font-family:inherit">Change</button>'
+    +'</div>';
+  }
   var drafts=((_tcp&&_tcp.manualLog)||[]).filter(function(e){return e&&e.draft&&e.date;});
   if(!drafts.length)return '';
   var dates=drafts.map(function(e){return e.date;}).sort();
@@ -4170,9 +4200,10 @@ function _tcOpenSaveToStack(){
 
   var rows=stacks.map(function(st,i){
     if(!st)return '';
-    var act=(typeof _isActiveStack==='function'&&_isActiveStack(i))?' ●':'';
+    var act=(typeof _isActiveStack==='function'&&_isActiveStack(i))?' <span style="font-size:11px;color:#5ad1b0;font-weight:700">· active</span>':'';
+    var cur=(_tcp&&_tcp.targetStackId===st.id)?' <span style="font-size:11px;color:#6688cc;font-weight:700">· current target</span>':'';
     return '<button onclick="_tcSaveToExistingStack(\''+_esc(st.id||'')+'\')" style="display:block;width:100%;text-align:left;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;color:var(--text);font-size:14px;font-family:inherit;cursor:pointer">'
-      +_esc(st.name||('Protocol '+(i+1)))+act+'</button>';
+      +_esc(st.name||('Protocol '+(i+1)))+act+cur+'</button>';
   }).join('');
 
   var newBtn=function(tier,label,ok){
@@ -4192,6 +4223,7 @@ function _tcOpenSaveToStack(){
     +'<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;line-height:1.5">Testosterone belongs to a protocol, so its doses show on Today alongside everything else you are running.</div>'
     +(rows?('<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Existing</div>'+rows):'')
     +'<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px">New protocol</div>'
+    +'<div style="font-size:11px;color:#e8a020;line-height:1.5;margin-bottom:8px">Creates an <b>empty</b> protocol and makes it the active one. Your other protocols keep their compounds, but Today will show only this one until you switch back. To add testosterone to a protocol you already run, pick it under Existing instead.</div>'
     +'<div style="display:flex;gap:8px">'+newBtn('trt','TRT',true)+newBtn('enhanced','Enhanced',enhOk)+'</div>'
     +(enhOk?'':'<div style="font-size:11px;color:var(--muted2);margin-top:8px">Enhanced protocols need tier 3.</div>')
     +(full?'<div style="font-size:11px;color:var(--muted2);margin-top:8px">You already have 4 protocols — pick one above.</div>':'')

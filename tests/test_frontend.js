@@ -10370,9 +10370,22 @@ console.log('\n── T-Calc: unsaved drafts are announced ───────
   check('  …saying Today will not show them', /do not appear in Today/.test(unbound));
   check('  …and offering Save to protocol', /_tcOpenSaveToStack\(\)/.test(unbound));
 
-  // Bound → silent. The sync writes normally; a banner here would be noise.
+  // Bound → it must NAME the protocol. "Save to protocol" never said which one, and
+  // the only place the target was shown was the simple planner's card header, which
+  // is off whenever the manual planner is in use (Henrik, 2026-08-14: "how do I know
+  // which protocol ... anyone would assume is the active protocol").
   G._tcp = { targetStackId:'protocol_2_nostart', manualLog: drafts };
-  check('a bound plan shows no banner', typeof G._tcUnsavedDraftBanner === 'function' && banner() === '');
+  const bound = banner();
+  check('a bound plan names the destination protocol', /Protocol 2/.test(bound));
+  check('  …saying doses are saved into it', /saved into/.test(bound));
+  check('  …and offers a way to change it', /_tcOpenSaveToStack\(\)/.test(bound));
+  check('  …without the unsaved warning', !/Not scheduled yet/.test(bound));
+
+  // Bound to a stack that no longer exists → _tcTargetCycleId is '' (unbound), so the
+  // warning path runs rather than naming a protocol that is gone.
+  G._tcp = { targetStackId:'gone', manualLog: drafts };
+  check('  …a target that no longer exists falls back to the warning',
+    /Not scheduled yet/.test(banner()));
 
   // targetStackId naming a stack that no longer exists is NOT bound — _tcTargetCycleId
   // returns '' for it, so the sync silently no-ops and the banner must fire.
@@ -10443,4 +10456,17 @@ console.log('\n── T-History: as-of cursor follows new points ─────
   // body itself further down (search: "buildTHist never captures/persists"). A
   // whole-file grep for those names matches the comment that says they are absent,
   // which is why the duplicate attempted here was both redundant and wrong.
+}
+
+// The save sheet must label what each choice does. An unmarked "New protocol" button
+// beside the existing ones created an empty stack, made it active and moved a
+// protocol's injections to it — with nothing on screen saying so (2026-08-14).
+{
+  const _tcSrc2 = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+  check('the save sheet marks the active protocol in words', /· active/.test(_tcSrc2));
+  check('  …and marks the current save target', /· current target/.test(_tcSrc2));
+  check('  …and warns that New protocol creates an EMPTY active one',
+    /Creates an <b>empty<\/b> protocol and makes it the active one/.test(_tcSrc2));
+  check('  …pointing at Existing for a protocol you already run',
+    /pick it under Existing instead/.test(_tcSrc2));
 }
