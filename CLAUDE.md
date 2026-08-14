@@ -410,6 +410,40 @@ Shared infrastructure (non-exhaustive):
 When you fix or change any of the above in one app, immediately check the other
 app for the same issue and fix it before closing the session.
 
+## ⚠️ TESTS ARE MANDATORY — NO EXCEPTIONS ⚠️
+This section existed only in `workout-staging` until 2026-08-14, which is how the
+repo where most development actually happens ended up without it. Added here and to
+`claude-agent-backend`; `trt-stage` states it inline.
+
+- **New feature or changed feature** → add tests covering the new behaviour in
+  `tests/test_frontend.js`
+- **Bug fix** → add a regression test that **fails on the pre-fix source**. Run it
+  against the old file and say so in the PR. A test that passes either way proves
+  nothing, and this suite has shipped several of those.
+- **Run `node tests/test_frontend.js index.html` and confirm 0 failures before opening
+  any PR**
+- Never merge a PR whose CI test job is failing or pending
+
+### A SOURCE GREP IS NOT COVERAGE
+Asserting that a function *contains* a string catches "someone deleted the await". It
+does not catch "the resulting schedule is wrong", which is what actually ships. Where a
+function can be called, **call it and assert what it produces** — stub the DOM fields
+and record `fetch` if you must (see the schedule-creation permutation block for the
+pattern). Reserve greps for ordering and for rules that are genuinely structural.
+
+**What the absence of this cost (2026-08-14):** the Add sheet and series editor were
+guarded only by greps. An edit silently discarded the past-dated half of every series —
+"10 injections every 2 days" saved as 8, and every further save shed two more — with a
+green suite throughout.
+
+### GENERATED DATA NEEDS OUTPUT-LEVEL TESTS
+`generateAndPushInjections` / `_genInjBatches` decide the tier, compound id, dose, unit
+and cadence of every injection a protocol writes. Until 2026-08-14 every test either
+stubbed the function out or asserted it had been *called* — its output was never
+checked. That is the code path that files testosterone under the Enhanced tier, which
+the free-T model then discarded: 4 logged and 26 scheduled doses missing from a user's
+curve, found only by reading the backend record.
+
 ## ⚠️ ONLY FIX WHAT WAS ASKED — NO UNSOLICITED CHANGES ⚠️
 Fix exactly what Henrik asked. **Never change anything else**, even if it looks
 like an improvement. This applies especially to:

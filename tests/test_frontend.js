@@ -2605,6 +2605,171 @@ if (typeof G._tcLoadLogFromStack === 'function' && typeof G._tcCurveLog === 'fun
   G._tcHistoryState = _roSave.hs; G._injectionsCache = _roSave.c; G._tcSkippedPast = _roSave.sk;
 }
 
+
+// ── The INJECTION GENERATOR — output asserted, not just "was it called" ──────
+// Coverage gap closed 2026-08-14. _genInjBatches decides the tier, compound id, dose,
+// unit and cadence of every injection a protocol writes, and every existing test either
+// stubbed generateAndPushInjections out or asserted it had been CALLED. Its output was
+// never checked. That is the path that files testosterone under the Enhanced tier,
+// which the free-T model then discarded — 4 logged and 26 scheduled doses missing from
+// a real user's curve, found only by reading the backend record.
+console.log('\n── Injection generator: what it actually produces ─────────');
+if (typeof G._genInjBatches === 'function') {
+  const _giSave = {now:G.NOW};
+  const _dk = G.dateKey, _n = new Date();
+  const _d = (o) => _dk(new Date(_n.getTime() + o*86400000));
+  const _flat = (b) => b.reduce((a,x) => a.concat(x.entries), []);
+
+  // TRT tier -> tier:'trt', at the compound's own cadence.
+  let _b = G._genInjBatches({id:'s1', cycle_start:_d(-10), cycle_length:4,
+    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
+      freqVal:2, freqUnit:'days'}]}}, 'cyc1', null);
+  let _e = _flat(_b);
+  check('a TRT-tier compound generates tier "trt"', _e.length > 0 && _e.every(x => x.tier === 'trt'));
+  check('  …at the stated cadence (every 2 days)',
+    _e.length >= 3 && (new Date(_e[1].date) - new Date(_e[0].date)) === 2*86400000);
+  check('  …carrying the compound id unchanged', _e.every(x => x.compound_id === 'nebido'));
+  check('  …and a PK snapshot for the history to read', _e.every(x => 'half_life_days' in x));
+
+  // Enhanced tier -> tier:'enhanced'. THE ROOT CAUSE, pinned so it is visible in the
+  // suite rather than discovered from a user's data again.
+  _b = G._genInjBatches({id:'s2', cycle_start:_d(-10), cycle_length:4,
+    enhanced:{enabled:true, compounds:[{id:'test_u', name:'Testosterone Undecanoate',
+      dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]}}, 'cyc2', null);
+  _e = _flat(_b);
+  check('an Enhanced-tier testosterone generates tier "enhanced", NOT "trt"',
+    _e.length > 0 && _e.every(x => x.tier === 'enhanced' && x.compound_id === 'test_u'),
+    'this is what the free-T model must be able to read — see _tcIsTestoRow');
+
+  // ONE testosterone stream per stack: TRT wins, Enhanced is suppressed, not deleted.
+  _b = G._genInjBatches({id:'s3', cycle_start:_d(-10), cycle_length:4,
+    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
+      freqVal:2, freqUnit:'days'}]},
+    enhanced:{enabled:true, compounds:[{id:'test_u', name:'Testosterone Undecanoate',
+      dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]}}, 'cyc3', null);
+  _e = _flat(_b);
+  check('testosterone in BOTH tiers schedules once, from the TRT tier',
+    _e.some(x => x.compound_id === 'nebido') && !_e.some(x => x.compound_id === 'test_u'),
+    'ids generated: ' + [...new Set(_e.map(x => x.compound_id))].join(','));
+  // A non-testosterone Enhanced compound is never suppressed by that rule.
+  _b = G._genInjBatches({id:'s4', cycle_start:_d(-10), cycle_length:4,
+    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
+      freqVal:2, freqUnit:'days'}]},
+    enhanced:{enabled:true, compounds:[{id:'nandrolone', name:'Nandrolone', dose:'100',
+      unit:'mg', freqVal:2, freqUnit:'days'}]}}, 'cyc4', null);
+  check('  …but a non-testosterone Enhanced compound still generates',
+    _flat(_b).some(x => x.compound_id === 'nandrolone'));
+
+  // A WEEKLY RATE becomes a per-injection dose. This is why one environment stores
+  // 350 mg/week on the protocol and 100 mg on the generated rows; getting it wrong
+  // would write a week's worth of drug into every single injection.
+  check('a weekly rate converts to a per-injection dose',
+    G._enhDosePerInjection({dose:'350', unit:'mg/week', freqVal:2, freqUnit:'days'}).dose === '50');
+  check('  …and the unit drops the period', 
+    G._enhDosePerInjection({dose:'350', unit:'mg/week', freqVal:2, freqUnit:'days'}).unit === 'mg');
+  check('  …while a plain mg dose is passed through untouched',
+    G._enhDosePerInjection({dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}).dose === '100');
+
+  // No cycle_start, nothing generated — an unstarted protocol must not write a schedule.
+  check('a protocol with no cycle_start generates nothing',
+    G._genInjBatches({id:'s5', trt:{enabled:true, compounds:[{id:'nebido', dose:'100',
+      unit:'mg', freqVal:2, freqUnit:'days'}]}}, 'cyc5', null).length === 0);
+  // A disabled TRT tier generates nothing.
+  check('a disabled tier generates nothing',
+    _flat(G._genInjBatches({id:'s6', cycle_start:_d(-10), cycle_length:4,
+      trt:{enabled:false, compounds:[{id:'nebido', dose:'100', unit:'mg', freqVal:2,
+        freqUnit:'days'}]}}, 'cyc6', null)).length === 0);
+  // Every row is stamped with the cycle it belongs to — the container rule.
+  _b = G._genInjBatches({id:'s7', cycle_start:_d(-10), cycle_length:4,
+    trt:{enabled:true, compounds:[{id:'nebido', dose:'100', unit:'mg', freqVal:2,
+      freqUnit:'days'}]}}, 'cyc7', null);
+  check('every generated row carries its stack cycle id',
+    _flat(_b).every(x => x.cycle_id === 'cyc7'));
+  check('  …and is generated unlogged — only Today turns a plan into a record',
+    _flat(_b).every(x => x.logged === false && x.active === true));
+  G.NOW = _giSave.now;
+}
+
+
+// ── _tcSetManualField and _tcPushLogToSchedule — previously ZERO coverage ────
+// Both mutate or persist the schedule and neither had a single test reference before
+// 2026-08-14. Editing a row's dose in place and "Push to schedule" are the two paths a
+// user reaches most often after building a plan.
+console.log('\n── T-calc: field edit and push-to-schedule ────────────────');
+if (typeof G._tcSetManualField === 'function' && typeof G._tcPushLogToSchedule === 'function') {
+  const _pfSave = {tp:G._tcp, us:G._userStacks, f:G.fetch, a:G.alert,
+                   h:G._tcHistory, hs:G._tcHistoryState, c:G._injectionsCache};
+  const _dk = G.dateKey, _n = new Date();
+  const _d = (o) => _dk(new Date(_n.getTime() + o*86400000));
+  const _arm = () => { const calls = [];
+    G.fetch = async (u,o) => { let b=null; try{ b=o&&o.body?JSON.parse(o.body):null; }catch(e){}
+      calls.push({url:String(u), method:(o&&o.method)||'GET', body:b});
+      return {ok:true, status:200, json: async () => []}; };
+    return calls; };
+  const _alerts = [];
+  G.alert = (m) => _alerts.push(String(m));
+  // _tcSetManualField is NOT async and fires _tcSyncLogToBackend() without awaiting it,
+  // so its POST resolves on a later microtask. Drain the queue before asserting, or the
+  // write lands after the check AND leaks into the next block's recorder. (setTimeout is
+  // a no-op in this sandbox, so pump promises rather than the macrotask queue.)
+  const _flush = async () => { for (let i = 0; i < 25; i++) await Promise.resolve(); };
+  G._userStacks = [{id:'sP', name:'P', cycle_start:_d(-20)}];
+  G._tcHistory = []; G._tcHistoryState = 'ready'; G._injectionsCache = {};
+
+  // Editing a dose in place must persist — a field edit that only touches the local
+  // object is the "silent no-op" failure this codebase has shipped repeatedly.
+  G._tcp = {targetStackId:'sP', plannerMode:'advanced', measuredFT:'217',
+            manualLog:[{compId:'nebido', doseMg:'100', date:_d(3), seriesId:'sx'}]};
+  let _calls = _arm();
+  G._tcSetManualField(0, 'doseMg', '125');
+  await _flush();
+  check('editing a dose updates the entry', G._tcp.manualLog[0].doseMg === '125');
+  check('  …and reaches the backend, not just the local object',
+    _calls.some(c => /\/injections\/batch$/.test(c.url) && c.method === 'POST'),
+    'calls: ' + _calls.map(c => c.method + ' ' + c.url.split('/').pop()).join(', '));
+  check('  …writing the edited dose, not the old one',
+    _calls.some(c => (c.body && c.body.entries || []).some(e => String(e.dose) === '125')));
+  // An out-of-range index must be a no-op, not a crash.
+  let _threw = false;
+  try { G._tcSetManualField(99, 'doseMg', '1'); } catch (e) { _threw = true; }
+  await _flush();
+  check('  …and an index that does not exist is a safe no-op', !_threw);
+
+  // Push to schedule: refuses without a protocol, because nothing is scheduled
+  // outside one (THE STACK IS THE CONTAINER).
+  _alerts.length = 0;
+  G._tcp = {targetStackId:'', plannerMode:'advanced',
+            manualLog:[{compId:'nebido', doseMg:'100', date:_d(3)}]};
+  _calls = _arm();
+  await G._tcPushLogToSchedule();
+  await _flush();
+  check('push to schedule writes nothing when no protocol is bound',
+    !_calls.some(c => c.method === 'POST' && /injections/.test(c.url)));
+  // With a protocol bound it syncs and reports the FUTURE count only.
+  _alerts.length = 0;
+  G._tcp = {targetStackId:'sP', plannerMode:'advanced', manualLog:[
+    {compId:'nebido', doseMg:'100', date:_d(-4)},   // past — not "pushed"
+    {compId:'nebido', doseMg:'100', date:_d(2)},
+    {compId:'nebido', doseMg:'100', date:_d(4)}]};
+  _calls = _arm();
+  await G._tcPushLogToSchedule();
+  check('  …and with one bound it syncs the plan',
+    _calls.some(c => /\/injections\/batch$/.test(c.url) && c.method === 'POST'));
+  check('  …reporting the FUTURE count, not the whole log',
+    _alerts.some(m => /Pushed 2 future injections/.test(m)), 'alerts: ' + JSON.stringify(_alerts));
+  // An empty log says so rather than posting nothing silently.
+  _alerts.length = 0;
+  G._tcp = {targetStackId:'sP', plannerMode:'advanced', manualLog:[]};
+  _calls = _arm();
+  await G._tcPushLogToSchedule();
+  check('  …and an empty log is reported, not silently ignored',
+    _alerts.some(m => /No injections logged/i.test(m)) &&
+    !_calls.some(c => c.method === 'POST'));
+
+  G._tcp = _pfSave.tp; G._userStacks = _pfSave.us; G.fetch = _pfSave.f; G.alert = _pfSave.a;
+  G._tcHistory = _pfSave.h; G._tcHistoryState = _pfSave.hs; G._injectionsCache = _pfSave.c;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
