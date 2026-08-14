@@ -131,8 +131,28 @@ async function wizSave(){
   // protocol RECORDS; T-Calc owns when it is injected, and the user lands there either
   // way. `_trtInline` still guards the plan commit below, so a classic configuration
   // is never silently overwritten by a half-filled planner.
-  var _wantsTrt = (_wiz.goals||[]).indexOf('trt')>=0;
+  //
+  // The trigger is WHAT THE PROTOCOL CARRIES, not which goal chip was ticked. Gating
+  // on `goals.includes('trt')` missed the whole Enhanced path: an enhanced cycle picks
+  // its testosterone BASE in the wizard's own `base` step (every enhanced cycle runs on
+  // one), which lands in stack.enhanced.compounds with goals === ['enhanced']. That
+  // protocol now generates no testosterone — correct — and got no hand-off either, so
+  // the ester was configured and then simply never scheduled anywhere. Henrik asked for
+  // "TRT and Enhanced should use T-calc"; this is the Enhanced half.
+  var _testoIn = _stackTestoComp(_savedStack);
+  var _wantsTrt = (_wiz.goals||[]).indexOf('trt')>=0 || !!_testoIn;
   var _trtInline = !!(_savedStack && _savedStack.trt && _savedStack.trt.compounds && _savedStack.trt.compounds.length);
+  // An Enhanced cycle has no _wiz.trtPlan to commit — its ester came from the `base`
+  // step. Carry that choice across so the planner opens on the right compound instead
+  // of blank; canonicalised, because the enhanced catalogue keys esters under its own
+  // ids (test_u → nebido). Only the ester, and only when the plan has none: the dose
+  // and cadence are the user's to set in T-Calc, and inventing them here would be
+  // inventing a schedule nobody asked for.
+  if(_testoIn && _testoIn.tier==='enhanced' && typeof _tcp!=='undefined' && _tcp){
+    var _baseId=(typeof _tcCanonCompId==='function')?_tcCanonCompId(_testoIn.c.id):_testoIn.c.id;
+    var _sp=_tcp.simplePlan||{};
+    if(_baseId && !_sp.compId){_sp.compId=_baseId;_tcp.simplePlan=_sp;}
+  }
   // The wizard's TRT step edits the T-Calc simple plan. Commit it here, so the
   // schedule the user just built is the one T-Calc draws.
   if(_wantsTrt && !_trtInline && typeof _wizTrtPlanComplete==='function' && _wizTrtPlanComplete() &&
@@ -817,6 +837,18 @@ function _isEnhTestosterone(c){
 function _isTestosteroneComp(tier,c){
   if(tier==='enhanced')return _isEnhTestosterone(c);
   return tier==='trt';
+}
+// The testosterone this protocol carries, in whichever tier it was configured, or null.
+// Mirrors _genInjBatches: a disabled tier is not running, so it does not count. TRT is
+// checked first only so the returned tier is stable when both hold one — the caller
+// uses this to decide that T-Calc must schedule it, which is true either way.
+function _stackTestoComp(st){
+  if(!st)return null;
+  var trt=(st.trt&&st.trt.enabled)?(st.trt.compounds||[]).filter(function(c){return _isTestosteroneComp('trt',c);})[0]:null;
+  if(trt)return {tier:'trt',c:trt};
+  var enh=(st.enhanced&&st.enhanced.enabled)?(st.enhanced.compounds||[]).filter(function(c){return _isTestosteroneComp('enhanced',c);})[0]:null;
+  if(enh)return {tier:'enhanced',c:enh};
+  return null;
 }
 // Record a compound the generator deliberately did not schedule, so the UI can name it.
 // A row that vanishes with no explanation is the bug, not the fix — see

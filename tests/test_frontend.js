@@ -5102,6 +5102,37 @@ console.log('\n── T-Calc simple planner ────────────
     'the inline-config path is skipping the T-Calc hand-off again');
   check('  …while a classic configuration still wins over a half-filled planner',
     /_wantsTrt && !_trtInline && typeof _wizTrtPlanComplete/.test(_stSrc));
+
+  // The hand-off triggers on WHAT THE PROTOCOL CARRIES, not the goal chip. Gating on
+  // goals.includes('trt') missed the entire Enhanced path: an enhanced cycle picks its
+  // testosterone BASE in the wizard's own `base` step, landing in enhanced.compounds
+  // with goals === ['enhanced'] — so it generated nothing (correct) and offered no
+  // route to the only tab that could schedule it (a dead end).
+  // NOT wrapped in a typeof guard: on the pre-fix source _stackTestoComp does not
+  // exist, and a guard would skip every assertion below and report green — which is
+  // exactly what it did on the first attempt at this block.
+  check('_stackTestoComp exists', typeof G._stackTestoComp === 'function');
+  if (typeof G._stackTestoComp === 'function') {
+    const enhOnly = {enhanced:{enabled:true, compounds:[
+      {id:'test_u', name:'Testosterone Undecanoate'}, {id:'hgh', name:'HGH'},
+      {id:'masteron', name:'Masteron (Drostanolone)'}]}};
+    check('an Enhanced-only protocol still counts as carrying testosterone',
+      (G._stackTestoComp(enhOnly)||{}).tier === 'enhanced');
+    check('  …identifying the base ester, not the HGH or the Masteron',
+      (G._stackTestoComp(enhOnly)||{}).c.id === 'test_u');
+    check('  …and Masteron alone is NOT testosterone',
+      G._stackTestoComp({enhanced:{enabled:true, compounds:[
+        {id:'masteron', name:'Masteron (Drostanolone)'}, {id:'hgh', name:'HGH'}]}}) === null);
+    check('  …a disabled tier is not running, so it does not count',
+      G._stackTestoComp({enhanced:{enabled:false, compounds:[{id:'test_u',name:'Testosterone Undecanoate'}]}}) === null);
+    check('  …and a TRT-tier ester is found by tier, brand name notwithstanding',
+      (G._stackTestoComp({trt:{enabled:true, compounds:[{id:'nebido',name:'Nebido'}]}})||{}).tier === 'trt');
+  }
+  // Outside the guard, so they run — and fail — on a source that lacks the fix.
+  check('the hand-off is driven by that, not by the goal chip alone',
+    /_wantsTrt = \(_wiz\.goals\|\|\[\]\)\.indexOf\('trt'\)>=0 \|\| !!_testoIn/.test(_stSrc));
+  check('  …carrying the chosen ester into the planner, canonicalised',
+    /_tcCanonCompId\(_testoIn\.c\.id\)/.test(_stSrc) && /!_sp\.compId/.test(_stSrc));
 }
 
 // ── T-Calc is populated by the planned TRT protocol ──────────────────────────
