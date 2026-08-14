@@ -1057,7 +1057,7 @@ async function _tcWritePlanToStack(st, plan){
     // not leave the Testoviron shots standing beside the new ones.
     var ids = (oldId && oldId !== c.id) ? [oldId, c.id] : [c.id];
     for (var i = 0; i < ids.length; i++){
-      try { await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(cyc)+'&compound_id='+encodeURIComponent(ids[i])+'&from_date='+td, {method:'DELETE', headers:h}); } catch(_e){}
+      try { await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(cyc)+'&compound_id='+encodeURIComponent(ids[i])+'&from_date='+td+'&unlogged_only=true', {method:'DELETE', headers:h}); } catch(_e){}
     }
   }
   if (typeof generateAndPushInjections === 'function') await generateAndPushInjections(st, now);
@@ -3999,7 +3999,7 @@ async function _tcClearStackConfigTrt(stack){
     var _n=new Date();_n.setHours(0,0,0,0);
     var _td=_n.getFullYear()+'-'+String(_n.getMonth()+1).padStart(2,'0')+'-'+String(_n.getDate()).padStart(2,'0');
     for(var _i=0;_i<_cids.length;_i++){
-      try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cyc)+'&compound_id='+encodeURIComponent(_cids[_i])+'&from_date='+_td,{method:'DELETE',headers:h});}catch(_e){}
+      try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cyc)+'&compound_id='+encodeURIComponent(_cids[_i])+'&from_date='+_td+'&unlogged_only=true',{method:'DELETE',headers:h});}catch(_e){}
     }
   }
 }
@@ -4022,12 +4022,37 @@ async function _tcSetTargetStack(stackId){
   _tcp.targetStackId=stackId||'';
   _tcSaveProfile();
   var newCid=_tcTargetCycleId();
-  if(oldCid!==newCid){
+  // ── CLEARING THE OLD HOME MUST TOUCH ONLY T-CALC'S OWN TESTOSTERONE ────────
+  // This call used to be:
+  //     DELETE /injections?cycle_id=<oldCid>&from_date=<today>
+  // with no compound filter and no unlogged_only. Three faults, and on 2026-08-14
+  // all three fired at once and destroyed a user's entire forward schedule.
+  //
+  //  1. EMPTY oldCid DELETES EVERYTHING. _tcTargetCycleId() returns '' when nothing
+  //     is bound, and the backend's filter is `if cycle_id and ...` — an empty value
+  //     is NO filter. Binding for the first time therefore issued
+  //     `DELETE /injections?cycle_id=&from_date=<today>`: every injection in the
+  //     account from today on, every protocol. That is what happened — 106 HGH rows,
+  //     every forward peptide row, and a logged dose, none of them testosterone and
+  //     none of them T-Calc's to touch. Only cycles whose rows all predate today
+  //     survived, which is why it looked protocol-scoped and was not.
+  //  2. NO compound_id. T-Calc owns testosterone and nothing else. Clearing its old
+  //     home must not reach a protocol's peptides or HGH — exactly what the sibling
+  //     _tcClearStackConfigTrt above gets right, per compound, deliberately.
+  //  3. NO unlogged_only. A logged injection is a record of something administered;
+  //     rebinding a planner must never delete one. The backend defaults this to
+  //     False, so it had to be asked for and was not.
+  if(oldCid&&oldCid!==newCid){
     var h=(typeof authHeaders==='function')?authHeaders():null;
     if(h){
       var _n=new Date();_n.setHours(0,0,0,0);
       var _td=_n.getFullYear()+'-'+String(_n.getMonth()+1).padStart(2,'0')+'-'+String(_n.getDate()).padStart(2,'0');
-      try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(oldCid)+'&from_date='+_td,{method:'DELETE',headers:h});}catch(_e){}
+      var _tids=(typeof _tcAllCompIds==='function')?_tcAllCompIds():[];
+      for(var _ti=0;_ti<_tids.length;_ti++){
+        try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(oldCid)
+          +'&compound_id='+encodeURIComponent(_tids[_ti])
+          +'&from_date='+_td+'&unlogged_only=true',{method:'DELETE',headers:h});}catch(_e){}
+      }
     }
   }
   await _tcSyncLogToBackend();
@@ -4073,7 +4098,20 @@ async function _tcSyncLogToBackend() {
     // unlogged_only: this clears the PLAN. Without it the delete also removed
     // logged records dated today or later, and the batch re-post recreated them
     // as unlogged plans — a record silently downgraded to a schedule.
-    await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)+'&from_date='+todayStr+'&unlogged_only=true',{method:'DELETE',headers:h});
+    //
+    // compound_id: and it must be scoped to TESTOSTERONE. _cid is the STACK's cycle
+    // id ("the stack is the container", 2026-08-06), so that cycle also holds the
+    // protocol's peptides and HGH. Unscoped, every sync — every dose edit, every
+    // series save — deleted the protocol's whole unlogged forward plan and re-posted
+    // only testosterone. Looping the known esters still "covers removed compounds
+    // too" (the original intent), because it clears every testosterone id under the
+    // cycle whether or not it is still in the plan.
+    var _tid2=(typeof _tcAllCompIds==='function')?_tcAllCompIds():[];
+    for(var _tj=0;_tj<_tid2.length;_tj++){
+      await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)
+        +'&compound_id='+encodeURIComponent(_tid2[_tj])
+        +'&from_date='+todayStr+'&unlogged_only=true',{method:'DELETE',headers:h});
+    }
   }catch(_e){}
 
   var compIds=Object.keys(byComp);
