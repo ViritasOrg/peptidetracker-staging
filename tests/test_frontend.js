@@ -8153,10 +8153,39 @@ if (typeof G._blBuildLines === 'function') {
     check('_blTcalcTestosterone: includes a plan filed under a STACK cycle id',
       _tct.some(function(c){ return c.id==='test-c'; }),
       'this is where T-Calc writes since 2026-08-06 — excluding it blanked the curve');
+    // An enhanced-tier ester is included — under its CANONICAL id, so it merges with
+    // the same molecule's TRT-tier rows rather than becoming a second compound.
     check('_blTcalcTestosterone: includes an enhanced-tier testosterone row',
-      _tct.some(function(c){ return c.id==='test_u'; }));
+      _tct.some(function(c){ return c.doses.some(function(d){ return d.date.getMonth()===5 && d.date.getDate()===16; }); }));
+    check('  …canonicalised, so test_u does not appear as its own compound',
+      _tct.every(function(c){ return c.id!=='test_u'; }));
     check('_blTcalcTestosterone: and still excludes non-testosterone rows',
       _tct.every(function(c){ return c.id!=='hgh'; }));
+
+    // ── ONE MOLECULE, TWO IDS, TWO ROWS — count it ONCE ──────────────────────
+    // Read from the live record 2026-08-14: the account holds `enhanced/test_u`
+    // under `protocol_2_nostart` AND `trt/nebido` under T-Calc's legacy `manual`
+    // cycle, on the SAME days (8, 10, 12 Aug). Widening the selector above to
+    // "any testosterone row" made both visible here for the first time, and
+    // grouping on the raw compound id would have drawn the free-T curve at double
+    // the real dose. _tcCurveLog canonicalises and dedupes on (compId|date); this
+    // now does the same, because it is looking at the same rows.
+    G._injectionsCache = {
+      '2026-08-08':[
+        {cycle_id:'manual',             compound_id:'nebido', compound_name:'Nebido', tier:'trt',      date:'2026-08-08', dose:'100', unit:'mg', logged:true,  active:true},
+        {cycle_id:'protocol_2_nostart', compound_id:'test_u', compound_name:'Testosterone Undecanoate', tier:'enhanced', date:'2026-08-08', dose:'100', unit:'mg', logged:false, active:true}],
+      '2026-08-10':[
+        {cycle_id:'manual',             compound_id:'nebido', compound_name:'Nebido', tier:'trt',      date:'2026-08-10', dose:'100', unit:'mg', logged:true,  active:true},
+        {cycle_id:'protocol_2_nostart', compound_id:'test_u', compound_name:'Testosterone Undecanoate', tier:'enhanced', date:'2026-08-10', dose:'100', unit:'mg', logged:false, active:true}]
+    };
+    var _dup = G._blTcalcTestosterone();
+    var _dupDoses = _dup.reduce(function(a,c){ return a + c.doses.length; }, 0);
+    check('_blTcalcTestosterone: test_u and nebido on one day are ONE injection',
+      _dupDoses === 2, 'got ' + _dupDoses + ' doses from 2 days of duplicated rows');
+    check('  …merged under the canonical id, not kept as two compounds',
+      _dup.length === 1 && _dup[0].id === 'nebido', _dup.map(function(c){return c.id;}).join(','));
+    check('  …and the free-T log inherits the de-duplication',
+      G._blTestosteroneLog().length === 2);
     G._injectionsCache = _sInjA;
   }
 
