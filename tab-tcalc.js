@@ -3012,7 +3012,7 @@ function _tcFreeTSeries(sorted, hooks) {
   // pre-cycle baseline anchor this must equal the measured baseline, i.e. the curve
   // starts at the baseline and rises — not below it.
   if (hooks.start) hooks.start(total[0] * (calFT_arr ? calFT_arr[0] : scale));
-  return { firstDate: firstDate, totalDays: totalDays, total: total, calFT: calFT, scale: scale,
+  return { firstDate: firstDate, totalDays: totalDays, logDays: _logDays, total: total, calFT: calFT, scale: scale,
            totalLo: totalLo, totalHi: totalHi, hasPkBand: hasPkBand,
            calFTPkLo: _calFTPkLo, calFTPkHi: _calFTPkHi,
            calFT_arr: calFT_arr, calFTlo: _calFTlo, calFThi: _calFThi, unitLabel: unitLabel,
@@ -3061,7 +3061,7 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
 
   var sorted = log.slice().sort(function(a, b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
   var _S = _tcFreeTSeries(sorted, { calFT: canvas._testCalFTHook, shbg: canvas._testShbgHook, start: canvas._testStartHook });
-  var firstDate = _S.firstDate, totalDays = _S.totalDays, total = _S.total, calFT = _S.calFT, scale = _S.scale,
+  var firstDate = _S.firstDate, totalDays = _S.totalDays, logDays = _S.logDays, total = _S.total, calFT = _S.calFT, scale = _S.scale,
       calFT_arr = _S.calFT_arr, _calFTlo = _S.calFTlo, _calFThi = _S.calFThi, unitLabel = _S.unitLabel,
       _mftNum = _S.measuredFT, _ghAnnot = _S.ghAnnot, _betaAnnot = _S.betaAnnot, _bfAnnot = _S.bfAnnot, _tier = _S.tier;
   var _pkLo = _S.totalLo, _pkHi = _S.totalHi, _hasPkBand = _S.hasPkBand,
@@ -3100,8 +3100,20 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   // _tcComputeStats uses, so the ramp-up does not read as the plateau.
   // This is a read, not a calculation: no model call, no re-derivation.
   (function(){
-    var _ssFrom = Math.floor(totalDays / 2), _ssPk = 0;
-    for (var _si = _ssFrom; _si <= totalDays; _si++) {
+    // ⚠️ THE WINDOW IS THE DOSING PERIOD, NOT totalDays.
+    // totalDays includes the WASHOUT TAIL, sized off the slowest half-life — for a
+    // 75-day depot bound that is 323 days on top of a 61-day schedule. Halving
+    // totalDays therefore put this window at day 192-385, i.e. Jan-Jul of the FOLLOWING
+    // year, months after the last injection. It reported the decaying tail as the
+    // steady-state exposure: 309 pmol/L "within the healthy young-male range" for a
+    // protocol whose actual plateau is ~1090, above the 804 top of that range. The
+    // reassurance was exactly backwards, and it disagreed with the chart directly
+    // above it (894 today).
+    // logDays is the last injection's day index — the same second-half-of-the-cycle
+    // window _tcComputeStats uses, which is what the original comment intended.
+    var _ssEnd  = (logDays > 0) ? Math.min(logDays, totalDays) : totalDays;
+    var _ssFrom = Math.floor(_ssEnd / 2), _ssPk = 0;
+    for (var _si = _ssFrom; _si <= _ssEnd; _si++) {
       var _sv = total[_si] * (calFT_arr ? calFT_arr[_si] : scale);
       if (isFinite(_sv) && _sv > _ssPk) _ssPk = _sv;
     }
