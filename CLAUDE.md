@@ -99,6 +99,30 @@ At Nebido's 56-day half-life essentially nothing from June had cleared.
 The curve states what it stands on ("Built on N checked injections since …") precisely
 so a gap shows as missing data rather than as a low number. Keep that line.
 
+## ⚠️ NEVER MERGE OR CONSOLIDATE SERIES CARDS ⚠️
+Henrik, 2026-08-14: *"never merge cards, this is how I experiment with different
+schedules and doses, currently I get 10 injections out of a 4ml vial of Nebido."*
+
+Several separate SERIES cards covering the same compound, back to back in time, are
+**deliberate**. They are the experiment surface: one run at one dose and cadence, the
+next at another, each editable on its own and each visible as its own block on the
+curve. Two adjacent cards are not a run that got split by accident and they are not
+untidy.
+
+- **Never** merge, coalesce, de-duplicate or "normalise" series that share a compound,
+  whether in the planner, in a migration, or as cleanup while fixing something else.
+- Never collapse them in the rendering either — the card list is the control surface.
+- If a genuine bug has split one run in two, say so and let Henrik decide. Do not
+  repair it silently; from the outside a deliberate experiment and an accidental split
+  look identical, and only he knows which it is.
+
+**A series usually maps to a VIAL, which is why its dose count is load-bearing.**
+Nebido is 1000 mg in 4 ml (`TRT_CAT`), so 100 mg EOD is exactly 10 injections per
+vial. A series that quietly comes back two doses short is not a cosmetic problem — it
+is the vial no longer adding up. That is what made the `_tcSaveEditSeries` bug of the
+same date (past-dated doses discarded on every save, 10 requested → 8 written) worth
+the regression matrix now guarding every creation permutation.
+
 ## ⚠️ THE STACK IS THE CONTAINER — NO INJECTIONS OUTSIDE ONE ⚠️
 Henrik, 2026-08-06: *"T-calc should be used in the stack wizard, and testosterone
 injections should be part of a stack. No injections can exist outside of a stack
