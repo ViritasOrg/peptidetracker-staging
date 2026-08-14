@@ -10363,16 +10363,39 @@ console.log('\n── T-Calc: unsaved drafts are announced ───────
   // Unbound + drafts → the banner appears, counts them, and offers the real action.
   G._tcp = { manualLog: drafts };            // no targetStackId at all — the real shape
   G._userStacks = [{ id:'protocol_2_nostart', name:'Protocol 2' }];
+  const _saveIsActive = G._isActiveStack;
+  G._isActiveStack = function(i){ return i === 0; };
   const unbound = banner();
   check('an unbound plan with drafts is announced', /Not scheduled yet/.test(unbound));
   check('  …counting them', /7 planned doses/.test(unbound));
   check('  …naming the span, not just a number', /14 Aug/.test(unbound) && /26 Aug/.test(unbound));
   check('  …saying Today will not show them', /do not appear in Today/.test(unbound));
-  check('  …and offering Save to protocol', /_tcOpenSaveToStack\(\)/.test(unbound));
+  check('  …and offering the save action', /_tcOpenSaveToStack\(\)/.test(unbound));
+  // "Save to protocol" alone reads as if the app already knows where. It does not,
+  // and there is deliberately no default — picking one for the user is what put a
+  // protocol's injections into a new empty stack (2026-08-14).
+  check('  …saying there is NO destination yet', /no destination yet/.test(unbound));
+  check('  …that the user picks it next', /You pick it in the next step/.test(unbound));
+  check('  …naming the protocols on offer, active marked',
+    /Protocol 2 \(active\)/.test(unbound), unbound.replace(/<[^>]*>/g,'').slice(0,200));
+  check('  …and the button says a choice follows', /Choose a protocol/.test(unbound));
 
-  // Bound → silent. The sync writes normally; a banner here would be noise.
+  // Bound → it must NAME the protocol. "Save to protocol" never said which one, and
+  // the only place the target was shown was the simple planner's card header, which
+  // is off whenever the manual planner is in use (Henrik, 2026-08-14: "how do I know
+  // which protocol ... anyone would assume is the active protocol").
   G._tcp = { targetStackId:'protocol_2_nostart', manualLog: drafts };
-  check('a bound plan shows no banner', typeof G._tcUnsavedDraftBanner === 'function' && banner() === '');
+  const bound = banner();
+  check('a bound plan names the destination protocol', /Protocol 2/.test(bound));
+  check('  …saying doses are saved into it', /saved into/.test(bound));
+  check('  …and offers a way to change it', /_tcOpenSaveToStack\(\)/.test(bound));
+  check('  …without the unsaved warning', !/Not scheduled yet/.test(bound));
+
+  // Bound to a stack that no longer exists → _tcTargetCycleId is '' (unbound), so the
+  // warning path runs rather than naming a protocol that is gone.
+  G._tcp = { targetStackId:'gone', manualLog: drafts };
+  check('  …a target that no longer exists falls back to the warning',
+    /Not scheduled yet/.test(banner()));
 
   // targetStackId naming a stack that no longer exists is NOT bound — _tcTargetCycleId
   // returns '' for it, so the sync silently no-ops and the banner must fire.
@@ -10391,6 +10414,7 @@ console.log('\n── T-Calc: unsaved drafts are announced ───────
   check('buildTCalc renders it above the curve',
     /html \+= _tcUnsavedDraftBanner\(\);[\s\S]{0,200}PLASMA CURVE/.test(_tcSrc));
 
+  G._isActiveStack = _saveIsActive;
   G._tcp = save.tp; G._userStacks = save.us;
 }
 
@@ -10443,4 +10467,17 @@ console.log('\n── T-History: as-of cursor follows new points ─────
   // body itself further down (search: "buildTHist never captures/persists"). A
   // whole-file grep for those names matches the comment that says they are absent,
   // which is why the duplicate attempted here was both redundant and wrong.
+}
+
+// The save sheet must label what each choice does. An unmarked "New protocol" button
+// beside the existing ones created an empty stack, made it active and moved a
+// protocol's injections to it — with nothing on screen saying so (2026-08-14).
+{
+  const _tcSrc2 = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+  check('the save sheet marks the active protocol in words', /· active/.test(_tcSrc2));
+  check('  …and marks the current save target', /· current target/.test(_tcSrc2));
+  check('  …and warns that New protocol creates an EMPTY active one',
+    /Creates an <b>empty<\/b> protocol and makes it the active one/.test(_tcSrc2));
+  check('  …pointing at Existing for a protocol you already run',
+    /pick it under Existing instead/.test(_tcSrc2));
 }
