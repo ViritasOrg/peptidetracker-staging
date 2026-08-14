@@ -2358,6 +2358,36 @@ if (typeof G._tcConfirmAddSheet === 'function' && typeof G._tcSaveEditSeries ===
   G.fetch = _pmSave.f; G.document.getElementById = _pmSave.g;
 }
 
+
+// A stale duplicate row must not make a ticked dose look skipped.
+// Duplicates are no longer created, but some are already stored, and deleting rows
+// from the injection log to tidy up is not this code's call — the log is the record.
+// Selecting skipped doses by DAY rather than by row makes the stale ones harmless.
+if (typeof G._tcFetchHistory === 'function') {
+  const _dpSave = {f:G.fetch, h:G._tcHistory, hs:G._tcHistoryState, sk:G._tcSkippedPast};
+  const _mk = (date, logged, id) => ({id:id, tier:'trt', logged:logged, unit:'mg',
+    dose:'100', compound_id:'nebido', date:date, active:true, cycle_id:'s1'});
+  const _today = G.dateKey(new Date());
+  const _past  = G.dateKey(new Date(Date.now() - 4*86400000));
+  const _past2 = G.dateKey(new Date(Date.now() - 6*86400000));
+  G.fetch = async () => ({ok:true, status:200, json: async () => ([
+    _mk(_past,  true,  'r1'),   // ticked
+    _mk(_past,  false, 'r2'),   // its stale twin
+    _mk(_past2, false, 'r3'),   // genuinely never ticked
+  ])});
+  G._tcHistory = null; G._tcHistoryState = 'idle';
+  await G._tcFetchHistory(true);
+  const dates = (G._tcSkippedPast||[]).map(e => e.date);
+  check('a ticked dose is not reported skipped because a duplicate row exists',
+    dates.indexOf(_past) < 0, 'reported ' + JSON.stringify(dates));
+  check('  …while a genuinely unticked dose is still reported',
+    dates.indexOf(_past2) >= 0, 'reported ' + JSON.stringify(dates));
+  check('  …and the ticked dose still counts in the history',
+    (G._tcHistory||[]).some(e => e.date === _past));
+  G.fetch = _dpSave.f; G._tcHistory = _dpSave.h;
+  G._tcHistoryState = _dpSave.hs; G._tcSkippedPast = _dpSave.sk;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });

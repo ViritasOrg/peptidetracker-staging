@@ -1455,8 +1455,23 @@ async function _tcFetchHistory(force){
     });
     rows.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
     _skipped.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
+    // A DATE THAT ALREADY HAS A LOGGED DOSE IS NOT A SKIPPED DOSE.
+    // An unlogged row sitting on a day the user has ticked is not a missed injection —
+    // it is a second row for the same dose. Duplicates should not exist (the editor no
+    // longer creates them) but some are already stored from before that fix, and
+    // deleting rows from the injection log to tidy up is not something this code gets
+    // to do on its own — the log is the record and every delete is global.
+    //
+    // Reporting them as missed is what made ticking look futile: the dose was recorded,
+    // the curve counted it, and the note still said "2 scheduled doses were never
+    // ticked" because the twin was still sitting there unlogged. Selecting on the DAY
+    // rather than the row costs nothing when there are no duplicates and makes the
+    // stale ones harmless. The curve is unaffected either way — it already de-duplicates
+    // on (compound, date), so a twin never double-counted.
+    var _loggedDays = {};
+    rows.forEach(function(e){ _loggedDays[e.compId + '|' + e.date] = true; });
     _tcHistory      = rows;
-    _tcSkippedPast  = _skipped;
+    _tcSkippedPast  = _skipped.filter(function(e){ return !_loggedDays[e.compId + '|' + e.date]; });
     _tcHistoryState = 'ready';
   }catch(e){
     _logErr('tcHistory', e);
