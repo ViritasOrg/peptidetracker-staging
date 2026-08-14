@@ -1970,6 +1970,103 @@ console.log(`\n${'─'.repeat(59)}`);
     !/_tcSsPeakPmol[\s\S]{0,200}(setData|pushT|POST)/.test(tc));
 }
 
+
+// ── T-Calc: today's level must not move when you PLAN ────────────────────────
+// Reported 2026-08-14: "I am playing around with future injections, but even if I have
+// 30 injections scheduled suddenly the curve has a flat area? And calculated free T for
+// today has dropped 100pmol/l?"
+//
+// TT_base is solved as TT_at_draw * P / total[anchorDay], so every injection dated at or
+// before the anchor raises the divisor and scales the WHOLE curve — today included — down.
+// The model comment claimed appended injections cannot move it; that holds only for
+// injections AFTER the anchor. Two states put newly planned doses before it:
+//   • a draw dated in the FUTURE (a level cannot have been measured on a day that has
+//     not happened) — 96 pmol/L of drift on the reproduction case
+//   • an UNDATED reading, which took the "no bloodwork at all" branch whose anchor day
+//     depends on _logDays, i.e. on the LAST injection — 810 pmol/L of drift
+console.log('\n── T-calc: the anchor is immune to planning ahead ─────────');
+if (typeof G._tcFreeTSeries === 'function') {
+  const _anSave = {tp:G._tcp, bw:G._tcBwEntries, gh:G._tcGhStack};
+  const _anT = [{compId:'nebido',doseMg:'100',date:'2026-06-26'},
+                {compId:'nebido',doseMg:'100',date:'2026-06-28'}];
+  const _anEod = (end) => { const o=[]; let d=new Date('2026-06-30T12:00:00');
+    const E=new Date(end+'T12:00:00');
+    while(d<=E){o.push({compId:'nebido',doseMg:'100',date:d.toISOString().slice(0,10)});
+      d=new Date(d.getTime()+2*86400000);} return o; };
+  const _anToday = (log) => {
+    const s=log.slice().sort((a,b)=>a.date<b.date?-1:1);
+    const S=G._tcFreeTSeries(s,{});
+    const n=Math.max(0,Math.min(S.totalDays,Math.round((Date.now()-S.firstDate.getTime())/86400000)));
+    return S.total[n]*(S.calFT_arr?S.calFT_arr[n]:S.scale);
+  };
+  // Every horizon must give the SAME value for today. Planning is not a measurement.
+  const _anSpread = (label, tp, bw) => {
+    G._tcp = Object.assign({}, _anSave.tp||{}, tp);
+    G._tcBwEntries = bw; G._tcGhStack = [];
+    const v = ['2026-08-13','2026-08-26','2026-09-30','2026-12-31']
+      .map(e => _anToday(_anT.concat(_anEod(e))));
+    const spread = Math.max(...v) - Math.min(...v);
+    check('today is unchanged by the plan ahead — ' + label,
+      spread < 1, 'spread ' + spread.toFixed(1) + ' pmol/L across horizons: ' + v.map(x=>x.toFixed(0)).join('/'));
+  };
+  const _anBase = {measuredFT:'217', shbg:'45', totalT:'17', birthYear:'1980', currentDoseMgWk:''};
+  _anSpread('pre-cycle draw',            _anBase, [{date:'2026-06-20',free_t:217,shbg:45,total_t:17}]);
+  _anSpread('mid-cycle draw',            _anBase, [{date:'2026-07-20',free_t:217,shbg:45,total_t:17}]);
+  _anSpread('draw dated TODAY',          _anBase, [{date:(function(){const n=new Date();return n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0');})(),free_t:217,shbg:45,total_t:17}]);
+  _anSpread('draw dated in the FUTURE',  _anBase, [{date:'2027-09-01',free_t:217,shbg:45,total_t:17}]);
+  _anSpread('bloodwork entry with NO date', _anBase, [{free_t:217,shbg:45,total_t:17}]);
+  _anSpread('undated free T, no lab',    _anBase, []);
+  _anSpread('no lab, no free T',         {measuredFT:'',shbg:'',totalT:'',birthYear:'1980',currentDoseMgWk:''}, []);
+  _anSpread('prior-protocol warm start', Object.assign({},_anBase,{currentDoseMgWk:'175'}),
+            [{date:'2026-06-20',free_t:217,shbg:45,total_t:17}]);
+
+  // A future-dated draw cannot calibrate at all — it is not a measurement yet, so the
+  // curve degrades to the labelled population estimate rather than anchoring on it.
+  // The unit NEVER changes (CLAUDE.md): confidence degrades, pmol/L does not.
+  G._tcp = Object.assign({}, _anSave.tp||{}, _anBase);
+  G._tcBwEntries = [{date:'2027-09-01',free_t:217,shbg:45,total_t:17}]; G._tcGhStack = [];
+  const _anFut = G._tcFreeTSeries(_anT.concat(_anEod('2026-08-26')).sort((a,b)=>a.date<b.date?-1:1), {});
+  check('a future-dated draw does not calibrate the curve', _anFut.measuredFT !== 217);
+  check('  …and the curve is still drawn in pmol/L', _anFut.unitLabel === 'pmol/L');
+
+  const _anSrc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('the anchor only considers draws dated today or earlier',
+    /_bwUsable\s*=\s*\(_tcBwEntries \|\| \[\]\)\.filter/.test(_anSrc));
+  check('the SHBG reference day uses the same filtered list',
+    /_bwEntry = _bwUsable\.length \? _bwUsable\[0\] : null/.test(_anSrc));
+  check('the population fallback is resolved BEFORE the anchor day is chosen',
+    _anSrc.indexOf('_popFT = _tcDefaultFT') < _anSrc.indexOf('var _anchorDay, _anchorCutoffDate;'));
+
+  G._tcp = _anSave.tp; G._tcBwEntries = _anSave.bw; G._tcGhStack = _anSave.gh;
+}
+
+// ── T-Calc: an unticked past dose is excluded — and SAID SO ──────────────────
+// The exclusion itself is the rule and does not change: a past-dated dose that was never
+// ticked is a plan the user did not confirm taking. What was wrong is that it happened
+// silently. Two doses missed on 10 and 12 Aug left a six-day hole that flattened the
+// curve across "today" and read low, while the series card re-derived its cadence from
+// the first surviving gap and printed "8 injections · every 6 days · 8 Aug → 26 Aug" —
+// a span that holds 10 doses at the real every-2-days cadence.
+console.log('\n── T-calc: skipped doses are reported, not absorbed ───────');
+{
+  const _skSrc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('unticked past doses are collected for reporting',
+    /var _tcSkippedPast\s*=\s*\[\]/.test(_skSrc));
+  check('  …from the full history fetch, not a second request',
+    /_tcSkippedPast\s*=\s*_skipped/.test(_skSrc));
+  check('  …and are still kept OUT of the curve',
+    !/_add\(\s*_tcSkippedPast/.test(_skSrc) && !/_tcSkippedPast.*_tcCurveLog/.test(_skSrc));
+  check('the curve note names them and says they are not counted',
+    /never ticked/.test(_skSrc) && /not in this curve/.test(_skSrc));
+  check('  …and tells the user what to do about it',
+    /Tick them in Today if you took them/.test(_skSrc));
+  // Cadence must survive a hole anywhere in the run.
+  check('series cadence is the MODAL gap, not the first gap',
+    !/_seriesMeta\[sid\]\.interval=Math\.round\(\(d1-d0\)\/86400000\)/.test(_skSrc));
+  check('  …and the card states how many doses the span is missing',
+    /_seriesMeta\[sid\]\.missing/.test(_skSrc) && / missed<\/span>/.test(_skSrc));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
