@@ -1969,8 +1969,15 @@ console.log(`\n${'─'.repeat(59)}`);
       /total\[_si\] \* \(calFT_arr \? calFT_arr\[_si\] : scale\)/.test(around));
     check('  …with no call into the model to get it',
       !/_tcFreeTSeries\(/.test(around));
+    // Corrected 2026-08-14. This asserted the literal Math.floor(totalDays / 2) — which
+    // WAS the bug: totalDays includes the washout tail, so that window sat months after
+    // the last injection and reported the decaying tail as steady-state exposure. The
+    // intent in the name is right and is what is asserted now: start at the halfway
+    // point (skip the ramp-up) of the DOSING period, and never run past the last dose.
     check('  …over the steady-state window, not the ramp-up',
-      /Math\.floor\(totalDays \/ 2\)/.test(around));
+      /_ssFrom = Math\.floor\(_ssEnd \/ 2\)/.test(around));
+    check('  …and that window ENDS at the last injection, not in the washout tail',
+      /_ssEnd\s*=\s*\(logDays > 0\)/.test(around) && !/_si <= totalDays/.test(around));
     check('an uncalibrated curve yields no multiple at all',
       /_tcSsPeakPmol = \(calFT && _ssPk > 0\) \? _ssPk : null/.test(tc));
   }
@@ -2386,6 +2393,53 @@ if (typeof G._tcFetchHistory === 'function') {
     (G._tcHistory||[]).some(e => e.date === _past));
   G.fetch = _dpSave.f; G._tcHistory = _dpSave.h;
   G._tcHistoryState = _dpSave.hs; G._tcSkippedPast = _dpSave.sk;
+}
+
+
+// ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
+// Reported 2026-08-14: "The text in the green box says I am at 309pmol/l but graph
+// shows me at 894?" The steady-state window was Math.floor(totalDays/2), and totalDays
+// includes a washout tail sized off the slowest half-life — 323 days on top of a
+// 61-day schedule for a 75-day depot bound. The window therefore landed in Jan-Jul of
+// the FOLLOWING year, months after the last injection, and reported the decaying tail
+// as steady-state exposure: 309 pmol/L "within the healthy young-male range" for a
+// protocol whose real plateau is ~1090, i.e. ~1.5x ABOVE the top of that range. The
+// reassurance was exactly backwards and contradicted the chart directly above it.
+if (typeof G._tcDrawManualChart === 'function' && typeof G._tcFreeTSeries === 'function') {
+  const _exSave = {tp:G._tcp, bw:G._tcBwEntries, gh:G._tcGhStack};
+  G._tcp = Object.assign({}, _exSave.tp||{}, {measuredFT:'217', shbg:'45', totalT:'17',
+    birthYear:'1980', currentDoseMgWk:''});
+  G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
+  G._tcGhStack = [];
+  const _exEod = (a,b) => { const o=[]; let d=new Date(a+'T12:00:00'); const E=new Date(b+'T12:00:00');
+    while(d<=E){o.push({compId:'nebido',doseMg:'100',date:d.toISOString().slice(0,10)});
+      d=new Date(d.getTime()+2*86400000);} return o; };
+  const _exLog = _exEod('2026-06-26','2026-08-26');
+  const _exS = G._tcFreeTSeries(_exLog.slice(), {});
+  const _exFt = t => _exS.total[t] * (_exS.calFT_arr ? _exS.calFT_arr[t] : _exS.scale);
+  check('the model exposes the dosing-window length separately from the washout tail',
+    _exS.logDays > 0 && _exS.logDays < _exS.totalDays,
+    'logDays=' + _exS.logDays + ' totalDays=' + _exS.totalDays);
+  // The tail is long enough that halving totalDays lands past the last injection —
+  // this is the precondition that made the bug possible, so assert it explicitly.
+  check('  …and the tail is long enough that totalDays/2 falls beyond the last dose',
+    Math.floor(_exS.totalDays / 2) > _exS.logDays);
+  G._tcDrawManualChart('tc-manual-chart', _exLog.slice());
+  const _exPk = G._tcSsPeakPmol;
+  let _dosePk = 0, _tailPk = 0;
+  for (let t = 0; t <= _exS.logDays; t++) _dosePk = Math.max(_dosePk, _exFt(t));
+  for (let t = Math.floor(_exS.totalDays/2); t <= _exS.totalDays; t++) _tailPk = Math.max(_tailPk, _exFt(t));
+  check('exposure reports the steady state of the dosing period',
+    _exPk > _dosePk * 0.85, 'reported ' + Math.round(_exPk) + ', dosing peak ' + Math.round(_dosePk));
+  check('  …not the washout tail months after the last injection',
+    _exPk > _tailPk * 2, 'reported ' + Math.round(_exPk) + ', tail peak ' + Math.round(_tailPk));
+  // And it must not contradict the chart: today's level sits inside the plotted curve,
+  // so the exposure figure has to be of the same order, not a third of it.
+  const _exNow = _exFt(Math.max(0, Math.min(_exS.totalDays,
+    Math.round((Date.now() - _exS.firstDate.getTime())/86400000))));
+  check('  …and is the same order as the level the chart plots for today',
+    _exPk >= _exNow * 0.8, 'exposure ' + Math.round(_exPk) + ' vs chart today ' + Math.round(_exNow));
+  G._tcp = _exSave.tp; G._tcBwEntries = _exSave.bw; G._tcGhStack = _exSave.gh;
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
