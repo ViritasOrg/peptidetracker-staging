@@ -33,6 +33,27 @@
 
 var _thZoom      = 'all';      // 'week' | 'month' | 'year' | 'all'
 var _thFocusDay  = null;       // as-of day index (days from first stored day); null → last day
+var _thPrevLastDay = null;     // series end at the last render — see _thNormFocusDay
+
+// Keep the "as of" readout on the series END unless the user has deliberately moved
+// the slider off it.
+//
+// _thFocusDay is module-level and was only reset when it fell OUTSIDE the series
+// (null / <0 / > totalDays). A series that GREW therefore left the focus sitting on
+// the OLD last day: after capturing 13–14 Aug the readout still said
+// "As of 12 Aug · 858 pmol/L" while T-Calc showed 894 for today — and the chart drew
+// the new points, so the curve looked right and only the number was stale.
+// Reported 2026-08-14: "T-history shows a similar curve but puts me at 858?"
+//
+// Nothing was miscalculated: the stored value for 14 Aug was 893.99, matching T-Calc
+// exactly. This is a display cursor, not a computation — the view still only reads
+// and plots what is stored.
+function _thNormFocusDay(series){
+  var wasAtEnd = (_thPrevLastDay !== null && _thFocusDay === _thPrevLastDay);
+  if (_thFocusDay === null || _thFocusDay < 0 || _thFocusDay > series.totalDays || wasAtEnd)
+    _thFocusDay = series.lastDay;
+  _thPrevLastDay = series.lastDay;
+}
 var _thData      = undefined;  // cached /plasma-history rows (undefined until first fetch)
 var _thInjections;             // cached /injections rows (for tick marks + capture)
 var _TH_MARKER   = 'free_t';
@@ -194,7 +215,7 @@ function _thRender(host) {
       '<div style="font-size:13px;line-height:1.5">' + msg + '</div></div>' + addBtn + '</div>';
     return;
   }
-  if (_thFocusDay === null || _thFocusDay < 0 || _thFocusDay > series.totalDays) _thFocusDay = series.lastDay;
+  _thNormFocusDay(series);
   var zooms = _thZoomLevels();
   if (!zooms.some(function(z){ return z.id === _thZoom; })) _thZoom = 'all';
   var zBtns = zooms.map(function(z){
@@ -222,7 +243,7 @@ function _thSetFocusDay(v){ _thFocusDay = parseInt(v,10) || 0; _thRedraw(); }
 function _thRedraw() {
   var series = _thSeries();
   if (!series) return;
-  if (_thFocusDay === null || _thFocusDay > series.totalDays) _thFocusDay = series.lastDay;
+  _thNormFocusDay(series);
   _thDrawChart('th-chart', series, _thZoom, _thFocusDay);
   var ro = document.getElementById('th-readout');
   if (ro) {

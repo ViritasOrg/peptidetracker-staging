@@ -10393,3 +10393,54 @@ console.log('\n── T-Calc: unsaved drafts are announced ───────
 
   G._tcp = save.tp; G._userStacks = save.us;
 }
+
+// ── T-History: the "as of" readout follows the series end ────────────────────
+// 2026-08-14: "T-calc shows 894 pmol/l today, T-History shows 858 — which curve is
+// incorrect?" Neither. The stored point for 14 Aug was 893.99, matching T-Calc
+// exactly. _thFocusDay is module-level and was reset only when it fell OUTSIDE the
+// series, so a series that GREW left the cursor on the OLD last day — the readout
+// said "As of 12 Aug · 858" while the chart drew the new points.
+console.log('\n── T-History: as-of cursor follows new points ─────────────');
+{
+  const has = typeof G._thNormFocusDay === 'function';
+  check('_thNormFocusDay exists', has);
+  const norm = (s) => { if (has) G._thNormFocusDay(s); };
+  const S = (lastDay) => ({ totalDays:lastDay, lastDay:lastDay });
+
+  // Fresh: no cursor yet → pin to the end.
+  G._thFocusDay = null; G._thPrevLastDay = null;
+  norm(S(48));
+  check('an unset cursor starts at the series end', G._thFocusDay === 48);
+
+  // THE BUG: two new points captured. Cursor was at the old end → follow it.
+  norm(S(50));
+  check('a cursor at the end follows the series when it grows', G._thFocusDay === 50,
+    'got ' + G._thFocusDay + ' — this is the 858-vs-894 report');
+
+  // A deliberately scrubbed cursor is NOT dragged to the end.
+  G._thFocusDay = 20;
+  norm(S(52));
+  check('  …but a scrubbed cursor stays where the user put it', G._thFocusDay === 20);
+  norm(S(54));
+  check('  …and keeps staying there across further captures', G._thFocusDay === 20);
+
+  // Scrub back onto the end → it is pinned again and resumes following.
+  G._thFocusDay = 54;
+  norm(S(56));
+  check('  …scrubbing back to the end re-pins it', G._thFocusDay === 56);
+
+  // Out of range in either direction is clamped to the end.
+  G._thFocusDay = 999; norm(S(56));
+  check('a cursor past the end is clamped', G._thFocusDay === 56);
+  G._thFocusDay = -3;  norm(S(56));
+  check('a negative cursor is clamped', G._thFocusDay === 56);
+
+  // Both render paths must normalise, or the readout and the chart disagree.
+  const _thSrc = require('fs').readFileSync(require('path').join(__dirname,'../tab-thist.js'),'utf8');
+  check('both _thRender and _thRedraw normalise the cursor',
+    (_thSrc.match(/_thNormFocusDay\(series\);/g) || []).length >= 2);
+  // The "never computes" rule is already asserted against the buildTHist function
+  // body itself further down (search: "buildTHist never captures/persists"). A
+  // whole-file grep for those names matches the comment that says they are absent,
+  // which is why the duplicate attempted here was both redundant and wrong.
+}
