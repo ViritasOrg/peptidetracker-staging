@@ -2451,6 +2451,45 @@ if (typeof G._tcDrawManualChart === 'function' && typeof G._tcFreeTSeries === 'f
   G._tcp = _exSave.tp; G._tcBwEntries = _exSave.bw; G._tcGhStack = _exSave.gh;
 }
 
+
+// ── "Built on N checked injections" counts DOSES, not stored rows ────────────
+// Reported 2026-08-14: prod read 22 and staging 25 for schedules the user believed
+// identical — "I can only verify one week back in time and there all are checked BUT I
+// don't have the double injections that I see in Stage". The count was h.length, i.e.
+// raw stored rows, while _tcCurveLog de-duplicates on (compId|date). A duplicate row
+// therefore inflated the headline without moving the curve, so the number could not be
+// compared between two environments and did not describe the curve it sits under.
+if (typeof G._tcHistoryNoteHtml === 'function') {
+  const _cnSave = {h:G._tcHistory, hs:G._tcHistoryState, sk:G._tcSkippedPast};
+  const _txt = () => G._tcHistoryNoteHtml().replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+  G._tcHistoryState = 'ready'; G._tcSkippedPast = [];
+  const _three = [{compId:'nebido',doseMg:'100',date:'2026-08-08'},
+                  {compId:'nebido',doseMg:'100',date:'2026-08-10'},
+                  {compId:'nebido',doseMg:'100',date:'2026-08-12'}];
+  G._tcHistory = _three.slice();
+  check('the headline counts three doses when there are three', /Built on 3 checked injections/.test(_txt()));
+  check('  …and says nothing about duplicates when there are none', !/duplicate/.test(_txt()));
+  // Two duplicate rows on days already recorded must NOT become two more injections.
+  G._tcHistory = _three.concat([{compId:'nebido',doseMg:'100',date:'2026-08-10'},
+                                {compId:'nebido',doseMg:'100',date:'2026-08-12'}]);
+  check('duplicate rows do not inflate the headline count',
+    /Built on 3 checked injections/.test(_txt()), _txt());
+  check('  …they are reported so the user can find them', /2 duplicate rows/.test(_txt()));
+  check('  …and are stated not to affect the curve', /do not affect the curve/.test(_txt()));
+  // The headline must agree with what the curve is actually built from.
+  if (typeof G._tcCurveLog === 'function') {
+    const _cnP = G._tcp;
+    G._tcp = Object.assign({}, _cnP||{}, {plannerMode:'advanced', manualLog:[]});
+    G._injectionsCache = {};
+    const _m = _txt().match(/Built on (\d+) checked/);
+    check('  …and the number matches the curve log exactly',
+      _m && Number(_m[1]) === G._tcCurveLog().length,
+      'headline ' + (_m && _m[1]) + ' vs curve log ' + G._tcCurveLog().length);
+    G._tcp = _cnP;
+  }
+  G._tcHistory = _cnSave.h; G._tcHistoryState = _cnSave.hs; G._tcSkippedPast = _cnSave.sk;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });

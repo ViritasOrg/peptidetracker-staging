@@ -1675,6 +1675,27 @@ function _tcHistoryNoteHtml(){
   var h = _tcLoggedHistory();
   if (!h.length)
     return '<div style="' + box + 'color:var(--muted2)">No checked injections yet — this curve is your plan only. Tick doses off in Today and they become your history.</div>';
+  // COUNT WHAT THE CURVE COUNTS: DISTINCT (compound, date).
+  // This was h.length — raw stored rows. _tcCurveLog de-duplicates on (compId|date), so
+  // a duplicate row inflated the headline number without moving the curve, and the line
+  // stopped describing what it sits under. It also made the number useless for the one
+  // comparison it is naturally used for: prod read 22 and staging 25 for schedules the
+  // user believed identical, and the gap could have been three real doses or three
+  // duplicate rows with no way to tell them apart from the UI.
+  var _seenDose = {}, _dupes = 0;
+  h.forEach(function(e){
+    var k = e.compId + '|' + e.date;
+    if (_seenDose[k]) { _dupes++; return; }
+    _seenDose[k] = true;
+  });
+  var _nDoses = Object.keys(_seenDose).length;
+  // Duplicate rows do not affect the curve (it de-duplicates), but they are stored data
+  // the user may want to clean up, and staying silent about them is what made the two
+  // environments impossible to compare. Reported, never auto-deleted — the injection log
+  // is the record and every delete is global.
+  var _dupHtml = _dupes ? ' <span style="color:#e8a020">' + _dupes + ' duplicate row' +
+    (_dupes === 1 ? '' : 's') + ' on days already recorded — counted once here, and ' +
+    (_dupes === 1 ? 'it does' : 'they do') + ' not affect the curve.</span>' : '';
   var first = h[0].date;
   var d = parseLocalDate(first);
   // Doses scheduled in the past and never ticked are NOT counted — that is the rule.
@@ -1694,10 +1715,10 @@ function _tcHistoryNoteHtml(){
       ', so ' + (_sk.length === 1 ? 'it is' : 'they are') + ' not in this curve. ' +
       'Tick them in Today if you took them.</span>';
   }
-  return '<div style="' + box + 'color:var(--muted2)">Built on <strong style="color:var(--text)">' + h.length +
-         ' checked injection' + (h.length === 1 ? '' : 's') + '</strong> since ' +
+  return '<div style="' + box + 'color:var(--muted2)">Built on <strong style="color:var(--text)">' + _nDoses +
+         ' checked injection' + (_nDoses === 1 ? '' : 's') + '</strong> since ' +
          (d && !isNaN(d.getTime()) ? fmtDate(d) : _esc(first)) + ', plus the plan ahead.' +
-         _skHtml + '</div>';
+         _dupHtml + _skHtml + '</div>';
 }
 
 // How many entries in the curve came from a planned protocol rather than the log.
