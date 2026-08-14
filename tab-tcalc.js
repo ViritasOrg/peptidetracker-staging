@@ -4294,13 +4294,19 @@ function buildTCalc() {
         if(_gaps[_g]>_bestN||(_gaps[_g]===_bestN&&_g<_best)){_best=_g;_bestN=_gaps[_g];}
       }
       _seriesMeta[sid].interval=_best||Math.round((new Date(dates[1].replace(/-/g,'/'))-new Date(dates[0].replace(/-/g,'/')))/86400000);
-      // How many slots the span holds at that cadence vs how many the run actually has.
-      // Reported on the card so a hole is visible instead of being absorbed by the label.
-      if(_seriesMeta[sid].interval>0){
-        var _span=Math.round((new Date(dates[dates.length-1].replace(/-/g,'/'))-new Date(dates[0].replace(/-/g,'/')))/86400000);
-        var _slots=Math.floor(_span/_seriesMeta[sid].interval)+1;
-        _seriesMeta[sid].missing=Math.max(0,_slots-dates.length);
-      }
+      // ⚠️ DO NOT INFER "MISSED DOSES" FROM THE SPAN. A chip here counted
+      // floor(span/cadence)+1 minus this series' own entries and called the remainder
+      // "N missed". Two ways that lies, both hit on the first real schedule:
+      //   • A date covered by a dose in ANOTHER series, or a standalone dose, is not in
+      //     this series' list, so it counted as missed while the dose existed and was
+      //     ticked — "prod says 3 injections missed but I cant see anything not checked
+      //     in today view".
+      //   • An intentionally irregular run reads as missed. Varying dose and cadence
+      //     between runs is the point of the card list (see NEVER MERGE CARDS), so the
+      //     app cannot tell a deliberate gap from a skipped shot and must not guess.
+      // The `unticked` count below is the honest version of this: it counts STORED
+      // doses that were not ticked, which is a fact rather than an inference, and it is
+      // the one the user can act on.
     });
     var _tcFmtD=function(iso){if(!iso)return'';var p=iso.split('-');var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];return parseInt(p[2],10)+' '+M[parseInt(p[1],10)-1];};
 
@@ -4330,8 +4336,6 @@ function buildTCalc() {
         // curve. `missing` = dates the span does not hold at all.
         if (meta.unticked > 0)
           html += '<span style="font-size:10px;font-weight:700;color:#e8a020">· ' + meta.unticked + ' not ticked</span>';
-        else if (meta.missing > 0)
-          html += '<span style="font-size:10px;font-weight:700;color:#e8a020">· ' + meta.missing + ' missed</span>';
         html += '</div>';
         html += '<div style="display:flex;align-items:center;gap:6px;">';
         html += '<button onclick="event.stopPropagation();_tcOpenEditSeriesSheet(\'' + _esc(sid) + '\')" style="' + editBtnStyle + '">EDIT</button>';

@@ -2093,8 +2093,17 @@ console.log('\n── T-calc: skipped doses are reported, not absorbed ───
   check('  …distinct from a real dose tick, not drawn as one',
     /setLineDash\(\[2,2\]\)[\s\S]{0,400}?ctx\.arc\(sx/.test(_skSrc));
 
-  check('  …and the card states how many doses the span is missing',
-    /_seriesMeta\[sid\]\.missing/.test(_skSrc) && / missed<\/span>/.test(_skSrc));
+  // Removed 2026-08-14, and asserted ABSENT so it cannot come back by accident.
+  // The card briefly inferred "N missed" from floor(span/cadence)+1 minus the series'
+  // own entries. It counted a date covered by another series (or a standalone dose) as
+  // missed while the dose existed and was ticked — reported as "prod says 3 injections
+  // missed but I cant see anything not checked in today view" — and it flagged any
+  // deliberately irregular run, which is what the card list exists to support.
+  check('the card never INFERS missed doses from the cadence',
+    !/ missed<\/span>/.test(_skSrc) && !/\.missing\s*=/.test(_skSrc),
+    'the span-vs-cadence guess is back');
+  check('  …only stored doses that were genuinely not ticked are reported',
+    / not ticked<\/span>/.test(_skSrc) && /_seriesMeta\[sid\]\.unticked/.test(_skSrc));
 }
 
 
