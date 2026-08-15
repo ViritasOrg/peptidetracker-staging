@@ -10477,6 +10477,58 @@ console.log('\n── injection deletes: scoped, and never a record ────
       /_tcSaveSheetError\(/.test(fn) && /catch\(e\)\{/.test(fn));
   }
 
+  // ── The forward plan must not be counted twice after saving ────────────────
+  // 2026-08-15, before/after in the same build: after saving 7 doses the curve read
+  // peak 1690 / avg 603 / exposure 1665; after restarting the app, 1176 / 435 /
+  // 1051 on the same data. TODAY was 895 in both — the past was identical and only
+  // the FUTURE doubled. The 7 doses were counted as drafts still in manualLog AND
+  // as the stored protocol rows they had just become.
+  {
+    const _dupSave = { tp: G._tcp, ic: G._injectionsCache, h: G._tcHistory, hs: G._tcHistoryState };
+    const days = ['2026-08-16','2026-08-18','2026-08-20'];
+    // Post-save state: the same doses in BOTH places, as the app had them.
+    G._tcHistory = [{compId:'nebido', doseMg:'100', date:'2026-08-06'}];
+    G._tcHistoryState = 'ready';
+    G._injectionsCache = {};
+    days.forEach(function(d){
+      G._injectionsCache[d] = [{cycle_id:'protocol_2_nostart', compound_id:'nebido',
+        tier:'trt', date:d, dose:'100', unit:'mg', logged:false, active:true}];
+    });
+    G._tcp = { targetStackId:'protocol_2_nostart',
+               manualLog: days.map(function(d){ return {compId:'nebido', doseMg:'100', date:d, draft:true}; }) };
+
+    if (typeof G._tcCurveLog === 'function') {
+      const log = G._tcCurveLog();
+      const fut = log.filter(function(e){ return e.date >= '2026-08-16'; });
+      check('a saved dose is not counted twice on the curve',
+        fut.length === days.length,
+        'got ' + fut.length + ' forward doses from ' + days.length + ' injections: ' +
+        fut.map(function(e){ return e.date+'/'+e.compId; }).join(' '));
+
+      // The same molecule under two spellings must collapse to one dose. manualLog
+      // stored the RAW compound_id while history and protocol rows store the
+      // canonical one, so test_u and nebido were two keys for one injection.
+      G._tcp = { targetStackId:'protocol_2_nostart',
+                 manualLog: [{compId:'test_u', doseMg:'100', date:'2026-08-16', draft:true}] };
+      const log2 = G._tcCurveLog().filter(function(e){ return e.date === '2026-08-16'; });
+      check('  …nor under a second spelling of the same ester',
+        log2.length === 1, 'got ' + log2.map(function(e){ return e.compId; }).join(','));
+    }
+    G._tcp=_dupSave.tp; G._injectionsCache=_dupSave.ic; G._tcHistory=_dupSave.h; G._tcHistoryState=_dupSave.hs;
+  }
+
+  // Saving must do what a cold start does: re-read the record, then rebuild.
+  {
+    const _srcA = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
+    const a = _srcA.indexOf('async function _tcAfterSavedToStack');
+    const fn = a >= 0 ? _srcA.slice(a, a + 1400) : '';
+    check('the after-save hook exists', a >= 0);
+    check('  …forces a fresh history read', /_tcFetchHistory\(true\)/.test(fn));
+    check('  …and rebuilds manualLog from the record', /_tcLoadLogFromStack\(\)/.test(fn));
+    check('manualLog stores the CANONICAL compound id',
+      /compId:_tcCanonCompId\(e\.compound_id\)/.test(_srcA));
+  }
+
   const _dsDir = path.dirname(path.resolve(htmlPath));
   ['tab-tcalc.js','tab-stack.js','index.html'].forEach(function(f){
     const src = fs.readFileSync(path.join(_dsDir,f),'utf8');
