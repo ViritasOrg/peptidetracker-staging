@@ -6664,9 +6664,26 @@ console.log('\n\u2500\u2500 Promotion: CI gate scope \u2500\u2500');
   // after they were added on 2026-08-02 — which is what pinned prod at v1.271 while
   // the promote PRs piled up unmerged.
   //
-  // Scoped to the repo they are about, not weakened: with no GITHUB_REPOSITORY (local
-  // runs) or on any -staging/-stage repo they run in full and still fail loudly.
+  // Scoped to the repo they are about, not weakened: on any -staging/-stage repo, or
+  // a checkout that cannot be identified at all, they run in full and still fail loudly.
+  //
+  // WHICH REPO IS THIS CHECKOUT? On CI, GITHUB_REPOSITORY says so. Locally it is unset,
+  // and the old fallback — "no env var means run them" — was wrong in a PROD checkout:
+  // these five then asserted staging's workflow against prod's own copy of
+  // promote-to-prod.yml, which legitimately differs, and failed on every local run with
+  // nothing actually broken. Not hypothetical — that is exactly how prod came to be
+  // reported as having "5 pre-existing failures" while its CI was green (2026-08-15).
+  // The origin remote names the repo the working tree came from, so ask that instead.
   var _pgRepo = process.env.GITHUB_REPOSITORY || '';
+  if (!_pgRepo) {
+    try {
+      var _pgCfg = require('fs').readFileSync(require('path').join(dir, '.git/config'), 'utf8');
+      var _pgM = _pgCfg.match(/\[remote "origin"\][^[]*?url\s*=\s*(\S+)/);
+      if (_pgM) _pgRepo = _pgM[1].replace(/\.git$/, '');
+    } catch (e) { /* no .git — a tarball or vendored copy; stay indeterminate */ }
+  }
+  // Indeterminate stays LOUD: an unidentifiable checkout runs them rather than skipping,
+  // so a real regression in staging's gate can never hide behind a missing remote.
   var _pgIsProd = _pgRepo && !/-(staging|stage)$/.test(_pgRepo);
   if (_pgIsProd) {
     console.log('  – skipped on ' + _pgRepo + ' (staging-only workflow)');
