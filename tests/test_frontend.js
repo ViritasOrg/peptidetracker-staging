@@ -10425,6 +10425,58 @@ console.log('\n── injection deletes: scoped, and never a record ────
     G._userStacks=_shSave.us; G._tcp=_shSave.tp; G._isActiveStack=_shSave.ia; G.document=_shSave.doc;
   }
 
+  // ── Save keeps the sheet up until the write lands ──────────────────────────
+  // "the moment I hit Save the dialog disappears and the T-calc screen is shown, but
+  // the same warning that 7 injections isnt saved in any protocol is still visible
+  // for a few seconds." It closed FIRST and awaited afterwards, returning the user to
+  // a T-Calc still rendering the pre-save state — an orange "NOT SCHEDULED YET"
+  // banner shown immediately after pressing Save.
+  {
+    const _svSave = { doc: G.document, sts: G._tcSetTargetStack, aft: G._tcAfterSavedToStack };
+    let card = { innerHTML: '' }, removed = false;
+    const overlay = { id:'tc-save-stack-overlay', firstChild: card,
+                      parentNode: { removeChild(){ removed = true; } } };
+    G.document = Object.assign({}, G.document, {
+      getElementById: (i) => (i === 'tc-save-stack-overlay' && !removed) ? overlay : null
+    });
+    let resolveWrite; 
+    G._tcSetTargetStack = () => new Promise(r => { resolveWrite = r; });   // hangs
+    G._tcAfterSavedToStack = async () => {};
+
+    if (typeof G._tcSaveToExistingStack === 'function') {
+      G._tcSaveToExistingStack('protocol_2_nostart');   // deliberately NOT awaited
+    }
+    // Synchronously after the call the write is still in flight.
+    check('Save leaves the sheet OPEN while the write is in flight', !removed);
+    check('  …showing a spinner', /today-spinner-dot/.test(card.innerHTML), card.innerHTML.slice(0,120));
+    check('  …and saying what it is doing', /Saving to protocol/.test(card.innerHTML));
+    // Conjoined with the spinner: on the pre-fix source innerHTML is '' and a bare
+    // "no Cancel" assertion passes vacuously.
+    check('  …with no Cancel while the write is in flight',
+      /today-spinner-dot/.test(card.innerHTML) && !/_tcCloseSaveToStack\(\)/.test(card.innerHTML));
+
+    if (resolveWrite) resolveWrite();
+    G.document = _svSave.doc; G._tcSetTargetStack = _svSave.sts; G._tcAfterSavedToStack = _svSave.aft;
+  }
+
+  // Ordering: the close must come AFTER both awaits, and a failure must not close.
+  {
+    const _tcSrc3 = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
+    const a = _tcSrc3.indexOf('async function _tcSaveToExistingStack');
+    const b = _tcSrc3.indexOf('function _tcSaveSheetBusy');
+    // Both markers must exist, or the slice degenerates and the ordering check below
+    // passes on a source that has neither — a vacuous green.
+    check('the busy-state helper exists to slice against', a >= 0 && b > a);
+    const fn = (a >= 0 && b > a) ? _tcSrc3.slice(a, b) : '';
+    check('the sheet closes only after the write and the refresh',
+      fn.indexOf('await _tcSetTargetStack') >= 0 &&
+      fn.indexOf('await _tcAfterSavedToStack') >= 0 &&
+      fn.indexOf('await _tcSetTargetStack') < fn.lastIndexOf('_tcCloseSaveToStack') &&
+      fn.indexOf('await _tcAfterSavedToStack') < fn.lastIndexOf('_tcCloseSaveToStack'));
+    check('  …and a failed save keeps it open instead of closing silently',
+      /_tcSaveSheetError\(/.test(fn) && /catch\(e\)\{/.test(fn));
+  }
+
   const _dsDir = path.dirname(path.resolve(htmlPath));
   ['tab-tcalc.js','tab-stack.js','index.html'].forEach(function(f){
     const src = fs.readFileSync(path.join(_dsDir,f),'utf8');

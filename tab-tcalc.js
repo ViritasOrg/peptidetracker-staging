@@ -4317,11 +4317,58 @@ function _tcOpenSaveToStack(){
   document.body.appendChild(ov);
 }
 
+// Keep the sheet up, with a spinner, until the write has landed AND every view has
+// rebuilt — then close.
+//
+// Henrik, 2026-08-14: "the moment I hit Save the dialog disappears and the T-calc
+// screen is shown, but the same warning that 7 injections isnt saved in any protocol
+// is still visible for a few seconds before it clears."
+//
+// It closed first and awaited afterwards, so the user was returned to a T-Calc still
+// rendering the pre-save state: the orange NOT SCHEDULED YET banner, for as long as
+// the backend round-trip took. After the incident earlier today, a warning saying the
+// doses are unsaved — displayed immediately after pressing Save — is the last thing
+// this screen should show. The sheet is the natural place to hold that wait.
+//
+// Errors keep the sheet OPEN and say so, rather than closing and leaving the user to
+// infer failure from a banner that never cleared.
 async function _tcSaveToExistingStack(id){
-  _tcCloseSaveToStack();
-  if(!id)return;
-  await _tcSetTargetStack(id);            // handles the single-source guard + re-sync
-  await _tcAfterSavedToStack();
+  if(!id){_tcCloseSaveToStack();return;}
+  _tcSaveSheetBusy('Saving to protocol…');
+  try{
+    await _tcSetTargetStack(id);          // handles the single-source guard + re-sync
+    await _tcAfterSavedToStack();         // refreshes Today, Plan, T-Calc, the week strip
+  }catch(e){
+    if(typeof _logErr==='function')_logErr('tcSaveToStack',e);
+    _tcSaveSheetError('Could not save. Your doses are still here — check your connection and try again.');
+    return;                               // sheet stays open; nothing is lost
+  }
+  _tcCloseSaveToStack();                  // only now, with T-Calc already rebuilt
+}
+
+// Replace the sheet's controls with a spinner. Keeps the overlay and the heading, so
+// the user sees the same dialog working rather than a screen flicking back to a stale
+// warning. Cancel is removed for the duration: the write is already in flight.
+function _tcSaveSheetBusy(msg){
+  var ov=document.getElementById('tc-save-stack-overlay');
+  if(!ov)return;
+  var card=ov.firstChild;
+  if(!card)return;
+  card.innerHTML='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">Save to protocol</div>'
+    +'<div style="display:flex;align-items:center;gap:12px;padding:18px 2px 6px">'
+      +'<div class="today-spinner"><div class="today-spinner-dot"></div></div>'
+      +'<div style="font-size:13px;color:var(--muted2);line-height:1.5">'+_esc(msg||'Saving…')+'</div>'
+    +'</div>';
+}
+function _tcSaveSheetError(msg){
+  var ov=document.getElementById('tc-save-stack-overlay');
+  if(!ov)return;
+  var card=ov.firstChild;
+  if(!card)return;
+  card.innerHTML='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:6px">Save to protocol</div>'
+    +'<div style="font-size:13px;color:#e05050;line-height:1.55;margin-bottom:14px">'+_esc(msg||'Could not save.')+'</div>'
+    +'<button onclick="_tcOpenSaveToStack()" style="width:100%;background:#e8a020;border:none;border-radius:10px;color:#0a0a0a;font-size:14px;font-weight:800;padding:13px;cursor:pointer;font-family:inherit">Try again</button>'
+    +'<button onclick="_tcCloseSaveToStack()" style="width:100%;background:none;border:none;color:var(--muted2);font-size:13px;font-family:inherit;cursor:pointer;margin-top:12px;padding:8px">Close</button>';
 }
 
 // A protocol created here carries no compounds of its own — the testosterone comes
