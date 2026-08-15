@@ -6,7 +6,35 @@
 function _dedupInjectionSlots(list){var m={},order=[];(list||[]).forEach(function(e){var k=e.compound_id+'_'+(e.time_of_day||'');var c=m[k];if(c===undefined){m[k]=e;order.push(k);}else if(e.logged&&!c.logged){m[k]=e;}});return order.map(function(k){return m[k];});}
 function buildWeekStrip(){const strip=document.getElementById('week-strip');strip.innerHTML='';const start=new Date(NOW);start.setDate(NOW.getDate()-7);let todayEl=null;const DL=['S','M','T','W','T','F','S'];for(let i=0;i<14;i++){const d=new Date(start);d.setDate(start.getDate()+i);const dow=d.getDay();const isToday=d.toDateString()===NOW.toDateString();const dk=dateKey(d);var dMid=new Date(d);dMid.setHours(0,0,0,0);var nMid=new Date(NOW);nMid.setHours(0,0,0,0);var isPast=dMid<nMid;var entries=_injectionsCache[dk]||[];var dots=[];var dotsDim=[];if(isPast){var logged=entries.filter(function(e){return e.logged;});if(logged.length){logged.forEach(function(e){dots.push(e.dot);});}else{var _act=entries.filter(function(e){return e.active;});if(_act.length){_act.forEach(function(e){dotsDim.push(e.dot);});}else if(!entries.length){var _pld=getPastDoses(d);if(_pld){var _bSeen={};_pld.forEach(function(di){var bid=di.substring(0,di.lastIndexOf('_'));if(!_bSeen[bid]){_bSeen[bid]=true;var inf=_findWeeklyItemInfo(bid);if(inf&&inf.dot)dots.push(inf.dot);}});}}}}else{entries.filter(function(e){return e.active;}).forEach(function(e){dots.push(e.dot);});}const el=document.createElement('div');el.className='week-day'+(isToday?' today':'');el.style.cursor='pointer';(function(dd,ee){el.onclick=function(){var _tb=document.getElementById('tab-btn-today');if(_tb)switchTab('today',_tb);showDayInline(dd,ee);};})(d,el);var _dotSrc=dots.length?dots:dotsDim;var _dotDim=!dots.length&&dotsDim.length;const dotHtml=[...new Set(_dotSrc)].slice(0,3).map(function(col){return'<div class="week-dot" style="background:'+col+(_dotDim?';opacity:0.3':'')+'"></div>';}).join('');el.innerHTML='<div class="week-day-name">'+DL[dow]+'</div>'+'<div class="week-day-num">'+d.getDate()+'</div>'+'<div class="week-dots">'+dotHtml+'</div>';strip.appendChild(el);if(isToday)todayEl=el;}if(todayEl)strip.scrollLeft=todayEl.offsetLeft-(strip.clientWidth-todayEl.offsetWidth)/2;}
 function buildToday(){if(typeof buildTodayRings==='function')buildTodayRings();if(typeof renderTodaySupplements==='function')renderTodaySupplements(NOW);const list=document.getElementById('today-checklist');var _tt=document.getElementById('today-title');if(_tt)_tt.textContent="TODAY'S DOSES";const _ci=document.getElementById('today-cycle-info');if(_ci){const _st=_userStacks[_activeStackIndices[0]];const _cs=_st&&_st.cycle_start;const _cl=_st&&(_st.cycle_length||12);if(_cs&&_cl){const _sd=parseLocalDate(_cs);const _ed=new Date(_sd.getTime()+_cl*7*86400000);const _dd=Math.max(0,Math.floor((NOW-_sd)/86400000));const _wk=Math.min(_cl,Math.floor(_dd/7)+1);_ci.textContent='Started '+fmtDate(_sd)+' · Week '+_wk+' of '+_cl+' · Ends '+fmtDate(_ed);}else{_ci.textContent='';}}if(_syncPending||!_injCacheReady){list.innerHTML='<div class="today-spinner"><div class="today-spinner-dot"></div></div>';const _b=document.getElementById('today-badge');if(_b){_b.textContent='...';_b.className='card-badge badge-today';}return;}list.innerHTML='';const alertWrap=document.getElementById('today-alerts');alertWrap.innerHTML='';var dk=dateKey(NOW);var doses=_dedupInjectionSlots((_injectionsCache[dk]||[]).filter(function(e){return e.active;}));if(!doses.length){var _hasActive=_userStacks&&_userStacks.length&&_activeStackIndices&&_activeStackIndices.length&&_userStacks[_activeStackIndices[0]];if(!_hasActive){var _hasT=(typeof _protocolTemplates!=='undefined'&&_protocolTemplates&&_protocolTemplates.length);var _primary=_hasT?'<button onclick="openTemplatePicker()" style="background:var(--accent);color:#000;border:none;border-radius:20px;padding:10px 20px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Start from a template</button>':'<button onclick="createNewStack()" style="background:var(--accent);color:#000;border:none;border-radius:20px;padding:10px 20px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Build your first protocol</button>';var _secondary=_hasT?'<div><button onclick="createNewStack()" style="background:none;border:none;color:var(--muted2);font-size:12px;cursor:pointer;font-family:inherit;margin-top:10px;text-decoration:underline">Build your own instead</button></div>':'';list.innerHTML='<div class="empty"><div class="empty-icon">💉</div><div style="font-weight:600;color:var(--text);margin-bottom:4px">No protocol yet</div><div style="font-size:13px;color:var(--muted2);margin-bottom:16px;line-height:1.5">Set up your first protocol to see your daily doses here.</div>'+_primary+_secondary+'</div>';}else{var _hid=(typeof _injHidden!=='undefined')?_injHidden:null;
-if(_hid&&_hid.count){
+// A FINISHED CYCLE IS NOT "DOSES HIDDEN" — SAY WHICH IT IS.
+// Every generator stops at `days >= cycle_length*7` (_getDynamicTRTDoses,
+// _getDynamicEnhancedDoses, _genInjBatches), so a protocol past its end date
+// schedules nothing. That is the whole reason Today is empty, and until this branch
+// existed the render fell through to the hidden-doses message below and blamed
+// unrelated inactive protocols instead. A real 12-week protocol that ended on 10 Aug
+// reported "66 doses hidden — they belong to 'a protocol that no longer exists' and
+// 'Enhanced', which are not active" (2026-08-15). Every word of that was true and none
+// of it was the reason; it sent the user hunting protocol activation for a cycle that
+// had simply run out. The end date is the more specific answer, so it goes first.
+//
+// This states the situation, it does not change it. Cycles still end exactly when they
+// are configured to — nothing here extends one, and nothing generates past the bound.
+var _actSt=_userStacks[_activeStackIndices[0]];
+var _csEnd=_actSt&&_actSt.cycle_start,_clEnd=_actSt&&_actSt.cycle_length;
+var _endedAt=null;
+if(_csEnd&&_clEnd>0){
+  var _sdEnd=parseLocalDate(_csEnd);
+  // Same day arithmetic the generators use, so this can never disagree with them about
+  // whether the cycle is over.
+  if(_sdEnd&&!isNaN(_sdEnd.getTime())&&Math.floor((NOW-_sdEnd)/86400000)>=_clEnd*7)
+    _endedAt=new Date(_sdEnd.getTime()+_clEnd*7*86400000);
+}
+if(_endedAt){
+  list.innerHTML='<div class="empty"><div class="empty-icon">🏁</div>'
+    +'<div style="font-weight:600;color:var(--text);margin-bottom:4px">Cycle finished</div>'
+    +'<div style="font-size:13px;color:var(--muted2);margin-bottom:16px;line-height:1.5">“'+_esc(_actSt.name||'This protocol')+'” completed its '+_clEnd+'-week cycle on '+fmtDate(_endedAt)+', so nothing is scheduled after that date. Extend it or remove its end date to carry on.</div>'
+    +'<button onclick="switchTab(\'stacks\',document.getElementById(\'tab-btn-stacks\'))" style="background:var(--accent);color:#000;border:none;border-radius:20px;padding:10px 20px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Open Plan</button></div>';
+}else if(_hid&&_hid.count){
   // Never claim there is nothing scheduled when stored doses exist and were
   // filtered out. Name the protocol and say what to do about it.
   var _names=Object.keys(_hid.stacks||{});
