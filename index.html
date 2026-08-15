@@ -1168,7 +1168,24 @@ async function refreshInjectionsCache(){
       return;
     }
     var _vids=_validCids[e.cycle_id]||[];
-    if(_vids.length&&!_vids.includes(e.compound_id)){
+    // COMPARE CANONICAL IDS, NOT RAW ONES.
+    // T-Calc canonicalises testosterone on WRITE — _TC_TESTO_ALIAS maps the catalogue's
+    // test_u/test_e/test_c/test_p onto nebido/enanthate/cypionate/propionate — so a plan
+    // saved into a protocol stores compound_id 'nebido'. _getProtocolCompoundIds reads
+    // the protocol's own config and returns the catalogue id 'test_u'. Raw string
+    // equality therefore never matched, and EVERY T-Calc testosterone dose belonging to
+    // an Enhanced-tier protocol was treated as an orphan — dropped from the cache here
+    // and, before the delete was removed, deleted from the record from today forward.
+    //
+    // Reported 2026-08-15: "Injections are saved in protocol 2 that is active but there
+    // is zero Nebido injections in Today", while Levels showed 25 checked injections and
+    // a calibrated curve for that same protocol. Both were right. T-Calc reads
+    // /injections directly (_tcFetchHistory) and never passes through this filter; Today
+    // renders only what survives it. Same record, opposite answers.
+    var _cn=function(x){return (typeof _tcCanonCompId==='function')?_tcCanonCompId(x):x;};
+    var _rowCid=_cn(e.compound_id);
+    var _cidMatch=_vids.some(function(v){return v===e.compound_id||_cn(v)===_rowCid;});
+    if(_vids.length&&!_cidMatch){
       // ⚠️ HIDE AND REPORT. NEVER DELETE.
       // This used to queue a DELETE of every future row for the compound
       // (?cycle_id=…&compound_id=…&from_date=<today>&unlogged_only=true) on the theory
