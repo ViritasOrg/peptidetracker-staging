@@ -47,6 +47,19 @@ if(_endedAt){
     :(_hid.noStart&&_hid.noStart.length
       ?'“'+_esc(_hid.noStart[0])+'” has no start date, so its schedule cannot be placed on a calendar.'
       :'They belong to a protocol that is not active.');
+  // A DOSE HIDDEN FOR A COMPOUND REASON NEEDS THE COMPOUND REASON.
+  // These rows sit under the ACTIVE protocol's own cycle id but name a compound its
+  // config does not list — a renamed compound, a rebuilt protocol, a canonicalised id.
+  // Saying "the protocol is not active" about them would be plainly false: it is. Until
+  // 2026-08-15 they were deleted rather than shown, so this had no wording at all.
+  var _orph=Object.keys(_hid.orphans||{});
+  if(_orph.length){
+    var _oTot=_orph.reduce(function(a,k){return a+_hid.orphans[k];},0);
+    _why+=(_names.length?' ':'')+_oTot+' of them '+(_oTot===1?'is':'are')+' for '+
+      _orph.slice(0,3).map(function(k){return '“'+_esc(k)+'”';}).join(', ')+
+      (_orph.length>3?' and others':'')+', which this protocol no longer lists. '+
+      'Nothing has been deleted — add the compound back, or remove the doses yourself.';
+  }
   list.innerHTML='<div class="empty"><div class="empty-icon">🔕</div>'
     +'<div style="font-weight:600;color:var(--text);margin-bottom:4px">'+_hid.count+' dose'+(_hid.count===1?'':'s')+' hidden</div>'
     +'<div style="font-size:13px;color:var(--muted2);margin-bottom:16px;line-height:1.5">'+_why+'</div>'

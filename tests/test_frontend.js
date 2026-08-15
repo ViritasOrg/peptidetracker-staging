@@ -1281,7 +1281,7 @@ console.log(`\n${'─'.repeat(59)}`);
   check('  …and names an active protocol that has no start date',
     /noStart:\(_activeStackIndices\|\|\[\]\)\.reduce/.test(rawScript));
   check('_injHidden is declared alongside the injection cache',
-    /var _injHidden=\{count:0,stacks:\{\},noStart:\[\]\};/.test(rawScript));
+    /var _injHidden=\{count:0,stacks:\{\},noStart:\[\],orphans:\{\}\};/.test(rawScript));
 
   check('Today reports hidden doses instead of "nothing scheduled"',
     /_hid&&_hid\.count/.test(today));
@@ -2930,6 +2930,74 @@ if (typeof G._tcSetManualField === 'function' && typeof G._tcPushLogToSchedule =
 
   G._tcp = _pfSave.tp; G._userStacks = _pfSave.us; G.fetch = _pfSave.f; G.alert = _pfSave.a;
   G._tcHistory = _pfSave.h; G._tcHistoryState = _pfSave.hs; G._injectionsCache = _pfSave.c;
+}
+
+
+// ── Hidden doses are counted and explained, never deleted ────────────────────
+// Reported 2026-08-15: an active protocol carrying Nebido through 26 Aug showed none
+// of it in Today, and 14 Aug held nothing at all — not a peptide, not GH.
+//
+// Two silent drops in refreshInjectionsCache, both of which returned before touching
+// _injHidden, so the app believed nothing was hidden and Today said nothing was wrong:
+//   1. a T-Calc dose bound to a protocol that is not active. Since _genInjBatches
+//      suppresses the ENTIRE trt tier (_isTestosteroneComp('trt',c) is `tier==='trt'`),
+//      T-Calc is the only scheduler of testosterone, so this branch owns every
+//      testosterone dose a user has.
+//   2. a row whose compound_id is not in the active protocol's config — which was also
+//      DELETED from today forward, on an ordinary refresh, unrecoverably.
+console.log('\n── Hidden doses: counted, explained, never deleted ────────');
+{
+  const _hdSave = {f:G.fetch, us:G._userStacks, ai:G._activeStackIndices, sl:G._stacksLoaded,
+                   c:G._injectionsCache, hid:G._injHidden};
+  const _dels = [];
+  const _dk = (o) => { const t = new Date(G.NOW || new Date()); t.setDate(t.getDate()+o);
+    return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+  const TODAY = _dk(0);
+
+  const P2 = {id:'P2', name:'Protocol 2', cycle_start:_dk(-50), cycle_length:44,
+    peptides:[{id:'glow', name:'Glow', dose_am:'2', unit_am:'mg', times:['AM'],
+               days:[0,1,2,3,4,5,6], active:true}],
+    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]},
+    enhanced:{}};
+  const P1 = {id:'P1', name:'Protocol 1', cycle_start:_dk(-90), cycle_length:12,
+              peptides:[], trt:{}, enhanced:{}};
+  const STORED = [
+    {id:'g1', compound_id:'glow',   tier:'peptide',  cycle_id:'P2',       date:TODAY, dose:'2',   unit:'mg', active:true, logged:false},
+    {id:'n1', compound_id:'nebido', tier:'trt',      cycle_id:'tcalc:P1', date:TODAY, dose:'100', unit:'mg', active:true, logged:false},
+    {id:'h1', compound_id:'hgh',    tier:'enhanced', cycle_id:'P2',       date:TODAY, dose:'1',   unit:'IU', active:true, logged:false},
+  ];
+  G._userStacks = [P2, P1]; G._activeStackIndices = [0]; G._stacksLoaded = true;
+  G.fetch = async (url, opt) => {
+    if (opt && opt.method === 'DELETE') { _dels.push(String(url)); return {ok:true, status:200, json:async()=>({})}; }
+    return {ok:true, status:200, json:async()=>String(url).includes('/injections') ? STORED : []};
+  };
+
+  await G.refreshInjectionsCache();
+  const vis = (G._injectionsCache[TODAY] || []).map(e => e.compound_id);
+
+  check('a cache refresh deletes nothing', _dels.length === 0, JSON.stringify(_dels));
+  check('the active protocol’s own dose still renders',
+    vis.length === 1 && vis[0] === 'glow', JSON.stringify(vis));
+  check('every dropped dose is counted as hidden',
+    G._injHidden.count === 2, `count=${G._injHidden.count}`);
+  check('  …a T-Calc dose names the protocol its plan is saved to',
+    !!G._injHidden.stacks['Protocol 1 (T-Calc plan)'], JSON.stringify(G._injHidden.stacks));
+  check('  …and an unlisted compound is reported by compound, not by protocol',
+    G._injHidden.orphans && G._injHidden.orphans.hgh === 1, JSON.stringify(G._injHidden.orphans));
+
+  // A T-Calc plan bound to the ACTIVE protocol must still render — the fix must not
+  // turn "hidden" into "hidden from everyone".
+  STORED[1].cycle_id = 'tcalc:P2';
+  await G.refreshInjectionsCache();
+  check('a T-Calc dose bound to the ACTIVE protocol still renders',
+    (G._injectionsCache[TODAY] || []).some(e => e.compound_id === 'nebido'));
+  // …as must an unassigned one.
+  STORED[1].cycle_id = 'tcalc';
+  await G.refreshInjectionsCache();
+  check('  …as does an unassigned one', (G._injectionsCache[TODAY] || []).some(e => e.compound_id === 'nebido'));
+
+  G.fetch = _hdSave.f; G._userStacks = _hdSave.us; G._activeStackIndices = _hdSave.ai;
+  G._stacksLoaded = _hdSave.sl; G._injectionsCache = _hdSave.c; G._injHidden = _hdSave.hid;
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
@@ -10414,22 +10482,33 @@ console.log('\n─────────────────────�
 // half-built list and destroy live peptide injections. (TRT survived because
 // cycle_id 'tcalc' bypasses the orphan check entirely.)
 {
-  check('_stacksNormalized flag exists', /let _stacksNormalized=false;/.test(rawScript));
-  check('it is set true only when normalisation completes',
-    /_stacksNormalized=true;\s*\}catch\(_e\)\{_stacksNormalized=false;_logErr\('loadStacks:normalize'/.test(rawScript));
-  check('the orphan DELETE is gated on it',
-    /var _ockeys=_stacksNormalized\?Object\.keys\(_orphanBulkDel\):\[\];/.test(rawScript));
-  check('skipping the prune is recorded, not silent',
-    /_logErr\('orphanDelSkipped'/.test(rawScript));
-
-  // The delete must remain reachable on a healthy load — this guard must not become
-  // a permanent disable.
+  // 2026-08-15: THE ORPHAN DELETE IS GONE ENTIRELY, so the checks that used to assert
+  // it was correctly *gated* are replaced by one asserting it does not exist.
+  //
+  // Gating it was never enough. A compound id that merely fails to MATCH the active
+  // protocol's config — renamed, rebuilt, canonicalised, or a tier whose scheduler
+  // moved — is indistinguishable here from one deliberately removed, and either way the
+  // row was destroyed on an ordinary cache refresh with nothing counted or shown. The
+  // delete ran from today forward and every regeneration path also starts at midnight
+  // today (_regenFrom, tab-stack 116/239/520, tab-tcalc 1063), so anything it removed
+  // was never backfilled: one refresh, one permanent hole in the schedule. Reported as
+  // an active protocol quietly losing doses, with 14 Aug empty of everything.
+  //
+  // refreshInjectionsCache renders a cache. It must not write to the record at all.
   const ref = rawScript.slice(rawScript.indexOf('async function refreshInjectionsCache()'),
                               rawScript.indexOf('_injCacheReady=true'));
-  check('the DELETE call still exists for the healthy path',
-    /method:'DELETE'/.test(ref) && /from_date='\+_todayKey/.test(ref));
-  check('  …and still only targets today onward, never the past',
-    !/from_date='\+dateKey\(from\)/.test(ref));
+  check('refreshInjectionsCache issues NO DELETE — it renders, it does not prune',
+    !/method:'DELETE'/.test(ref));
+  check('  …and no request of any other method either',
+    !/method:'(POST|PUT|PATCH)'/.test(ref));
+  check('  …with the orphan-delete machinery removed, not just bypassed',
+    !/_orphanBulkDel/.test(rawScript) && !/orphanDelSkipped/.test(rawScript));
+  check('an unlisted compound is counted as hidden instead of deleted',
+    /_injHidden\.orphans\[e\.compound_id\]=\(_injHidden\.orphans\[e\.compound_id\]\|\|0\)\+1;/.test(rawScript));
+  // The flag that gated the delete is still set on load; nothing reads it now. Left in
+  // place deliberately rather than removed in the same change as a data-loss fix.
+  check('_stacksNormalized is still maintained', /let _stacksNormalized=false;/.test(rawScript) &&
+    /_stacksNormalized=true;\s*\}catch\(_e\)\{_stacksNormalized=false;_logErr\('loadStacks:normalize'/.test(rawScript));
 }
 
 

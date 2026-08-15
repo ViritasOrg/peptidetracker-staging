@@ -280,7 +280,7 @@ let _syncPending=true;
 var _injectionsCache={};
 // Set by refreshInjectionsCache: how many stored injections were filtered out and
 // which protocol each belonged to. Read by buildToday's empty state.
-var _injHidden={count:0,stacks:{},noStart:[]};
+var _injHidden={count:0,stacks:{},noStart:[],orphans:{}};
 // Set by _genInjBatches: compounds a stack deliberately did NOT schedule because the
 // same molecule is already scheduled by another tier of that stack (today: enhanced
 // testosterone, when the TRT tier carries testosterone). Keyed by stack id. The stack
@@ -1107,7 +1107,7 @@ async function refreshInjectionsCache(){
     if(!st)return;
     if(st.cycle_start)_ownerOf[_stackCycleId(st)]={name:st.name||('Protocol '+(i+1)),active:_activeStackIndices.indexOf(i)>=0};
   });
-  _injHidden={count:0,stacks:{},noStart:(_activeStackIndices||[]).reduce(function(a,si){
+  _injHidden={count:0,stacks:{},orphans:{},noStart:(_activeStackIndices||[]).reduce(function(a,si){
     var st=_userStacks[si];
     if(st&&!st.cycle_start)a.push(st.name||('Protocol '+(si+1)));
     return a;
@@ -1124,8 +1124,6 @@ async function refreshInjectionsCache(){
   var to=new Date(today0.getTime()+90*86400000);
   var entries=await fetchInjectionsForRange(dateKey(from),dateKey(to));
   _injectionsCache={};
-  var _todayKey=dateKey(today0);
-  var _orphanBulkDel={};
   entries.forEach(function(e){
     var _cyc=e.cycle_id||'';
     // T-Calc testosterone: unassigned ('tcalc') is global and always shows;
@@ -1135,6 +1133,22 @@ async function refreshInjectionsCache(){
       if(_tcalcEntryVisible(e,activeCycleIds)){
         if(!_injectionsCache[e.date])_injectionsCache[e.date]=[];
         _injectionsCache[e.date].push(e);
+      }else{
+        // A HIDDEN T-CALC DOSE IS STILL A DOSE — COUNT IT.
+        // This branch used to `return` without touching _injHidden, so a plan saved to
+        // a different protocol vanished with the app believing nothing was hidden:
+        // Today then rendered its plain "nothing scheduled" state and there was no way
+        // to find out where the doses went. Reported 2026-08-15 — a protocol carrying
+        // Nebido through 26 Aug showed none of it, because the T-Calc plan was still
+        // bound to the previously-active protocol. Since testosterone is scheduled by
+        // T-Calc and by nothing else (_genInjBatches suppresses the whole TRT tier),
+        // this branch owns EVERY testosterone dose, and staying silent here means the
+        // one compound a user is most likely to be tracking disappears without a word.
+        _injHidden.count++;
+        var _towId=(typeof _injOwnerStackId==='function')?_injOwnerStackId(e):'';
+        var _towSt=(_userStacks||[]).filter(function(s){return s&&s.id===_towId;})[0];
+        var _tnm=(_towSt?(_towSt.name||'another protocol'):'a protocol that no longer exists')+' (T-Calc plan)';
+        _injHidden.stacks[_tnm]=(_injHidden.stacks[_tnm]||0)+1;
       }
       return;
     }
@@ -1154,28 +1168,38 @@ async function refreshInjectionsCache(){
     }
     var _vids=_validCids[e.cycle_id]||[];
     if(_vids.length&&!_vids.includes(e.compound_id)){
-      if(e.date>=_todayKey){
-        if(!_orphanBulkDel[e.cycle_id])_orphanBulkDel[e.cycle_id]={};
-        _orphanBulkDel[e.cycle_id][e.compound_id]=true;
-      }
+      // ⚠️ HIDE AND REPORT. NEVER DELETE.
+      // This used to queue a DELETE of every future row for the compound
+      // (?cycle_id=…&compound_id=…&from_date=<today>&unlogged_only=true) on the theory
+      // that a compound absent from the protocol's config is an orphan. The theory is
+      // not safe: an id that merely fails to MATCH the config — a renamed compound, a
+      // rebuilt protocol, a canonicalised id, a tier whose scheduler moved — is
+      // indistinguishable here from one that was deliberately removed, and the row is
+      // destroyed either way, silently, on an ordinary cache refresh.
+      //
+      // Reported 2026-08-15: an active protocol was losing scheduled doses, and 14 Aug
+      // held nothing at all — not a peptide, not GH. The delete runs from today
+      // forward and EVERY regeneration path also starts at midnight today
+      // (index.html _regenFrom, tab-stack 116/239/520, tab-tcalc 1063), so whatever a
+      // delete removes on the day it fires is never backfilled. One refresh, one
+      // permanent hole.
+      //
+      // Nothing here was ever counted either, so _injHidden read 0 and Today reported
+      // nothing wrong while rows were being deleted underneath it. Deleting is not this
+      // function's job — it renders a cache. The log is the record (CLAUDE.md), every
+      // delete is global, and a stale row costs a line on a screen while a wrong delete
+      // costs a dose. Report it and let the user decide.
+      _injHidden.count++;
+      _injHidden.orphans[e.compound_id]=(_injHidden.orphans[e.compound_id]||0)+1;
       return;
     }
     if(!_injectionsCache[e.date])_injectionsCache[e.date]=[];
     _injectionsCache[e.date].push(e);
   });
-  // Never delete on a partial compound list — see _stacksNormalized. The entries stay
-  // hidden this pass (the filter above already returned) but nothing is destroyed, and
-  // the next clean load re-evaluates them.
-  var _ockeys=_stacksNormalized?Object.keys(_orphanBulkDel):[];
-  if(!_stacksNormalized&&Object.keys(_orphanBulkDel).length)_logErr('orphanDelSkipped','normalisation failed — '+Object.keys(_orphanBulkDel).length+' cycle(s) not pruned');
-  for(var _ci=0;_ci<_ockeys.length;_ci++){
-    var _cid=_ockeys[_ci];
-    var _cmpIds=Object.keys(_orphanBulkDel[_cid]);
-    for(var _oi=0;_oi<_cmpIds.length;_oi++){
-      try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)+'&compound_id='+encodeURIComponent(_cmpIds[_oi])+'&from_date='+_todayKey+'&unlogged_only=true',{method:'DELETE',headers:authHeaders()});}
-      catch(e){_logErr('delOrphanInj',e);}
-    }
-  }
+  // The orphan-pruning DELETE that stood here is gone — see the hide-and-report note in
+  // the filter above. This function renders a cache and no longer writes to the record
+  // at all, which is why the _stacksNormalized guard that used to gate the delete is no
+  // longer consulted here: with nothing destructive left there is nothing to gate.
   }catch(_e){_logErr('refreshInjCache',_e);}
   finally{ _injCacheReady=true; }
 }
