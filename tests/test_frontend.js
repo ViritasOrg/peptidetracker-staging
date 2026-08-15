@@ -3081,6 +3081,79 @@ console.log('\n── Rebuild schedule from a date ─────────�
   G._injectionsCache = _rbSave.c; G.confirm = _rbSave.cf;
 }
 
+// ── Today explains testosterone that is configured but never scheduled ───────
+// Since 2026-08-14 T-Calc is the only scheduler of testosterone: _genInjBatches
+// suppresses it in BOTH tiers — the whole trt tier, and any enhanced compound whose
+// NAME contains "testosterone", which the catalogue's "Testosterone Undecanoate
+// (Nebido)" does. So a protocol can display an ester in its Enhanced tier and generate
+// nothing for it. Those doses are not hidden and not counted, because they were never
+// created, so no hidden-dose message can cover this; the explaining banner lives only
+// inside the stack editor's tier tabs, which is not where anyone looks when a dose is
+// missing. Reported: "even though Enhanced has Nebido scheduled there is no injections
+// in Today for testosterone."
+console.log('\n── Today: testosterone configured but not scheduled ───────');
+{
+  const _tnSave = {doc:G.document, us:G._userStacks, ai:G._activeStackIndices,
+                   sl:G._stacksLoaded, c:G._injectionsCache, sp:G._syncPending,
+                   cr:G._injCacheReady, hid:G._injHidden};
+  const _n = new Date();
+  const _k = (d) => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const TODAY = _k(_n);
+  const _bk = (x) => _k(new Date(_n.getFullYear(), _n.getMonth(), _n.getDate()-x, 12,0,0,0));
+
+  // The generator's own view: the catalogue name is what triggers suppression.
+  check('an Enhanced "Testosterone Undecanoate (Nebido)" is suppressed by the generator',
+    G._isTestosteroneComp('enhanced', {id:'test_u', name:'Testosterone Undecanoate (Nebido)'}) === true);
+  check('  …while a non-testosterone Enhanced compound still generates',
+    G._isTestosteroneComp('enhanced', {id:'hgh', name:'HGH (Somatropin)'}) === false);
+
+  let _alert = '';
+  const _origDoc = G.document;         // capture before swapping, or the stub recurses
+  const _stub = Object.create(_origDoc);
+  _stub.getElementById = (id) => {
+    const e = _origDoc.getElementById(id);
+    if (id !== 'today-alerts') return e;
+    return new Proxy(e, {get:(t,k)=> k==='innerHTML' ? _alert : t[k],
+                         set:(t,k,v)=>{ if(k==='innerHTML') _alert=v; else t[k]=v; return true; }});
+  };
+  G.document = _stub;
+  G._stacksLoaded = true; G._syncPending = false; G._injCacheReady = true;
+  G._injHidden = {count:0, stacks:{}, noStart:[], orphans:{}};
+  G._activeStackIndices = [0];
+  G._userStacks = [{id:'P2', name:'Protocol 2', cycle_start:_bk(50), cycle_length:44,
+    peptides:[{id:'glow', name:'Glow Stack', active:true}], trt:{},
+    enhanced:{enabled:true, compounds:[
+      {id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'250', unit:'mg'},
+      {id:'hgh',    name:'HGH (Somatropin)',                  dose:'3',   unit:'IU'}]}}];
+  // Peptides and HGH render; no testosterone anywhere — the reported state.
+  G._injectionsCache = {[TODAY]:[
+    {id:'a', compound_id:'glow', compound_name:'Glow', tier:'peptide',  cycle_id:'P2', date:TODAY, dose:'0.1', unit:'ml', active:true, logged:false, time_of_day:'AM'},
+    {id:'b', compound_id:'hgh',  compound_name:'HGH',  tier:'enhanced', cycle_id:'P2', date:TODAY, dose:'3',   unit:'IU', active:true, logged:false, time_of_day:'AM'}]};
+
+  _alert = ''; G.buildToday();
+  check('Today says testosterone is not scheduled', /Testosterone not scheduled/.test(_alert));
+  check('  …naming the compound and the tier it sits in',
+    /Nebido/.test(_alert) && /Enhanced tier/.test(_alert), _alert.slice(0,120));
+  check('  …and pointing at T-Calc, which is the only thing that schedules it',
+    /T-Calc/.test(_alert) && /tab-btn-tcalc/.test(_alert));
+
+  // Bound plan → scheduled → the note must go away.
+  G._injectionsCache[TODAY].push({id:'c', compound_id:'test_u', tier:'trt', cycle_id:'tcalc:P2',
+    date:TODAY, dose:'250', unit:'mg', active:true, logged:false, time_of_day:'AM'});
+  _alert = ''; G.buildToday();
+  check('a protocol with a T-Calc plan bound gets no such note', !/Testosterone not scheduled/.test(_alert));
+
+  // No ester configured at all → nothing to explain.
+  G._userStacks[0].enhanced.compounds = [{id:'hgh', name:'HGH (Somatropin)', dose:'3', unit:'IU'}];
+  G._injectionsCache[TODAY] = G._injectionsCache[TODAY].filter(e => e.compound_id !== 'test_u');
+  _alert = ''; G.buildToday();
+  check('  …nor does one with no testosterone configured', !/Testosterone not scheduled/.test(_alert));
+
+  G.document = _tnSave.doc; G._userStacks = _tnSave.us; G._activeStackIndices = _tnSave.ai;
+  G._stacksLoaded = _tnSave.sl; G._injectionsCache = _tnSave.c; G._syncPending = _tnSave.sp;
+  G._injCacheReady = _tnSave.cr; G._injHidden = _tnSave.hid;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
