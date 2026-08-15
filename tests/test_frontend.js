@@ -3154,6 +3154,75 @@ console.log('\n── Today: testosterone configured but not scheduled ───
   G._injCacheReady = _tnSave.cr; G._injHidden = _tnSave.hid;
 }
 
+// ── A T-Calc plan saved into a protocol reaches Today ────────────────────────
+// T-Calc canonicalises testosterone on WRITE: _TC_TESTO_ALIAS maps the enhanced
+// catalogue's test_u/test_e/test_c/test_p onto nebido/enanthate/cypionate/propionate,
+// so a plan saved into a protocol stores compound_id 'nebido'. _getProtocolCompoundIds
+// reads the protocol's config and returns 'test_u'. Raw string equality never matched,
+// so EVERY T-Calc testosterone dose in an Enhanced-tier protocol was treated as an
+// orphan — dropped from the cache, and before the delete was removed, deleted from the
+// record from today forward.
+//
+// Reported: "Injections are saved in protocol 2 that is active but there is zero Nebido
+// injections in Today", while Levels showed 25 checked injections and a calibrated curve
+// for the same protocol. Both were right — T-Calc reads /injections directly and never
+// passes this filter; Today renders only what survives it.
+console.log('\n── T-Calc plan ids reach Today ────────────────────────────');
+{
+  const _idSave = {f:G.fetch, us:G._userStacks, ai:G._activeStackIndices, sl:G._stacksLoaded,
+                   sn:G._stacksNormalized, c:G._injectionsCache, hid:G._injHidden};
+  const _n = new Date();
+  const _k = (d) => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const TODAY = _k(_n);
+  const _bk = (x) => _k(new Date(_n.getFullYear(), _n.getMonth(), _n.getDate()-x, 12,0,0,0));
+
+  const P2 = {id:'P2', name:'Protocol 2', cycle_start:_bk(50), cycle_length:44,
+    peptides:[{id:'glow', name:'Glow', active:true}], trt:{},
+    enhanced:{enabled:true, compounds:[
+      {id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'250', unit:'mg'},
+      {id:'hgh',    name:'HGH (Somatropin)',                  dose:'3',   unit:'IU'}]}};
+  G._userStacks = [P2]; G._activeStackIndices = [0];
+  G._stacksLoaded = true; G._stacksNormalized = true;
+
+  // The mismatch this guards against, stated as data rather than trusted:
+  check('the protocol lists the catalogue id, T-Calc writes the canonical one',
+    G._getProtocolCompoundIds(P2).includes('test_u') && G._tcCanonCompId('test_u') === 'nebido');
+
+  const _dels = [];
+  const STORED = [
+    {id:'g',  compound_id:'glow',   tier:'peptide', cycle_id:'P2', date:TODAY,   dose:'0.1', unit:'ml', active:true, logged:false},
+    {id:'n1', compound_id:'nebido', tier:'trt',     cycle_id:'P2', date:TODAY,   dose:'250', unit:'mg', active:true, logged:false},
+    {id:'n2', compound_id:'nebido', tier:'trt',     cycle_id:'P2', date:_bk(1),  dose:'250', unit:'mg', active:true, logged:true},
+  ];
+  G.fetch = async (url, opt) => {
+    if (opt && opt.method === 'DELETE') { _dels.push(String(url)); return {ok:true, status:200, json:async()=>({})}; }
+    return {ok:true, status:200, json:async()=>String(url).includes('/injections') ? STORED : []};
+  };
+  await G.refreshInjectionsCache();
+  const vis = (G._injectionsCache[TODAY] || []).map(e => e.compound_id);
+
+  check('a T-Calc dose saved into the protocol renders in Today',
+    vis.includes('nebido'), JSON.stringify(vis));
+  check('  …and is not counted as an orphan',
+    G._injHidden.count === 0 && !(G._injHidden.orphans || {}).nebido, JSON.stringify(G._injHidden.orphans));
+  check('  …nor deleted from the record', _dels.length === 0, JSON.stringify(_dels));
+  check('  …so the protocol reads as having testosterone scheduled',
+    G._stackHasScheduledTrt('P2') === true);
+
+  // A genuinely unlisted compound must STILL be caught — the fix widens the match to
+  // canonical ids, it does not disable the check.
+  STORED.push({id:'z', compound_id:'nandrolone', tier:'enhanced', cycle_id:'P2',
+               date:TODAY, dose:'200', unit:'mg', active:true, logged:false});
+  await G.refreshInjectionsCache();
+  check('a compound the protocol really does not list is still reported',
+    (G._injHidden.orphans || {}).nandrolone === 1, JSON.stringify(G._injHidden.orphans));
+  check('  …and still never deleted', _dels.length === 0);
+
+  G.fetch = _idSave.f; G._userStacks = _idSave.us; G._activeStackIndices = _idSave.ai;
+  G._stacksLoaded = _idSave.sl; G._stacksNormalized = _idSave.sn;
+  G._injectionsCache = _idSave.c; G._injHidden = _idSave.hid;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
