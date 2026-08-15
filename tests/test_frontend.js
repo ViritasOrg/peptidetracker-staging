@@ -34,6 +34,10 @@ const patchedScript = rawScript
   .replace("let _tabVis={};let _currentTab='today';let _currentPrimary='today';let _lastSub={};",
            "var _tabVis={};var _currentTab='today';var _currentPrimary='today';var _lastSub={};")
   .replace('let _viewDate=',          'var _viewDate=')
+  // buildToday returns at its spinner guard while this is true, so a test that renders
+  // the empty state has to be able to clear it. As a top-level `let` it is not a
+  // sandbox property and cannot be set from outside at all.
+  .replace('let _syncPending=',       'var _syncPending=')
   .replace('let _reconStackIdx=',     'var _reconStackIdx=')
 .replace('let _reconStackPicked=',  'var _reconStackPicked=')
   .replace('let _reconState=',        'var _reconState=')
@@ -10807,4 +10811,66 @@ console.log('\n── T-History: as-of cursor follows new points ─────
   // deliberately absent.
   check('  …and the destination is a single dropdown, not a list of buttons',
     /<select id="tc-save-stack-sel"/.test(_tcSrc2) && !/>New protocol<\/div>/.test(_tcSrc2));
+}
+
+// ── Today: a finished cycle says so ──────────────────────────────────────────
+// Every generator stops at `days >= cycle_length*7`, so a protocol past its end date
+// schedules nothing. Today's empty state had no branch for that and fell through to the
+// hidden-doses message, which blamed unrelated inactive protocols: a real 12-week
+// protocol that ended on 10 Aug rendered "66 doses hidden — they belong to 'a protocol
+// that no longer exists' and 'Enhanced', which are not active" (2026-08-15). True, and
+// not the reason. Renders the real buildToday and reads the HTML it produces, so it
+// fails if the branch is dropped — a source grep would not.
+console.log('\n── Today: finished cycle empty state ──────────────────────');
+{
+  const _ceSave = {doc:G.document, us:G._userStacks, ai:G._activeStackIndices,
+                   sl:G._stacksLoaded, c:G._injectionsCache, cr:G._injCacheReady,
+                   sp:G._syncPending, hid:G._injHidden};
+  let _html = '';
+  const _stub = Object.create(_ceSave.doc);
+  _stub.getElementById = (id) => {
+    const e = _ceSave.doc.getElementById(id);
+    if (id !== 'today-checklist') return e;
+    return new Proxy(e, {
+      get: (t, k) => k === 'innerHTML' ? _html : t[k],
+      set: (t, k, v) => { if (k === 'innerHTML') _html = v; else t[k] = v; return true; },
+    });
+  };
+  G.document = _stub;
+  G._injectionsCache = {}; G._injCacheReady = true; G._syncPending = false;
+  G._injHidden = {count:66, stacks:{'a protocol that no longer exists':37, 'Enhanced':29}, noStart:[]};
+  G._stacksLoaded = true;
+  G._activeStackIndices = [0];
+
+  // Started 18 May, 12 weeks → ended 10 Aug. Anchored to NOW so it cannot go stale.
+  const _dk = (d) => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const _startBack = (days) => { const t = new Date(G.NOW || new Date()); t.setDate(t.getDate()-days); return _dk(t); };
+
+  // 89 days in on a 12-week (84-day) cycle — over by 5 days, as reported.
+  G._userStacks = [{id:'A', name:'Main', cycle_start:_startBack(89), cycle_length:12,
+                    peptides:[], trt:{}, enhanced:{}}];
+  _html = ''; G.buildToday();
+  check('a finished cycle is reported as finished, not as hidden doses',
+    /Cycle finished/.test(_html) && !/doses hidden/.test(_html), _html.slice(0, 160));
+  check('  …naming the protocol and the date it ended',
+    /Main/.test(_html) && /12-week/.test(_html), _html.slice(0, 160));
+  check('  …and pointing at the thing that changes it',
+    /Extend it or remove its end date/.test(_html));
+
+  // Still inside the cycle: the hidden-doses message is the right one and must stay.
+  G._userStacks = [{id:'A', name:'Main', cycle_start:_startBack(10), cycle_length:12,
+                    peptides:[], trt:{}, enhanced:{}}];
+  _html = ''; G.buildToday();
+  check('a live cycle still reports hidden doses, not a false ending',
+    /doses hidden/.test(_html) && !/Cycle finished/.test(_html), _html.slice(0, 160));
+
+  // No end date: a cycle that cannot end must never be called finished.
+  G._userStacks = [{id:'A', name:'Main', cycle_start:_startBack(400), cycle_length:0,
+                    peptides:[], trt:{}, enhanced:{}}];
+  _html = ''; G.buildToday();
+  check('  …and "no end date" never reports one', !/Cycle finished/.test(_html));
+
+  G.document = _ceSave.doc; G._userStacks = _ceSave.us; G._activeStackIndices = _ceSave.ai;
+  G._stacksLoaded = _ceSave.sl; G._injectionsCache = _ceSave.c; G._injCacheReady = _ceSave.cr;
+  G._syncPending = _ceSave.sp; G._injHidden = _ceSave.hid;
 }
