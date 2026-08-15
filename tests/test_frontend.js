@@ -1884,6 +1884,102 @@ console.log(`\n${'─'.repeat(59)}`);
 }
 
 
+// ── Ticking a dose keeps the curve and the record in agreement ───────────────
+// _tcHistory is fetched ONCE per session — _tcFetchHistory returns early on a warm
+// cache and buildTCalc only calls it while the state is 'idle'. Everything else the
+// curve rests on (_injectionsCache, _tcp.manualLog) is rebuilt from the backend on
+// every refresh, so before this was fixed the two drifted apart the moment a logged
+// flag changed in Today, and stayed apart for the rest of the session:
+//   untick — the dose left the record but stayed in _tcHistory, so the curve KEPT it
+//   tick   — the dose entered the record but not _tcHistory, and both
+//            _tcProtocolInjections and _tcLoadLogFromStack skip logged rows, so the
+//            curve LOST it once anything rebuilt manualLog
+// Display-only and cleared on restart, which is exactly what made it hard to place:
+// six unticks left the curve frozen at 31 doses / first 16 Jul / peak 1225 pmol/L
+// while the record said 25 / 28 Jul / 1018 (2026-08-15).
+//
+// This drives the REAL toggleInjection against a backend that actually flips the row,
+// so it fails if the re-read is dropped — a source-text assertion would not.
+console.log('\n── Today tick ⇄ T-Calc history ────────────────────────────');
+{
+  const _tkSave = {f:G.fetch, h:G._tcHistory, hs:G._tcHistoryState, sk:G._tcSkippedPast,
+                   tp:G._tcp, c:G._injectionsCache, us:G._userStacks, ai:G._activeStackIndices,
+                   sl:G._stacksLoaded, sn:G._stacksNormalized, bw:G._tcBwEntries, bl:G._tcBwLoading};
+  const CYC = 'tk1';
+  const _tkD = (o) => { const t = new Date(); t.setDate(t.getDate()+o);
+    return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+  const STORED = [];
+  for (let i = -30; i <= 30; i += 2)
+    STORED.push({id:'tk'+i, compound_id:'nebido', tier:'trt', cycle_id:CYC,
+                 date:_tkD(i), dose:'100', unit:'mg', logged:i<0, active:true});
+
+  G._userStacks = [{id:CYC, name:'Tick', cycle_start:_tkD(-60), peptides:[],
+                    trt:{enabled:true, compounds:[{id:'nebido',name:'T',dose:'100',unit:'mg',freq_days:2}]}}];
+  G._activeStackIndices = [0]; G._stacksLoaded = true; G._stacksNormalized = true;
+  G._tcBwEntries = []; G._tcBwLoading = true;      // bloodwork is not part of this path
+  G._tcp = {targetStackId:CYC, plannerMode:'advanced', manualLog:[], measuredFT:'350', birthYear:'1980'};
+  G._tcHistory = STORED.filter(e => e.logged)
+    .map(e => ({compId:'nebido', doseMg:'100', date:e.date, injId:e.id, source:'logged'}));
+  G._tcHistoryState = 'ready'; G._tcSkippedPast = [];
+  // A backend that honours the PUT: the record really changes under the curve.
+  G.fetch = async (url, opt) => {
+    if (opt && opt.method === 'PUT') {
+      const row = STORED.find(e => e.id === String(url).split('/injections/')[1]);
+      if (row) row.logged = JSON.parse(opt.body).logged;
+      return {ok:true, status:200, json:async()=>({})};
+    }
+    return {ok:true, status:200, json:async()=>String(url).includes('/injections')?STORED:[]};
+  };
+
+  const shape = () => { const l = G._tcCurveLog(); return {n:l.length, first:l.length?l[0].date:null}; };
+  // AWAITED, not fire-and-forget. This block lives inside the wizSave().then(async …)
+  // chain that ends in process.exit(), so an unawaited IIFE races that exit and its
+  // checks vanish silently — the same trap the note above the exit call describes.
+  await (async () => {
+    await G.refreshInjectionsCache(); G.buildTCalc();
+    const before = shape();
+    const first6 = STORED.filter(e => e.logged).slice(0, 6).map(e => e.id);
+    for (const id of first6) await G.toggleInjection(id, true);       // untick six
+    const live = shape();
+    check('unticking six doses drops them from the curve',
+      live.n === before.n - 6, `${before.n} -> ${live.n}`);
+    check('  …and moves the "since" date off the dose that was undone',
+      live.first !== before.first, `first still ${live.first}`);
+    // A reload must agree with what was already on screen — that gap WAS the bug.
+    G._tcHistory = null; G._tcHistoryState = 'idle'; G._tcSkippedPast = [];
+    await G._tcFetchHistory(true); await G.refreshInjectionsCache(); G.buildTCalc();
+    const reload = shape();
+    check('  …and a reload shows the same curve, not a corrected one',
+      reload.n === live.n && reload.first === live.first,
+      `live ${live.n}/${live.first} vs reload ${reload.n}/${reload.first}`);
+    // The other direction. Ticking used to LOSE the dose as soon as anything rebuilt
+    // manualLog, because it left the plan without entering the history. Asserting a
+    // fixed count here would be wrong — three of these were just unticked above, so
+    // re-ticking them legitimately puts them back. The invariant that actually holds
+    // in both directions is the one that was broken: what is on screen equals what a
+    // reload would show.
+    const due = STORED.filter(e => !e.logged).slice(0, 3).map(e => e.id);
+    for (const id of due) { await G.toggleInjection(id, false); await G.refreshInjectionsCache(); G.buildTCalc(); }
+    const tickLive = shape();
+    G._tcHistory = null; G._tcHistoryState = 'idle'; G._tcSkippedPast = [];
+    await G._tcFetchHistory(true); await G.refreshInjectionsCache(); G.buildTCalc();
+    const tickReload = shape();
+    check('ticking a dose does not drop it from the curve on the next rebuild',
+      tickLive.n === tickReload.n && tickLive.first === tickReload.first,
+      `live ${tickLive.n}/${tickLive.first} vs reload ${tickReload.n}/${tickReload.first}`);
+    check('  …and the history it is read from is a forced re-read of the record',
+      /else if\(typeof _tcFetchHistory==='function'\)\{[\s\S]*?await _tcFetchHistory\(true\);\}/
+        .test(require('fs').readFileSync(require('path').join(__dirname,'../tab-today.js'),'utf8')));
+
+    G.fetch = _tkSave.f; G._tcHistory = _tkSave.h; G._tcHistoryState = _tkSave.hs;
+    G._tcSkippedPast = _tkSave.sk; G._tcp = _tkSave.tp; G._injectionsCache = _tkSave.c;
+    G._userStacks = _tkSave.us; G._activeStackIndices = _tkSave.ai;
+    G._stacksLoaded = _tkSave.sl; G._stacksNormalized = _tkSave.sn;
+    G._tcBwEntries = _tkSave.bw; G._tcBwLoading = _tkSave.bl;
+  })();
+}
+
+
 // ── Evidence grades + research citations ─────────────────────────────────────
 // Henrik, 2026-08-12: "this app will basically have research citations and t-calc
 // as its USP." So a dose recommendation must never render without (a) how well
