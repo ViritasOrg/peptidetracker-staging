@@ -1560,7 +1560,12 @@ function _tcLoadLogFromStack(){
         if(!(mg>0))return;
         if(seen[e.compound_id+'|'+e.date])return;
         seen[e.compound_id+'|'+e.date]=true;
-        rows.push({compId:e.compound_id,doseMg:String(mg),date:e.date,seriesId:e.series_id||undefined});
+        // CANONICAL, like every other source. _tcCurveLog de-duplicates on
+        // compId+date, and _tcFetchHistory and _tcProtocolInjections both store
+        // _tcCanonCompId(...). Storing the raw id here put manualLog in a different
+        // id space, so the same injection under two spellings (test_u vs nebido)
+        // produced two keys and was counted twice.
+        rows.push({compId:_tcCanonCompId(e.compound_id),doseMg:String(mg),date:e.date,seriesId:e.series_id||undefined});
       });
     });
   }
@@ -1650,10 +1655,19 @@ function _tcCurveLog(){
       // here as well as by the date filters. `unticked` is set only in
       // _tcLoadLogFromStack, from the record's own unlogged past rows.
       if (e.unticked) return;
-      var k = e.compId + '|' + e.date;
+      // CANONICALISE AT THE KEY. Fixing this only where manualLog is built covers
+      // logs built that way and nothing else — a draft pushed by the Add sheet, or
+      // an older profile, still carries whatever id it was created with. One
+      // injection under two spellings (test_u / nebido) then makes two keys and is
+      // counted twice, which is what doubled the forward curve after a save
+      // (2026-08-15). Doing it here is the only place that holds for every source.
+      var _cid = (typeof _tcCanonCompId === 'function') ? _tcCanonCompId(e.compId) : e.compId;
+      var k = _cid + '|' + e.date;
       if (seen[k]) return;
       seen[k] = true;
-      merged.push(e);
+      // Carry the canonical id forward too, so the PK lookup downstream resolves the
+      // same ester the key collapsed on — history and protocol rows already do.
+      merged.push((e.compId === _cid) ? e : Object.assign({}, e, { compId: _cid }));
     });
   }
 
@@ -4399,8 +4413,23 @@ async function _tcCreateStackForTesto(tier){
 }
 
 async function _tcAfterSavedToStack(){
+  // ── Re-read the record before rebuilding, exactly as a cold start does ──────
+  // Reported 2026-08-15 with a before/after in the same build: immediately after
+  // saving 7 doses the curve inflated — peak 1690, steady-state avg 603, exposure
+  // 1665 pmol/L — and after restarting the app the same data gave 1176 / 435 /
+  // 1051. TODAY read 895 in both, so the PAST was identical and only the forward
+  // plan was doubled: the 7 doses counted once as drafts still sitting in
+  // _tcp.manualLog and again as the stored protocol rows they had just become.
+  //
+  // A restart cured it because a cold start re-reads the history and rebuilds
+  // manualLog from the record, retiring drafts the record has caught up with. The
+  // save path skipped both, leaving the drafts alive beside their own output.
+  // _tcFetchHistory(true) is FORCED — it returns early on a warm cache, which is
+  // the state it is always in here.
+  if(typeof _tcFetchHistory==='function')await _tcFetchHistory(true);
   if(typeof updateWEEKLY==='function')updateWEEKLY();
   if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
+  if(typeof _tcLoadLogFromStack==='function')_tcLoadLogFromStack();
   if(typeof buildWeekStrip==='function')buildWeekStrip();
   if(typeof buildToday==='function')buildToday();
   if(typeof buildSchedule==='function')buildSchedule();
