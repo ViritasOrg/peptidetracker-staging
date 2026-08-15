@@ -3000,6 +3000,87 @@ console.log('\n── Hidden doses: counted, explained, never deleted ───�
   G._stacksLoaded = _hdSave.sl; G._injectionsCache = _hdSave.c; G._injHidden = _hdSave.hid;
 }
 
+// ── Rebuild schedule: refills a gap without disturbing the record ────────────
+// Regeneration only ever ran forward from midnight today, so a day that lost its doses
+// stayed lost — nothing could reach backwards. This drives the real rebuildScheduleFrom()
+// against a stub implementing the ACTUAL POST /injections/batch semantics from the
+// backend's routers/injections.py: for each (cycle_id, compound_id) it drops this user's
+// UNLOGGED rows from from_date onward, keeps logged ones, and refuses to re-insert into a
+// (date, time_of_day) slot that still holds a logged row. The whole feature rests on that
+// contract, so the stub encodes it rather than assuming a friendlier one.
+console.log('\n── Rebuild schedule from a date ───────────────────────────');
+{
+  const _rbSave = {f:G.fetch, doc:G.document, us:G._userStacks, ai:G._activeStackIndices,
+                   sl:G._stacksLoaded, c:G._injectionsCache, cf:G.confirm};
+  const _d0 = new Date();
+  const _bk = (n) => { const t = new Date(_d0.getFullYear(), _d0.getMonth(), _d0.getDate()-n, 12,0,0,0);
+    return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+  const HOLE = _bk(1), TICKED = _bk(2);
+
+  G._userStacks = [{id:'P2', name:'Protocol 2', cycle_start:_bk(50), cycle_length:44,
+    peptides:[{id:'glow', name:'Glow', dose_am:'2', unit_am:'mg', times:['AM'],
+               days:[0,1,2,3,4,5,6], active:true}], trt:{}, enhanced:{}}];
+  G._activeStackIndices = [0]; G._stacksLoaded = true; G.confirm = () => true;
+
+  let DB = [];
+  for (let i = -50; i <= 60; i++) {
+    const d = _bk(-i);
+    if (d === HOLE) continue;                       // the gap
+    DB.push({id:'x'+i, cycle_id:'P2', compound_id:'glow', tier:'peptide', date:d,
+             dose:'2', unit:'mg', time_of_day:'AM', active:true, logged:(d === TICKED)});
+  }
+  const hadHole = DB.filter(e => e.date === HOLE).length === 0;
+  const tickedBefore = DB.filter(e => e.logged).length;
+
+  G.fetch = async (url, opt) => {
+    const u = String(url);
+    if (opt && opt.method === 'POST' && u.includes('/injections/batch')) {
+      const p = JSON.parse(opt.body);
+      DB = DB.filter(e => !(e.cycle_id === p.cycle_id && e.compound_id === p.compound_id
+                            && (e.date||'') >= p.from_date && !e.logged));
+      const kept = new Set(DB.filter(e => e.cycle_id === p.cycle_id && e.compound_id === p.compound_id
+                            && (e.date||'') >= p.from_date && e.logged).map(e => e.date+'|'+e.time_of_day));
+      for (const en of p.entries) {
+        if (kept.has(en.date+'|'+en.time_of_day)) continue;
+        DB.push(Object.assign({}, en, {id:'n'+DB.length}));
+      }
+      return {ok:true, status:200, json:async()=>({ok:true})};
+    }
+    return {ok:true, status:200, json:async()=>u.includes('/injections') ? DB : []};
+  };
+
+  const _origDoc = G.document;            // capture before swapping, or the stub recurses
+  const _vals = {'s-rebuild-from': _bk(14)};
+  const _stub = Object.create(_origDoc);
+  _stub.getElementById = (id) => {
+    const e = _origDoc.getElementById(id);
+    if (id in _vals) return new Proxy(e, {get:(t,k)=> k==='value' ? _vals[id] : t[k], set:()=>true});
+    return e;
+  };
+  G.document = _stub;
+
+  check('the gap exists before the rebuild', hadHole);
+  await G.rebuildScheduleFrom();
+  check('rebuilding refills the missing day',
+    DB.filter(e => e.date === HOLE).length === 1, `${DB.filter(e=>e.date===HOLE).length} row(s)`);
+  check('  …without un-ticking or dropping a recorded dose',
+    DB.filter(e => e.logged).length === tickedBefore &&
+    DB.some(e => e.date === TICKED && e.logged), `ticked ${DB.filter(e=>e.logged).length}/${tickedBefore}`);
+  check('  …and without duplicating any slot', (() => {
+    const c = {}; DB.forEach(e => { const k = e.date+'|'+e.time_of_day; c[k] = (c[k]||0)+1; });
+    return !Object.values(c).some(n => n > 1);
+  })());
+  // It must refuse rather than guess when there is nothing to rebuild.
+  G._activeStackIndices = [];
+  const _before = DB.length;
+  await G.rebuildScheduleFrom();
+  check('no active protocol rebuilds nothing', DB.length === _before);
+
+  G.fetch = _rbSave.f; G.document = _rbSave.doc; G._userStacks = _rbSave.us;
+  G._activeStackIndices = _rbSave.ai; G._stacksLoaded = _rbSave.sl;
+  G._injectionsCache = _rbSave.c; G.confirm = _rbSave.cf;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
