@@ -1022,6 +1022,69 @@ function _tcBlankSimplePlan(){
   return {compId:'', doseMg:'', cadenceN:0, cadenceUnit:'week', cadenceDays:0, startDate:''};
 }
 
+// Write a bound plan's OWN injections, directly.
+//
+// ⚠️ THE STACK GENERATOR CANNOT DO THIS. Since 2026-08-14 _genInjBatches suppresses
+// testosterone in both tiers because T-Calc owns it — _isTestosteroneComp is
+// `tier==='trt'` for the whole TRT tier. _tcWritePlanToStack nevertheless still deleted
+// the ester's future rows and then called generateAndPushInjections to recreate them,
+// and the generator returns nothing for testosterone. Measured on a real protocol:
+//   DELETEs issued           : cycle_id=P2&compound_id=nebido&from_date=<today>…
+//   batches POSTed           : []
+//   testosterone rows created: 0
+// So saving a plan DELETED the schedule and created nothing to replace it. Reported
+// 2026-08-15 as "no Nebido injections scheduled" on a protocol whose T-Calc card read
+// "Injections are saved into Protocol 2" — the configuration was saved, the injections
+// were destroyed.
+//
+// Expansion mirrors _tcSimplePlanInjections exactly: calendar-day stepping (never
+// milliseconds — that is DST-unsafe and drops or doubles a dose at each transition),
+// the cumulative offset rounded so fractional cadences land on whole days, and the same
+// horizon and count caps. Bounded by the stack's own cycle end when it has one, and it
+// never writes before `fromDate`, because the delete above only clears from there.
+async function _tcPostPlanInjections(st, cyc, c, plan, fromDate){
+  var h = (typeof authHeaders === 'function') ? authHeaders({'Content-Type':'application/json'}) : null;
+  if (!h || !cyc || !c || !c.id) return 0;
+  var cad   = parseDec(plan && plan.cadenceDays) || 0;
+  var dose  = parseDec(plan && plan.doseMg)      || 0;
+  var start = parseLocalDate((plan && plan.startDate) || '');
+  if (!(cad > 0) || !(dose > 0) || !start || isNaN(start.getTime())) return 0;
+
+  var f0  = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate(), 12, 0, 0, 0);
+  var end = new Date(Math.max(f0.getTime(), start.getTime()) + _TC_SIMPLE_HORIZON_DAYS * 86400000);
+  // A protocol that ends stops scheduling — the same bound the generator applies.
+  if (st && st.cycle_start && st.cycle_length > 0){
+    var cs = parseLocalDate(st.cycle_start);
+    if (cs && !isNaN(cs.getTime())){
+      var ce = new Date(cs.getTime() + st.cycle_length * 7 * 86400000);
+      if (ce < end) end = ce;
+    }
+  }
+  var cd   = _tcCompInfo(c.id);
+  var meta = (typeof _injPkMeta === 'function') ? _injPkMeta('trt', c.id)
+                                                : {ester:null, half_life_days:null};
+  var entries = [];
+  for (var i = 0; i < _TC_SIMPLE_MAX_INJ; i++){
+    var t = new Date(start.getFullYear(), start.getMonth(),
+                     start.getDate() + Math.round(i * cad), 12, 0, 0, 0);
+    if (t > end) break;
+    if (t < f0) continue;                       // the past belongs to the record, not the plan
+    entries.push({cycle_id: cyc, date: dateKey(t), compound_id: c.id,
+                  compound_name: cd.name || c.id, tier: 'trt',
+                  dose: String(dose), unit: 'mg', dot: cd.dot || '#e8a020',
+                  time_of_day: null, active: true, logged: false, source: 'tcalc',
+                  ester: meta.ester, half_life_days: meta.half_life_days, route: null});
+  }
+  if (!entries.length) return 0;
+  try{
+    var r = await fetch(AGENT_URL + '/injections/batch', {method:'POST', headers:h,
+      body: JSON.stringify({cycle_id: cyc, compound_id: c.id,
+                            from_date: dateKey(f0), entries: entries})});
+    if (!r.ok){ _logHttp('tcPlanInj', r.status, '/injections/batch'); return 0; }
+  }catch(e){ _logErr('tcPlanInj', e); return 0; }
+  return entries.length;
+}
+
 // Push an edited plan into the bound stack's TRT compound, then regenerate that
 // stack's injections. This is the only write path for a bound plan — nothing is kept
 // in the profile for it, so the card can never show a schedule the stack does not have.
@@ -1060,7 +1123,11 @@ async function _tcWritePlanToStack(st, plan){
       try { await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(cyc)+'&compound_id='+encodeURIComponent(ids[i])+'&from_date='+td+'&unlogged_only=true', {method:'DELETE', headers:h}); } catch(_e){}
     }
   }
+  // The generator covers every OTHER tier of this stack. It cannot cover testosterone —
+  // it suppresses it — so the plan's own rows are written directly, right after the
+  // delete above that cleared them. Without this the save is a delete and nothing else.
   if (typeof generateAndPushInjections === 'function') await generateAndPushInjections(st, now);
+  if (h && cyc) await _tcPostPlanInjections(st, cyc, c, plan, now);
   if (typeof refreshInjectionsCache === 'function')    await refreshInjectionsCache();
   buildTCalc();
   if (typeof buildStackStore === 'function') buildStackStore();

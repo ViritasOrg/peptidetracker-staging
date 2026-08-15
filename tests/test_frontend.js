@@ -3223,6 +3223,72 @@ console.log('\n── T-Calc plan ids reach Today ──────────
   G._injectionsCache = _idSave.c; G._injHidden = _idSave.hid;
 }
 
+// ── Saving a T-Calc plan actually creates its injections ────────────────────
+// _tcWritePlanToStack deletes the ester's future rows and then rebuilt them by calling
+// generateAndPushInjections. Since 2026-08-14 _genInjBatches SUPPRESSES testosterone in
+// both tiers (_isTestosteroneComp is `tier==='trt'` for the whole TRT tier), so that
+// call returns nothing for testosterone and saving a plan was a delete followed by
+// silence. Reported as "no Nebido injections scheduled" on a protocol whose T-Calc card
+// read "Injections are saved into Protocol 2": the configuration saved, the injections
+// destroyed. The plan's rows are now written directly by _tcPostPlanInjections.
+console.log('\n── T-Calc: saving a plan writes its injections ────────────');
+{
+  const _spSave = {f:G.fetch, us:G._userStacks, ai:G._activeStackIndices, sl:G._stacksLoaded,
+                   c:G._injectionsCache, ssb:G.saveStacksToBackend};
+  const _n = new Date();
+  const _k = (d) => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const _bk = (x) => _k(new Date(_n.getFullYear(), _n.getMonth(), _n.getDate()-x, 12,0,0,0));
+  const TODAY = _k(_n);
+
+  const st = {id:'P2', name:'Protocol 2', cycle_start:_bk(50), cycle_length:44, peptides:[],
+    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'250', unit:'mg', freqVal:2, freqUnit:'days'}]},
+    enhanced:{}};
+  G._userStacks = [st]; G._activeStackIndices = [0]; G._stacksLoaded = true;
+  G.saveStacksToBackend = async () => {};
+
+  // The gap this closes, as data: the generator produces no testosterone for this stack.
+  const _gen = G._genInjBatches(st, 'P2', new Date(_n.getFullYear(), _n.getMonth(), _n.getDate(), 12,0,0,0));
+  check('the stack generator produces no testosterone rows',
+    !_gen.some(b => ['nebido','test_u'].includes(b.compound_id)));
+
+  const POSTED = [], DELETED = [];
+  G.fetch = async (url, opt) => {
+    const u = String(url);
+    if (opt && opt.method === 'DELETE') { DELETED.push(u); return {ok:true, status:200, json:async()=>({})}; }
+    if (opt && opt.method === 'POST' && u.includes('/injections/batch')) {
+      POSTED.push(JSON.parse(opt.body)); return {ok:true, status:200, json:async()=>({ok:true})};
+    }
+    return {ok:true, status:200, json:async()=>[]};
+  };
+  await G._tcWritePlanToStack(st, {compId:'nebido', doseMg:'250', cadenceN:2, cadenceUnit:'day',
+                                   cadenceDays:2, startDate:_bk(50)});
+  const testo = POSTED.filter(p => p.compound_id === 'nebido');
+  const rows  = testo.reduce((a,p) => a + (p.entries||[]).length, 0);
+  check('saving a plan writes the ester\'s injections', rows > 0, `${rows} rows`);
+  check('  …clearing the old ones first, so the save is not additive', DELETED.length > 0);
+  check('  …writing only from today onward, never over the record',
+    testo.every(p => (p.entries||[]).every(e => e.date >= TODAY)));
+  check('  …as PLANNED rows, not as administered ones',
+    testo.every(p => (p.entries||[]).every(e => e.logged === false && e.tier === 'trt')));
+  check('  …on the plan\'s own cadence', (() => {
+    if (!testo.length || !(testo[0].entries||[]).length) return false;   // fail, don't throw
+    const ds = testo[0].entries.map(e => e.date).slice(0,3);
+    if (ds.length < 3) return false;
+    const gap = (a,b) => Math.round((new Date(b+'T12:00:00') - new Date(a+'T12:00:00'))/86400000);
+    return gap(ds[0],ds[1]) === 2 && gap(ds[1],ds[2]) === 2;
+  })(), JSON.stringify((testo[0]&&testo[0].entries||[]).slice(0,3).map(e=>e.date)));
+  // A protocol that ends must not be scheduled past its end.
+  check('  …and never past the protocol\'s own cycle end', (() => {
+    const cs = new Date(_bk(50)+'T12:00:00');
+    const ce = new Date(cs.getTime() + 44*7*86400000);
+    return testo.every(p => (p.entries||[]).every(e => new Date(e.date+'T12:00:00') <= ce));
+  })());
+
+  G.fetch = _spSave.f; G._userStacks = _spSave.us; G._activeStackIndices = _spSave.ai;
+  G._stacksLoaded = _spSave.sl; G._injectionsCache = _spSave.c;
+  G.saveStacksToBackend = _spSave.ssb;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
