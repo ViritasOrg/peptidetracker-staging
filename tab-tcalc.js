@@ -1752,6 +1752,49 @@ function _tcCurveSnap(merged){
 // scale, the SHBG stack, or the calibration inputs — and a diff-only log stays empty and
 // says nothing. This records the state whether or not anything changed, including the
 // drawn peak, so two taps around the growth always bracket it.
+// Records what the chart just drew. Deliberately does NOT call _tcFreeTSeries again —
+// the caller has the series in hand, and re-deriving it would both cost a second full PK
+// pass per render and risk observing a different value than the one on screen.
+function _tcCurveMarkDrawn(tag, sorted, S){
+  try{
+    var peak = 0;
+    if (S && S.total){
+      for (var t = 0; t <= S.totalDays; t++){
+        var v = S.total[t] * (S.calFT_arr ? S.calFT_arr[t] : S.scale);
+        if (v > peak) peak = v;
+      }
+    }
+    var e = {
+      MARK:  tag,
+      t:     new Date().toTimeString().slice(0,8),
+      doses: sorted ? sorted.length : -1,
+      first: (sorted && sorted.length) ? sorted[0].date : null,
+      last:  (sorted && sorted.length) ? sorted[sorted.length-1].date : null,
+      peak:  Math.round(peak),
+      scale: S ? Number((S.scale||0).toFixed(4)) : null,
+      calFT: S ? Math.round(S.measuredFT||0) : null,
+      mode:  (typeof _tcPlannerMode==='function') ? _tcPlannerMode() : '?',
+      dirty: (typeof _tcPlanDirty==='function') ? !!_tcPlanDirty() : null,
+      draft: !!_tcPlanDraft,
+      hist:  (_tcHistory||[]).length,
+      mlog:  ((_tcp&&_tcp.manualLog)||[]).length,
+      cache: (typeof _tcProtocolInjections==='function') ? _tcProtocolInjections().length : -1,
+      simple:(typeof _tcSimplePlanInjections==='function') ? _tcSimplePlanInjections().length : -1,
+      gh:    (typeof _tcGhStack!=='undefined' && _tcGhStack) ? _tcGhStack.length : -1
+    };
+    // Collapse consecutive identical draws — a render can draw more than once and the
+    // interesting thing is the transition, not the repetition.
+    var prev = _tcCurveWatch[_tcCurveWatch.length-1];
+    if (prev && prev.doses===e.doses && prev.peak===e.peak && prev.last===e.last
+        && prev.mode===e.mode && prev.mlog===e.mlog && prev.cache===e.cache){
+      prev.n = (prev.n||1) + 1;   // seen again
+      return;
+    }
+    _tcCurveWatch.push(e);
+    if (_tcCurveWatch.length > 40) _tcCurveWatch.shift();
+  }catch(_e){}
+}
+
 var _tcMarkN = 0;
 function _tcCurveMark(tag){
   try{
@@ -3333,6 +3376,11 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
 
   var sorted = log.slice().sort(function(a, b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
   var _S = _tcFreeTSeries(sorted, { calFT: canvas._testCalFTHook, shbg: canvas._testShbgHook, start: canvas._testStartHook });
+  // AUTO-RECORD EVERY DRAW. Leaving the Levels tab and returning is enough to inflate
+  // the curve, so a capture that requires visiting Settings destroys the evidence on the
+  // way to recording it. This runs on the series the chart has just computed — no extra
+  // work, no extra render — so the log fills itself and Settings is only ever read.
+  _tcCurveMarkDrawn('draw', sorted, _S);
   var firstDate = _S.firstDate, totalDays = _S.totalDays, logDays = _S.logDays, total = _S.total, calFT = _S.calFT, scale = _S.scale,
       calFT_arr = _S.calFT_arr, _calFTlo = _S.calFTlo, _calFThi = _S.calFThi, unitLabel = _S.unitLabel,
       _mftNum = _S.measuredFT, _ghAnnot = _S.ghAnnot, _betaAnnot = _S.betaAnnot, _bfAnnot = _S.bfAnnot, _tier = _S.tier;
