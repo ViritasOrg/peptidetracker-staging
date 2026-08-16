@@ -1220,7 +1220,13 @@ async function refreshInjectionsCache(){
   // at all, which is why the _stacksNormalized guard that used to gate the delete is no
   // longer consulted here: with nothing destructive left there is nothing to gate.
   }catch(_e){_logErr('refreshInjCache',_e);}
-  finally{ _injCacheReady=true; }
+  finally{
+    _injCacheReady=true;
+    // The plasma curve waits for this cache (see _tcInputsReady) and nothing used to
+    // tell it when the cache arrived, so it either drew without it or never redrew.
+    try{ if(typeof buildTCalc==='function' && document.getElementById('tcalc-body')) buildTCalc(); }
+    catch(_e){ _logErr('refreshInjCache:tcalc',_e); }
+  }
 }
 // ── Stack conflict detection & safety modal ──────────────────────────────────
 var _pendingConflictData=null;
