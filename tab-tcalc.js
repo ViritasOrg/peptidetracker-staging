@@ -1707,6 +1707,83 @@ function _tcProtocolInjections(){
 // dose they actually took; a protocol entry is a plan for that day. Where both
 // describe the same compound on the same date they are the same injection, and
 // counting both would double it.
+// ── CURVE WATCH ──────────────────────────────────────────────────────────────
+// Diagnostic for a reported inflation that only exists in memory: the plasma curve
+// grows during a session (a plain chart-zoom is sometimes enough) and a reload puts it
+// back. _tcSetChartZoom only recomputes _tcCurveLog() and redraws — it changes no
+// state — so the curve's INPUTS must be moving underneath it. Five attempts to infer
+// which one failed; this records the answer instead.
+//
+// Every time _tcCurveLog()'s output differs from the previous call, the change is
+// logged with the state that could explain it: which planner is live, whether a plan
+// draft exists, and the sizes of the three sources. Reads nothing, writes nothing,
+// changes no behaviour — it observes the value that is already being returned.
+var _tcCurveWatch = [];
+var _tcCurveLastSig = null;
+function _tcCurveSnap(merged){
+  try{
+    var sig = merged.map(function(e){ return e.date+'|'+e.compId+'|'+(e.source||'?'); });
+    if (_tcCurveLastSig){
+      var prev = _tcCurveLastSig;
+      var add = sig.filter(function(x){ return prev.indexOf(x) < 0; });
+      var rem = prev.filter(function(x){ return sig.indexOf(x) < 0; });
+      if (add.length || rem.length){
+        _tcCurveWatch.push({
+          t:     new Date().toTimeString().slice(0,8),
+          n:     prev.length + '\u2192' + sig.length,
+          mode:  (typeof _tcPlannerMode==='function') ? _tcPlannerMode() : '?',
+          dirty: (typeof _tcPlanDirty==='function') ? !!_tcPlanDirty() : null,
+          draft: !!_tcPlanDraft,
+          hist:  (_tcHistory||[]).length,
+          mlog:  ((_tcp&&_tcp.manualLog)||[]).length,
+          cache: (typeof _tcProtocolInjections==='function') ? _tcProtocolInjections().length : -1,
+          simple:(typeof _tcSimplePlanInjections==='function') ? _tcSimplePlanInjections().length : -1,
+          added: add.slice(0,6), removed: rem.slice(0,6)
+        });
+        if (_tcCurveWatch.length > 25) _tcCurveWatch.shift();
+      }
+    }
+    _tcCurveLastSig = sig;
+  }catch(_e){}
+}
+
+// Rendered into Settings so the capture is readable on a phone, where there is no
+// console. Selectable text plus a copy button; nothing is sent anywhere.
+function buildCurveWatchCard(){
+  var card = document.getElementById('s-tcwatch-card');
+  if (!card) return;
+  var body = _tcCurveWatch.length
+    ? _esc(JSON.stringify(_tcCurveWatch, null, 1))
+    : 'No change recorded yet. Open Levels \u2192 Testosterone, tap a zoom button or tick a dose, then come back.';
+  card.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'
+    + sSecHdr('tcwatch','Curve Watch') + sSecBody('tcwatch')
+    + '<div style="padding:14px 16px;">'
+    + '<div style="font-size:12px;color:var(--muted2);margin-bottom:10px;line-height:1.5">'
+    + 'Records every time the plasma curve\u2019s contents change, with the state that could explain it. '
+    + 'Diagnostic only \u2014 it changes nothing.</div>'
+    + '<div style="display:flex;gap:8px;margin-bottom:10px">'
+    + '<button onclick="_tcCurveWatch.length=0;_tcCurveLastSig=null;buildCurveWatchCard();" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Clear</button>'
+    + '<button onclick="_tcCopyCurveWatch(this)" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Copy</button>'
+    + '<button onclick="buildCurveWatchCard()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Refresh</button>'
+    + '</div>'
+    + '<pre id="tc-watch-out" style="white-space:pre-wrap;word-break:break-all;user-select:text;-webkit-user-select:text;background:#0a0a0a;border:1px solid #2a2a2a;border-radius:8px;padding:10px;font-size:10px;line-height:1.45;color:#ccc;max-height:340px;overflow:auto;margin:0">'
+    + body + '</pre></div></div></div>';
+}
+function _tcCopyCurveWatch(btn){
+  var txt = JSON.stringify(_tcCurveWatch);
+  try{
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(function(){ if(btn){btn.textContent='Copied';setTimeout(function(){btn.textContent='Copy';},1500);} });
+      return;
+    }
+  }catch(_e){}
+  var el = document.getElementById('tc-watch-out');
+  if (el && window.getSelection){
+    var r = document.createRange(); r.selectNodeContents(el);
+    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    if (btn){ btn.textContent = 'Selected \u2014 long-press to copy'; }
+  }
+}
 function _tcCurveLog(){
   // The greyed-out planner does not contribute. Its data is untouched and comes
   // straight back when the switch is flipped, but a planner that is visibly
@@ -1788,6 +1865,7 @@ function _tcCurveLog(){
     return !(planFrom && e.date >= planFrom);     // the plan owns this day
   }));
   merged.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
+  _tcCurveSnap(merged);
   return merged;
 }
 
