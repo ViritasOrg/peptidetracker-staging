@@ -2173,7 +2173,18 @@ if (typeof G._tcFreeTSeries === 'function') {
   const _anSpread = (label, tp, bw) => {
     G._tcp = Object.assign({}, _anSave.tp||{}, tp);
     G._tcBwEntries = bw; G._tcGhStack = [];
-    const v = ['2026-08-13','2026-08-26','2026-09-30','2026-12-31']
+    // HORIZONS MUST BE RELATIVE TO TODAY, NOT HARDCODED.
+    // The assertion is that extending a plan FURTHER AHEAD cannot move today's value.
+    // These were fixed dates, and on 2026-08-16 the shortest ('2026-08-13') fell into
+    // the past: its last dose landed three days before today, so that series had stopped
+    // dosing while the others were still running. It then read 869.5 against 888.0 —
+    // correct pharmacology (a plan that ended really does give a lower level) measuring
+    // something the test was never written to measure. All seven _anSpread cases broke
+    // together the day it expired, and the three horizons still covering today agreed to
+    // the digit throughout, which is the invariant holding. Anchored to NOW it cannot
+    // rot again.
+    const _anFw = (n) => new Date(Date.now() + n*86400000).toISOString().slice(0,10);
+    const v = [_anFw(7), _anFw(30), _anFw(90), _anFw(180)]
       .map(e => _anToday(_anT.concat(_anEod(e))));
     const spread = Math.max(...v) - Math.min(...v);
     check('today is unchanged by the plan ahead — ' + label,
@@ -2195,7 +2206,8 @@ if (typeof G._tcFreeTSeries === 'function') {
   // The unit NEVER changes (CLAUDE.md): confidence degrades, pmol/L does not.
   G._tcp = Object.assign({}, _anSave.tp||{}, _anBase);
   G._tcBwEntries = [{date:'2027-09-01',free_t:217,shbg:45,total_t:17}]; G._tcGhStack = [];
-  const _anFut = G._tcFreeTSeries(_anT.concat(_anEod('2026-08-26')).sort((a,b)=>a.date<b.date?-1:1), {});
+  const _anFutEnd = new Date(Date.now() + 30*86400000).toISOString().slice(0,10);   // relative, for the same reason
+  const _anFut = G._tcFreeTSeries(_anT.concat(_anEod(_anFutEnd)).sort((a,b)=>a.date<b.date?-1:1), {});
   check('a future-dated draw does not calibrate the curve', _anFut.measuredFT !== 217);
   check('  …and the curve is still drawn in pmol/L', _anFut.unitLabel === 'pmol/L');
 
