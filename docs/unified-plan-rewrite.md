@@ -11,12 +11,18 @@ Scope: multi-day. Ships in phases, each independently mergeable and revertible.
 `Plan` becomes the only place a dose is ever scheduled, and it holds three tabs:
 **Peptides**, **Compounds**, **Supplements**. The `TRT` and `Enhanced` tiers merge into
 a single **Compounds** tier — testosterone, nandrolone, GH, orals and everything else sit
-together, all belonging to a Protocol. T‑Calc's series planner (the "old compound
-planner": add series, edit series, delete series) moves into Plan and becomes the
-scheduler for **every** compound and peptide, not just testosterone. `Levels →
-Testosterone` keeps the plasma curve and the exposure card, and `T‑History` keeps the
-stored history — both become **read‑only views**. After this, nothing outside Plan writes
-an injection.
+together, all belonging to a Protocol.
+
+**T‑Calc's scheduling is deleted, not relocated.** Scheduling returns to the compound UI
+that the protocol editor already uses — pick a compound, set a dose, a frequency or a set
+of weekdays, a start date and an optional end date. That is the interface users
+understand, and it already exists and works for peptides and for every non‑testosterone
+compound. Testosterone simply rejoins it.
+
+`Levels → Testosterone` keeps the plasma curve and the exposure card, and `T‑History`
+keeps the stored history — both become **read‑only views** of what the protocol has
+scheduled and what has been ticked. After this, nothing outside Plan writes an
+injection.
 
 ---
 
@@ -105,6 +111,10 @@ That leaves Plan at exactly three tabs, as briefed.
 
 ### 3.2 One scheduler
 
+The scheduler is the one the app already has: `_genInjBatches` /
+`generateAndPushInjections`, with the testosterone suppression removed so it emits every
+tier again. Nothing new is built here — a capability is *restored*.
+
 A single module owns turning *protocol configuration* into *stored injections*, for
 every tier:
 
@@ -127,13 +137,54 @@ Rules, non‑negotiable:
 
 ### 3.3 What T‑Calc keeps and loses
 
-| Keeps | Loses |
-|-------|-------|
+| Keeps | Loses — **deleted, not moved** |
+|-------|--------------------------------|
 | `_tcFreeTSeries` — the PK/free‑T model | Add series / Edit series / Delete series |
 | The plasma curve draw + zoom/pan | Simple planner (ester/dose/cadence/start) |
 | Exposure card, evidence citations | "Save to protocol", "Push to schedule" |
 | Bloodwork calibration + SHBG model | `_tcp.manualLog` as an editable list |
-| `Update saved history` → T‑History | `_tcSyncLogToBackend`, `_tcPostPlanInjections` |
+| `Update saved history` → T‑History | every write path listed in §3.4 |
+
+### 3.4 What gets deleted
+
+All of these exist only to schedule from T‑Calc and go with it:
+
+```
+_tcSyncLogToBackend      _tcPostPlanInjections     _tcCreatePlannedInjections
+_tcWritePlanToStack      _tcSavePlanToStack        _tcSaveEditSeries
+_tcRemoveSeries          _tcConfirmAddSheet        _tcPushLogToSchedule
+_tcp.manualLog           _tcp.simplePlan           _tcPlanDraft / _tcPlanDirty
+_tcSimplePlanInjections  _tcProtocolInjections     _tcLoadLogFromStack
+```
+
+Two judgement calls, flagged rather than assumed:
+
+- **`_tcCreateLoggedInjections`** writes *past* doses the user says they took — the
+  mid‑cycle onboarding path. That is record entry, not planning, so it should survive.
+  Decide where it lives: a "log a past dose" action in Today, or in the Compounds tab.
+- **`_tcalcOwnsTestoNote`** and the "testosterone not scheduled" banner both exist to
+  explain the split ownership. When the split goes, they go.
+
+### 3.5 This reverses the 2026‑08‑14 rule
+
+CLAUDE.md currently carries **"T‑CALC OWNS TESTOSTERONE — IT IS THE ONLY SCHEDULER"**.
+That rule is superseded by this rewrite and its section must be replaced, not quietly
+left to rot — a stale rule in CLAUDE.md is worse than none, because it will be obeyed.
+
+The rule was not wrong about the problem it solved: before it, the TRT and Enhanced tiers
+each generated their own testosterone and a protocol held **27 `enhanced/test_u` rows
+beside 23 `trt/nebido` rows** for the same molecule. It was wrong about the remedy — it
+moved ownership to a *third* scheduler instead of removing the duplication, and the
+duplication was only ever possible because two tiers described one molecule.
+
+**Merging the tiers removes the cause.** With one Compounds tier and one id space there is
+no second generator to contend with, so testosterone can be scheduled by the same
+generator as everything else. The 2026‑08‑07 "one stream per molecule" principle is
+preserved and is now structural rather than enforced by a suppression rule.
+
+`_isTestosteroneComp` is deleted along with the suppression it gates. What replaces it is
+the catalogue's own `isTestosterone` flag (§4.1), used to decide what feeds the **PK
+model** — never to decide what gets scheduled.
 
 The curve's input collapses from four sources to one:
 
@@ -186,6 +237,33 @@ The catalogue merge is a **backend change** (`routers/compounds.py`,
 `routers/trt_catalog.py`) and per CLAUDE.md all data lives there — the frontend must not
 hardcode the merged list.
 
+### 4.4 A compound may appear more than once in a protocol
+
+CLAUDE.md, **"NEVER MERGE OR CONSOLIDATE SERIES CARDS"** (Henrik, 2026‑08‑14): *"never
+merge cards, this is how I experiment with different schedules and doses, currently I get
+10 injections out of a 4ml vial of Nebido."* T‑Calc's series cards disappear with its
+planner, but that requirement moves with the capability — the Compounds tab must express
+**the same compound, twice, back to back, at different doses or cadences**, each editable
+on its own and each its own block on the curve. A protocol editor that can only hold one
+row per compound has deleted the experiment surface, and Phase 4 is not done.
+
+This is the one place the rewrite needs more than the existing protocol editor gives,
+and it collides with the backend:
+
+- `POST /injections/batch` keys on **`(cycle_id, compound_id)`** — a second run of the
+  same compound in the same protocol would prune the first one's unlogged rows.
+- So either the batch key gains a third component (a per‑entry id), or the scheduler
+  submits all runs of a compound in **one** batch with a single `from_date`. The second
+  is a frontend‑only change and is the recommendation; take it unless Phase 3 finds a
+  reason not to.
+- Either way `from_date` must be the earliest unlogged date across all of that
+  compound's runs, or an earlier run gets silently truncated when a later one is edited
+  — the 2026‑08‑14 vial‑count bug in a new costume.
+
+Regardless of the mechanism, **never coalesce two adjacent runs**, in the scheduler, in
+the migration, or in the rendering. If the migration finds runs that look accidentally
+split, report them and let Henrik decide (§5 dry‑run).
+
 ---
 
 ## 5. Migration
@@ -225,10 +303,10 @@ Each phase is a mergeable PR that leaves the app working.
 | 2 | Read‑both/write‑one | every id comparison canonicalised; dry‑run report | low |
 | 3 | Scheduler extraction | one module owns all injection writes; existing UI calls into it | **high** |
 | 4 | Plan: Compounds tab | TRT + Enhanced editors merged into one | medium |
-| 5 | Plan: series planner | T‑Calc's add/edit/delete series moved in, generalised to all compounds | **high** |
-| 6 | T‑Calc read‑only | planner UI removed; curve reads stored rows only | medium |
+| 5 | Un‑suppress the generator | `_genInjBatches` emits testosterone again; CLAUDE.md rule replaced | **high** |
+| 6 | T‑Calc read‑only | every write path in §3.4 deleted; curve reads stored rows only | medium |
 | 7 | Migration | backfill tiers and ids, after dry‑run approval | **high** |
-| 8 | Cleanup | `manualLog`, simple plan, `_TC_TESTO_ALIAS` runtime use, dedup removed | low |
+| 8 | Cleanup | `_TC_TESTO_ALIAS` runtime use and the curve's dedup removed | low |
 
 Phases 3 and 5 are where this can go wrong. Both touch the code that writes the user's
 record; both need the full behavioural test set below green before merge.
@@ -248,6 +326,8 @@ tests (driving the real functions against a stub backend, not source greps):
   other modules for `method:'POST'|'DELETE'` against `/injections`.
 - The curve never draws from partial inputs (`_tcInputsReady`).
 - A protocol with a compound configured but nothing scheduled says so.
+- Two runs of the same compound in one protocol both survive a save of either one, keep
+  their own dose counts, and are never merged (§4.4).
 - Migration dry‑run reports exactly what the backfill would change, and changes nothing.
 
 Carry over the existing regression blocks from 2026‑08‑15/16 — the tick/untick history
@@ -259,9 +339,8 @@ Those encode bugs that cost a day; they must survive the restructure.
 ## 8. Open questions for Henrik
 
 1. **Id space** — keep `nebido`/`enanthate` (PK‑aligned, recommended) or `test_u`/`test_e`?
-2. **Do peptides get series scheduling too?** The brief says the planner schedules "all
-   compounds and peptides". Peptides today use a weekday/interval config, not series.
-   Both, or convert peptides to series as well?
+2. **Where does "log a past dose" live?** `_tcCreateLoggedInjections` is the only
+   surviving record‑entry path from T‑Calc (§3.4). Today, or the Compounds tab?
 3. **Migration timing** — backfill everything in one action, or leave legacy rows readable
    and only write new ones canonically?
 4. **`Push to Prod`** — this is a multi‑day change on staging. Promote per phase, or hold

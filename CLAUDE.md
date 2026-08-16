@@ -123,64 +123,57 @@ is the vial no longer adding up. That is what made the `_tcSaveEditSeries` bug o
 same date (past-dated doses discarded on every save, 10 requested → 8 written) worth
 the regression matrix now guarding every creation permutation.
 
-## ⚠️ T-CALC OWNS TESTOSTERONE — IT IS THE ONLY SCHEDULER ⚠️
-Henrik, 2026-08-14: *"I want T-calc to own all testosterone injections, in stack wizard
-TRT and Enhanced should use T-calc. I asked for this before but you never built it. The
-only way to schedule testo must be using t-calc."*
+**This rule survives the 2026-08-16 rewrite.** T-Calc's series cards go away with its
+planner, but the requirement moves with the capability: the compound UI must let the
+same compound appear more than once in a protocol, back to back at different doses and
+cadences, each editable and each its own block on the curve. A rewrite that can only
+express "one compound, one dose, one cadence per protocol" has removed the experiment
+surface, and is not done. See `docs/unified-plan-rewrite.md`.
 
-**`_genInjBatches` never emits a testosterone injection.** Not from the TRT tier, not
-from the Enhanced tier, not under any condition. T-Calc writes them, and nothing else
-does. The predicate is `_isTestosteroneComp(tier, c)`:
-- **Enhanced** — matched on the compound NAME, because the enhanced catalogue keys
-  esters under its own ids (`test_u` / `test_e` / …).
-- **TRT** — matched on the TIER, because every entry in `TRT_CAT` is a testosterone
-  ester and the brand names do **not** all contain the word (*Nebido*, *Testoviron
-  Depot*, *Sustanon 250*). The TRT tier is the testosterone tier; nothing else is in it.
+## ⚠️ SUPERSEDED 2026-08-16: T-CALC NO LONGER SCHEDULES ANYTHING ⚠️
+Henrik, 2026-08-16: *"we are dropping the T-calc style scheduling and returning to the
+compound UI that is much easier to understand for a user. The visualisation of Free T
+will still be avail under Levels, but we wont keep the planning from t-calc at all."*
 
-**This SUPERSEDES the 2026-08-07 "one testosterone stream per stack — the TRT tier
-wins" rule.** That rule was right that a molecule gets one stream and wrong about who
-owns it: it stopped the two *tiers* doubling each other while T-Calc went on scheduling
-a third of its own. Henrik's Protocol 2 ended up holding **27 `enhanced/test_u` rows
-beside 23 `trt/nebido` rows** for the same testosterone. Do not restore tier-versus-tier
-precedence — there is no contest left to arbitrate.
+**The 2026-08-14 rule "T-Calc owns testosterone — it is the only scheduler" is dead.**
+Do not obey it, do not restore it, do not cite it as precedent. Its text is gone from
+this file; its vocabulary is still in the code (`_isTestosteroneComp`,
+`_tcalcOwnsTestoNote`, `_injSuppressed.reason==='tcalc'`) and is being removed. The
+replacement is specified in `docs/unified-plan-rewrite.md` — read that before touching
+any scheduling code.
 
-**Nothing is deleted, edited or hidden.**
-- A testosterone compound configured in either tier **stays in the stack** and keeps its
-  settings. It records what the protocol runs; T-Calc records when it goes in.
-- It renders with a **"Scheduled in T-Calc"** note that deep-links to the tab —
-  `_tcalcOwnsTestoNote()` in the TRT editor, wizard and read-only view;
-  `_enhDormantNoteHtml()` in the Enhanced editor and wizard. A row that stops
-  generating with no explanation is the bug, not the fix. Suppressed compounds are also
-  recorded in `_injSuppressed` with `reason:'tcalc'`.
-- **Every injection already stored stays exactly as it is.** The injection log is the
-  record of what was injected (see above); this changes only what is generated from
-  here on, and deletes are global and are Henrik's call.
+**What replaces it:**
+- **One scheduler: `_genInjBatches` / `generateAndPushInjections`.** The testosterone
+  suppression inside it is removed. Every compound in a protocol generates its own
+  injections through the same path — peptides, androgens, HGH, ancillaries alike.
+- **T-Calc keeps the curve, loses the planner.** Under Levels it renders the free-T
+  curve and the injection history. It no longer writes, edits or deletes any injection.
+  `docs/unified-plan-rewrite.md` §3.4 lists every function being deleted.
+- **Planning lives only in the Plan tabs** (Peptides / Compounds / Supplements). TRT and
+  Enhanced merge into one Compounds tier — which is what removes the original cause.
+  The 2026-08-14 rule existed because two tiers were double-scheduling the same
+  molecule; with one tier there is no second stream to arbitrate, and no reason to take
+  the scheduler away from the UI the user actually understands.
 
-**Readers select on what a row IS, never on which cycle it was filed under.**
-`_blTcalcTestosterone` (Blood Levels) and `_tcalcTrtSummary` (the "Planned in T-Calc"
-card) both required `cycle_id === 'tcalc'` or `'tcalc:<id>'` — the namespace T-Calc
-wrote *before* "the stack is the container" moved it onto the stack's own cycle id. Both
-therefore excluded exactly the plans they exist to find, and it went unnoticed only
-because the stack config was being derived as a second source. Both now use
-`_tcIsTestoRow(tier, compound_id)`, the same predicate `_tcFetchHistory` uses.
+**Still true, and not superseded by any of the above:**
+- **One stream per molecule.** Whatever the UI looks like, a given testosterone must be
+  generated by exactly one thing. The 27 `enhanced/test_u` rows sitting beside 23
+  `trt/nebido` rows in Protocol 2 is the failure this guards against.
+- **Readers select on what a row IS, never on which cycle it was filed under.**
+  `_blTcalcTestosterone` and `_tcalcTrtSummary` were broken for weeks because they
+  matched `cycle_id === 'tcalc'`, a namespace that had already moved. Match on
+  tier/compound identity via `_tcIsTestoRow`, and compare compound ids canonically
+  (`_tcCanonCompId`) — the two catalogues key the same ester under different ids
+  (`test_u` vs `nebido`), which alone caused three separate bugs.
+- **Nothing is deleted, edited or hidden as a side effect.** Every injection already
+  stored stays exactly as it is. Deletes are global and are Henrik's call.
+- **A row that stops generating with no explanation is the bug, not the fix.** If
+  suppression is ever reintroduced anywhere, it must be visible in the UI.
 
-**The free-T preview curve takes testosterone from T-Calc alone.**
-`_blTestosteroneLog` no longer derives a schedule from stack config. Deriving one would
-plot a stream nothing injects, and double it against the T-Calc plan — the very failure
-the one-stream rule always existed to prevent. Only testosterone moved; every other
-compound still comes from the stacks, in `_blCompoundLines`.
-
-**The wizard lands on T-Calc for any TRT protocol**, including the "Advanced:
-multi-compound config" path. Skipping the hand-off for an inline configuration was
-correct while that config generated its own injections; now it leaves a dead end —
-settings saved, nothing scheduled, no route to the only tab that can schedule it. A
-classic configuration still wins over a half-filled planner (`_trtInline` guards the
-plan commit, not the navigation).
-
-Tests assert all of it at the OUTPUT level — that `_genInjBatches` yields zero rows for
-every ester in `TRT_CAT` and for enhanced testosterone, that peptides, HGH and
-nandrolone still generate, and that stack TRT config contributes no doses to the free-T
-log. They fail on the pre-fix source; verified before merge.
+**Migration status:** the rewrite takes days and lands in phases (see
+`docs/unified-plan-rewrite.md` §6). Until the phase that deletes it, T-Calc's planner
+code still exists on disk. Do not extend it, do not fix its scheduling bugs by adding
+features to it, and do not write new callers of it.
 
 ## ⚠️ THE STACK IS THE CONTAINER — NO INJECTIONS OUTSIDE ONE ⚠️
 Henrik, 2026-08-06: *"T-calc should be used in the stack wizard, and testosterone
