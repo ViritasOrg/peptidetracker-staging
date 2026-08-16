@@ -3369,6 +3369,29 @@ console.log('\n── Cycle header + enhanced testosterone identity ────
   G._injCacheReady = _hxSave.cr; G._syncPending = _hxSave.sp; G._injHidden = _hxSave.hid;
 }
 
+// ── Editing a series re-reads the injection cache ────────────────────────────
+// _tcSaveEditSeries synced the record and refetched the history, but never refreshed
+// _injectionsCache — and the curve also draws on that, via _tcProtocolInjections. So
+// shortening a series removed the doses from the record and left them in the cache, and
+// the curve kept drawing them: a Nebido run cut to 16 Aug still ran to October, looking
+// like the edit had been ignored. _tcConfirmAddSheet had always done this; the edit path
+// never did. Order matters — the cache must be refreshed BEFORE _tcLoadLogFromStack,
+// which reads it to rebuild manualLog.
+console.log('\n── T-Calc: an edit re-reads the cache ─────────────────────');
+{
+  const _esSrc = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+  const _i = _esSrc.indexOf('async function _tcSaveEditSeries()');
+  const _body = _esSrc.slice(_i, _i + 6000);
+  check('the edit path exists', _i > 0);
+  check('editing a series refreshes the injection cache, not just the history',
+    /refreshInjectionsCache/.test(_body));
+  check('  …in the order sync → history → cache → rebuild',
+    /_tcSyncLogToBackend\(\)[\s\S]*?_tcFetchHistory\(true\)[\s\S]*?refreshInjectionsCache[\s\S]*?_tcLoadLogFromStack\(\)/.test(_body));
+  // The delete path shares the hazard and already got this right — keep it that way.
+  const _d = _esSrc.indexOf('async function _tcRemoveSeries(');
+  check('  …and deleting a series does the same', /refreshInjectionsCache/.test(_esSrc.slice(_d, _d + 3000)));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });

@@ -2702,6 +2702,16 @@ async function _tcSaveEditSeries() {
   // the edit away and then wrote the pre-edit state back, so nothing ever saved.
   await _tcSyncLogToBackend();
   await _tcFetchHistory(true);
+  // AND RE-READ THE INJECTION CACHE. The sync above cleans the RECORD, but the curve
+  // also draws on _injectionsCache via _tcProtocolInjections, and nothing here refreshed
+  // it — so an edit that shortened a series left the removed doses in the cache and the
+  // curve kept drawing them. Reported 2026-08-16: shortening a Nebido run to 16 Aug left
+  // the curve running to October, apparently ignoring the edit. _tcConfirmAddSheet has
+  // always done this; the edit path simply never did.
+  //
+  // Order matters: history, then cache, then _tcLoadLogFromStack — which reads the cache
+  // for this stack's future rows and would otherwise rebuild manualLog from stale data.
+  if (typeof refreshInjectionsCache === 'function') await refreshInjectionsCache();
   _tcLoadLogFromStack();
   buildTCalc();
 }
