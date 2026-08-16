@@ -822,6 +822,19 @@ function _enhDosePerInjection(c){
 // vs the backend catalogue's own id), so the id says nothing about what it is. This is
 // the same predicate tab-blood.js uses to route testosterone into the free-T line.
 function _isEnhTestosterone(c){
+  // IDENTITY FIRST, NAME ONLY AS A FALLBACK.
+  // This matched solely on the name containing "testosterone". _TC_TESTO_ALIAS is the
+  // list of enhanced-catalogue ester ids T-Calc already recognises (test_u/test_e/
+  // test_c/test_p/sustanon), and it is the same list the PK model and the curve key on,
+  // so it — not a substring — is what "is this testosterone" means. A renamed catalogue
+  // entry, or an ester whose brand name omits the word (the comment below already notes
+  // Nebido, Testoviron Depot and Sustanon 250 as exactly that), would otherwise generate
+  // its own injection stream AND stay invisible to the plasma curve: two streams for one
+  // molecule, which is the failure the T-Calc ownership rule exists to prevent.
+  // The name check is kept beneath it so nothing currently detected stops being detected.
+  var _id=String((c&&c.id)||'');
+  if(typeof _TC_TESTO_ALIAS!=='undefined'&&_TC_TESTO_ALIAS
+     &&Object.prototype.hasOwnProperty.call(_TC_TESTO_ALIAS,_id))return true;
   return String((c&&c.name)||'').toLowerCase().indexOf('testosterone')!==-1;
 }
 // ── T-CALC OWNS TESTOSTERONE (rule 2026-08-14) ───────────────────────────────

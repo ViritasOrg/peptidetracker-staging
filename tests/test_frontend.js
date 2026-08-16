@@ -3289,6 +3289,74 @@ console.log('\n── T-Calc: saving a plan writes its injections ────�
   G.saveStacksToBackend = _spSave.ssb;
 }
 
+// ── The cycle header states what is stored, and enhanced testo is matched by id ──
+// Two fixes, both about a claim the app made without the data to back it:
+//  1. buildToday's cycle line read `_st.cycle_length||12`, so a protocol with NO end
+//     date still printed "Week 12 of 12 · Ends <date>". That invented cycle was read as
+//     evidence a cycle had ended and sent a whole investigation to the wrong protocol.
+//  2. _isEnhTestosterone matched only on the NAME containing "testosterone". _TC_TESTO_
+//     ALIAS is the ester-id list T-Calc, the PK model and the curve all key on, so it is
+//     what "is this testosterone" means. Sustanon 250 and Testoviron Depot do not carry
+//     the word; such a compound would generate its own stream AND stay invisible to the
+//     curve — two streams for one molecule.
+console.log('\n── Cycle header + enhanced testosterone identity ──────────');
+{
+  const _hxSave = {doc:G.document, us:G._userStacks, ai:G._activeStackIndices,
+                   sl:G._stacksLoaded, c:G._injectionsCache, cr:G._injCacheReady,
+                   sp:G._syncPending, hid:G._injHidden};
+  const _n = new Date();
+  const _k = (d) => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const _bk = (x) => _k(new Date(_n.getFullYear(), _n.getMonth(), _n.getDate()-x, 12,0,0,0));
+
+  // ── 2. identity-based detection ──
+  check('an enhanced ester is testosterone by its ID',
+    G._isEnhTestosterone({id:'test_u', name:'Testosterone Undecanoate (Nebido)'}) === true);
+  check('  …including one whose name never says "testosterone"',
+    G._isEnhTestosterone({id:'sustanon', name:'Sustanon 250'}) === true);
+  check('  …with the name check kept, so nothing detected before stops being detected',
+    G._isEnhTestosterone({id:'weird_id', name:'Testosterone Enanthate'}) === true);
+  check('  …and a non-testosterone compound is still not one',
+    G._isEnhTestosterone({id:'hgh', name:'HGH (Somatropin)'}) === false &&
+    G._isEnhTestosterone({id:'nandrolone', name:'Nandrolone Decanoate'}) === false);
+
+  // ── 1. the header ──
+  let _hdr = '';
+  const _origDoc = G.document;
+  const _stub = Object.create(_origDoc);
+  _stub.getElementById = (id) => {
+    const e = _origDoc.getElementById(id);
+    if (id !== 'today-cycle-info') return e;
+    return new Proxy(e, {get:(t,k)=> k==='textContent' ? _hdr : t[k],
+                         set:(t,k,v)=>{ if(k==='textContent') _hdr=v; else t[k]=v; return true; }});
+  };
+  G.document = _stub;
+  G._stacksLoaded = true; G._syncPending = false; G._injCacheReady = true;
+  G._injectionsCache = {}; G._injHidden = {count:0, stacks:{}, noStart:[], orphans:{}};
+  G._activeStackIndices = [0];
+
+  const _mk = (cl) => [{id:'A', name:'P', cycle_start:_bk(60), cycle_length:cl,
+                        peptides:[], trt:{}, enhanced:{}}];
+
+  G._userStacks = _mk(44); _hdr = ''; G.buildToday();
+  check('a real cycle length is still reported in full',
+    /Week \d+ of 44/.test(_hdr) && /Ends /.test(_hdr), _hdr);
+
+  G._userStacks = _mk(0); _hdr = ''; G.buildToday();
+  check('a protocol with no end date says so', /No end date/.test(_hdr), _hdr);
+  check('  …and never invents a 12-week cycle',
+    !/of 12/.test(_hdr) && !/Ends /.test(_hdr), _hdr);
+
+  G._userStacks = _mk(undefined); _hdr = ''; G.buildToday();
+  check('  …same when the length is absent entirely',
+    /No end date/.test(_hdr) && !/of 12/.test(_hdr), _hdr);
+  check('  …while still saying when it started',
+    /^Started /.test(_hdr), _hdr);
+
+  G.document = _hxSave.doc; G._userStacks = _hxSave.us; G._activeStackIndices = _hxSave.ai;
+  G._stacksLoaded = _hxSave.sl; G._injectionsCache = _hxSave.c;
+  G._injCacheReady = _hxSave.cr; G._syncPending = _hxSave.sp; G._injHidden = _hxSave.hid;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
