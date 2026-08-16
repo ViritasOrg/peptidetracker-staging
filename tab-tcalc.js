@@ -1707,170 +1707,6 @@ function _tcProtocolInjections(){
 // dose they actually took; a protocol entry is a plan for that day. Where both
 // describe the same compound on the same date they are the same injection, and
 // counting both would double it.
-// ── CURVE WATCH ──────────────────────────────────────────────────────────────
-// Diagnostic for a reported inflation that only exists in memory: the plasma curve
-// grows during a session (a plain chart-zoom is sometimes enough) and a reload puts it
-// back. _tcSetChartZoom only recomputes _tcCurveLog() and redraws — it changes no
-// state — so the curve's INPUTS must be moving underneath it. Five attempts to infer
-// which one failed; this records the answer instead.
-//
-// Every time _tcCurveLog()'s output differs from the previous call, the change is
-// logged with the state that could explain it: which planner is live, whether a plan
-// draft exists, and the sizes of the three sources. Reads nothing, writes nothing,
-// changes no behaviour — it observes the value that is already being returned.
-var _tcCurveWatch = [];
-var _tcCurveLastSig = null;
-function _tcCurveSnap(merged){
-  try{
-    var sig = merged.map(function(e){ return e.date+'|'+e.compId+'|'+(e.source||'?'); });
-    if (_tcCurveLastSig){
-      var prev = _tcCurveLastSig;
-      var add = sig.filter(function(x){ return prev.indexOf(x) < 0; });
-      var rem = prev.filter(function(x){ return sig.indexOf(x) < 0; });
-      if (add.length || rem.length){
-        _tcCurveWatch.push({
-          t:     new Date().toTimeString().slice(0,8),
-          n:     prev.length + '\u2192' + sig.length,
-          mode:  (typeof _tcPlannerMode==='function') ? _tcPlannerMode() : '?',
-          dirty: (typeof _tcPlanDirty==='function') ? !!_tcPlanDirty() : null,
-          draft: !!_tcPlanDraft,
-          hist:  (_tcHistory||[]).length,
-          mlog:  ((_tcp&&_tcp.manualLog)||[]).length,
-          cache: (typeof _tcProtocolInjections==='function') ? _tcProtocolInjections().length : -1,
-          simple:(typeof _tcSimplePlanInjections==='function') ? _tcSimplePlanInjections().length : -1,
-          added: add.slice(0,6), removed: rem.slice(0,6)
-        });
-        if (_tcCurveWatch.length > 25) _tcCurveWatch.shift();
-      }
-    }
-    _tcCurveLastSig = sig;
-  }catch(_e){}
-}
-
-// Unconditional capture. The diff above only fires when _tcCurveLog's OUTPUT moves;
-// if the curve grows while that output is identical, the cause is downstream — the PK
-// scale, the SHBG stack, or the calibration inputs — and a diff-only log stays empty and
-// says nothing. This records the state whether or not anything changed, including the
-// drawn peak, so two taps around the growth always bracket it.
-// Records what the chart just drew. Deliberately does NOT call _tcFreeTSeries again —
-// the caller has the series in hand, and re-deriving it would both cost a second full PK
-// pass per render and risk observing a different value than the one on screen.
-function _tcCurveMarkDrawn(tag, sorted, S){
-  try{
-    var peak = 0;
-    if (S && S.total){
-      for (var t = 0; t <= S.totalDays; t++){
-        var v = S.total[t] * (S.calFT_arr ? S.calFT_arr[t] : S.scale);
-        if (v > peak) peak = v;
-      }
-    }
-    var e = {
-      MARK:  tag,
-      t:     new Date().toTimeString().slice(0,8),
-      doses: sorted ? sorted.length : -1,
-      first: (sorted && sorted.length) ? sorted[0].date : null,
-      last:  (sorted && sorted.length) ? sorted[sorted.length-1].date : null,
-      peak:  Math.round(peak),
-      scale: S ? Number((S.scale||0).toFixed(4)) : null,
-      calFT: S ? Math.round(S.measuredFT||0) : null,
-      mode:  (typeof _tcPlannerMode==='function') ? _tcPlannerMode() : '?',
-      dirty: (typeof _tcPlanDirty==='function') ? !!_tcPlanDirty() : null,
-      draft: !!_tcPlanDraft,
-      hist:  (_tcHistory||[]).length,
-      mlog:  ((_tcp&&_tcp.manualLog)||[]).length,
-      cache: (typeof _tcProtocolInjections==='function') ? _tcProtocolInjections().length : -1,
-      simple:(typeof _tcSimplePlanInjections==='function') ? _tcSimplePlanInjections().length : -1,
-      gh:    (typeof _tcGhStack!=='undefined' && _tcGhStack) ? _tcGhStack.length : -1
-    };
-    // Collapse consecutive identical draws — a render can draw more than once and the
-    // interesting thing is the transition, not the repetition.
-    var prev = _tcCurveWatch[_tcCurveWatch.length-1];
-    if (prev && prev.doses===e.doses && prev.peak===e.peak && prev.last===e.last
-        && prev.mode===e.mode && prev.mlog===e.mlog && prev.cache===e.cache){
-      prev.n = (prev.n||1) + 1;   // seen again
-      return;
-    }
-    _tcCurveWatch.push(e);
-    if (_tcCurveWatch.length > 40) _tcCurveWatch.shift();
-  }catch(_e){}
-}
-
-var _tcMarkN = 0;
-function _tcCurveMark(tag){
-  try{
-    _tcMarkN++;
-    var log = _tcCurveLog();
-    var sorted = log.slice().sort(function(a,b){ return a.date < b.date ? -1 : 1; });
-    var peak = 0, series = null;
-    if (sorted.length){
-      series = _tcFreeTSeries(sorted, {});
-      for (var t = 0; t <= series.totalDays; t++){
-        var v = series.total[t] * (series.calFT_arr ? series.calFT_arr[t] : series.scale);
-        if (v > peak) peak = v;
-      }
-    }
-    _tcCurveWatch.push({
-      MARK:  tag || ('snapshot ' + _tcMarkN),
-      t:     new Date().toTimeString().slice(0,8),
-      doses: log.length,
-      first: sorted.length ? sorted[0].date : null,
-      last:  sorted.length ? sorted[sorted.length-1].date : null,
-      peak:  Math.round(peak),
-      scale: series ? Number((series.scale||0).toFixed(4)) : null,
-      calFT: series ? Math.round(series.measuredFT||0) : null,
-      mode:  (typeof _tcPlannerMode==='function') ? _tcPlannerMode() : '?',
-      dirty: (typeof _tcPlanDirty==='function') ? !!_tcPlanDirty() : null,
-      draft: !!_tcPlanDraft,
-      hist:  (_tcHistory||[]).length,
-      mlog:  ((_tcp&&_tcp.manualLog)||[]).length,
-      cache: (typeof _tcProtocolInjections==='function') ? _tcProtocolInjections().length : -1,
-      simple:(typeof _tcSimplePlanInjections==='function') ? _tcSimplePlanInjections().length : -1,
-      gh:    (typeof _tcGhStack!=='undefined' && _tcGhStack) ? _tcGhStack.length : -1,
-      bw:    (typeof _tcBwEntries!=='undefined' && _tcBwEntries) ? (_tcBwEntries||[]).length : -1
-    });
-    if (_tcCurveWatch.length > 25) _tcCurveWatch.shift();
-    buildCurveWatchCard();
-  }catch(e){ _tcCurveWatch.push({MARK:'error', err:String(e&&e.message||e)}); }
-}
-
-// Rendered into Settings so the capture is readable on a phone, where there is no
-// console. Selectable text plus a copy button; nothing is sent anywhere.
-function buildCurveWatchCard(){
-  var card = document.getElementById('s-tcwatch-card');
-  if (!card) return;
-  var body = _tcCurveWatch.length
-    ? _esc(JSON.stringify(_tcCurveWatch, null, 1))
-    : 'No change recorded yet. Open Levels \u2192 Testosterone, tap a zoom button or tick a dose, then come back.';
-  card.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'
-    + sSecHdr('tcwatch','Curve Watch') + sSecBody('tcwatch')
-    + '<div style="padding:14px 16px;">'
-    + '<div style="font-size:12px;color:var(--muted2);margin-bottom:10px;line-height:1.5">'
-    + 'Records every time the plasma curve\u2019s contents change, with the state that could explain it. '
-    + 'Diagnostic only \u2014 it changes nothing.</div>'
-    + '<div style="display:flex;gap:8px;margin-bottom:10px">'
-    + '<button onclick="_tcCurveWatch.length=0;buildCurveWatchCard();" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Clear</button>'
-    + '<button onclick="_tcCurveMark()" style="background:#5ad1b0;color:#000;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Snapshot</button>'
-    + '<button onclick="_tcCopyCurveWatch(this)" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Copy</button>'
-    + '<button onclick="buildCurveWatchCard()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Refresh</button>'
-    + '</div>'
-    + '<pre id="tc-watch-out" style="white-space:pre-wrap;word-break:break-all;user-select:text;-webkit-user-select:text;background:#0a0a0a;border:1px solid #2a2a2a;border-radius:8px;padding:10px;font-size:10px;line-height:1.45;color:#ccc;max-height:340px;overflow:auto;margin:0">'
-    + body + '</pre></div></div></div>';
-}
-function _tcCopyCurveWatch(btn){
-  var txt = JSON.stringify(_tcCurveWatch);
-  try{
-    if (navigator.clipboard && navigator.clipboard.writeText){
-      navigator.clipboard.writeText(txt).then(function(){ if(btn){btn.textContent='Copied';setTimeout(function(){btn.textContent='Copy';},1500);} });
-      return;
-    }
-  }catch(_e){}
-  var el = document.getElementById('tc-watch-out');
-  if (el && window.getSelection){
-    var r = document.createRange(); r.selectNodeContents(el);
-    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
-    if (btn){ btn.textContent = 'Selected \u2014 long-press to copy'; }
-  }
-}
 // ── THE CURVE IS DRAWN ONCE, FROM COMPLETE INPUTS ────────────────────────────
 // It rests on three sources that arrive at DIFFERENT TIMES: the logged history
 // (_tcFetchHistory), the injection cache (refreshInjectionsCache) and the bloodwork that
@@ -1976,7 +1812,6 @@ function _tcCurveLog(){
     return !(planFrom && e.date >= planFrom);     // the plan owns this day
   }));
   merged.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
-  _tcCurveSnap(merged);
   return merged;
 }
 
@@ -3410,11 +3245,6 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
 
   var sorted = log.slice().sort(function(a, b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
   var _S = _tcFreeTSeries(sorted, { calFT: canvas._testCalFTHook, shbg: canvas._testShbgHook, start: canvas._testStartHook });
-  // AUTO-RECORD EVERY DRAW. Leaving the Levels tab and returning is enough to inflate
-  // the curve, so a capture that requires visiting Settings destroys the evidence on the
-  // way to recording it. This runs on the series the chart has just computed — no extra
-  // work, no extra render — so the log fills itself and Settings is only ever read.
-  _tcCurveMarkDrawn('draw', sorted, _S);
   var firstDate = _S.firstDate, totalDays = _S.totalDays, logDays = _S.logDays, total = _S.total, calFT = _S.calFT, scale = _S.scale,
       calFT_arr = _S.calFT_arr, _calFTlo = _S.calFTlo, _calFThi = _S.calFThi, unitLabel = _S.unitLabel,
       _mftNum = _S.measuredFT, _ghAnnot = _S.ghAnnot, _betaAnnot = _S.betaAnnot, _bfAnnot = _S.bfAnnot, _tier = _S.tier;
