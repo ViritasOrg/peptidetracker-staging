@@ -4391,12 +4391,33 @@ async function _tcSyncLogToBackend() {
     // only testosterone. Looping the known esters still "covers removed compounds
     // too" (the original intent), because it clears every testosterone id under the
     // cycle whether or not it is still in the plan.
-    var _tid2=(typeof _tcAllCompIds==='function')?_tcAllCompIds():[];
-    for(var _tj=0;_tj<_tid2.length;_tj++){
-      await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)
-        +'&compound_id='+encodeURIComponent(_tid2[_tj])
-        +'&from_date='+todayStr+'&unlogged_only=true',{method:'DELETE',headers:h});
+    // BOTH SPELLINGS, OR THE DELETE MISSES HALF THE RECORD.
+    // _tcAllCompIds returns the TRT catalogue (nebido, testoviron, enanthate…). The
+    // ENHANCED catalogue keys the same esters differently — test_u, test_e, test_c,
+    // test_p — and a protocol carrying its testosterone in the Enhanced tier stores rows
+    // under those ids. Deleting by the TRT ids alone never touched them, so a plan that
+    // was shortened kept its old doses: reported 2026-08-16 as a Nebido series cut to
+    // 16 Aug whose curve went on running to October, with the series card and the chart
+    // disagreeing on screen.
+    //
+    // _TC_TESTO_ALIAS is exactly the enhanced-id set, and it is already the map every
+    // other part of this file canonicalises through, so it is the right source rather
+    // than a second hand-maintained list. _tcAllCompIds itself is left alone — it also
+    // populates the ester dropdown, where the aliases would appear as duplicates.
+    var _tid2=(typeof _tcAllCompIds==='function')?_tcAllCompIds().slice():[];
+    if (typeof _TC_TESTO_ALIAS !== 'undefined' && _TC_TESTO_ALIAS){
+      Object.keys(_TC_TESTO_ALIAS).forEach(function(_a){ if (_tid2.indexOf(_a) === -1) _tid2.push(_a); });
     }
+    // In PARALLEL, not one after another. This is ~10 ids now that both catalogue
+    // spellings are covered, and awaiting each in turn made every save ten sequential
+    // round-trips — slow on a phone, and it pushed the write far enough down the
+    // microtask queue to change when callers observe it.
+    await Promise.all(_tid2.map(function(_id){
+      return fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)
+        +'&compound_id='+encodeURIComponent(_id)
+        +'&from_date='+todayStr+'&unlogged_only=true',{method:'DELETE',headers:h})
+        .catch(function(){});   // one failed prune must not abort the rest, nor the write
+    }));
   }catch(_e){}
 
   var compIds=Object.keys(byComp);

@@ -2896,8 +2896,11 @@ if (typeof G._tcSetManualField === 'function' && typeof G._tcPushLogToSchedule =
             manualLog:[{compId:'nebido', doseMg:'100', date:_d(3), seriesId:'sx'}]};
   let _calls = _arm();
   G._tcSetManualField(0, 'doseMg', '125');
-  await _flush();
+  // Assert the LOCAL edit before flushing. The sync that follows calls
+  // _tcLoadLogFromStack, which rebuilds manualLog from the record — empty in this
+  // fixture — so after the flush there is legitimately no row 0 to read.
   check('editing a dose updates the entry', G._tcp.manualLog[0].doseMg === '125');
+  await _flush();
   check('  …and reaches the backend, not just the local object',
     _calls.some(c => /\/injections\/batch$/.test(c.url) && c.method === 'POST'),
     'calls: ' + _calls.map(c => c.method + ' ' + c.url.split('/').pop()).join(', '));
