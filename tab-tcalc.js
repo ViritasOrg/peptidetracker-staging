@@ -1731,6 +1731,67 @@ function _tcInputsReady(){
   return true;
 }
 
+// ── STORED DOSES (diagnostic) ────────────────────────────────────────────────
+// Testosterone doses are surviving a delete that should reach them. The delete keys on
+// (cycle_id, compound_id), and both of those are invisible from the UI — the curve shows
+// a canonicalised compId, not what is actually stored — so the field reports and my
+// reading of the code cannot be reconciled without seeing the raw rows.
+//
+// Read-only: one GET, no writes, nothing cached. Remove once the cause is found.
+var _tcStoredRows = null;
+async function _tcLoadStoredRows(){
+  var out = document.getElementById('tc-stored-out');
+  if (out) out.textContent = 'Loading…';
+  try{
+    var h = (typeof authHeaders === 'function') ? authHeaders() : null;
+    if (!h){ if (out) out.textContent = 'Not signed in.'; return; }
+    var r = await fetch(AGENT_URL + '/injections?active_only=false', {headers: h});
+    if (!r.ok){ if (out) out.textContent = 'Fetch failed: ' + r.status; return; }
+    var all = await r.json();
+    var todayK = dateKey(NOW);
+    // Testosterone only, and only what is still ahead — that is where the strays are.
+    var rows = (Array.isArray(all) ? all : []).filter(function(e){
+      if (!e || !e.date || e.date < todayK) return false;
+      var id = String(e.compound_id || '');
+      return (typeof _tcIsTestoRow === 'function') ? _tcIsTestoRow(e.tier, id)
+           : /test|nebido|enanth|cypion|propion|sustanon/i.test(id);
+    });
+    rows.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : 1; });
+    _tcStoredRows = rows;
+    // Group by the two fields the delete actually keys on, which is the whole question.
+    var groups = {};
+    rows.forEach(function(e){
+      var k = (e.cycle_id||'(none)') + '  |  ' + (e.compound_id||'(none)') + '  |  tier=' + (e.tier||'?');
+      if (!groups[k]) groups[k] = {n:0, logged:0, first:e.date, last:e.date};
+      var g = groups[k];
+      g.n++; if (e.logged) g.logged++;
+      if (e.date < g.first) g.first = e.date;
+      if (e.date > g.last)  g.last  = e.date;
+    });
+    var txt = rows.length + ' testosterone dose(s) stored from today onward\n\n';
+    Object.keys(groups).sort().forEach(function(k){
+      var g = groups[k];
+      txt += k + '\n    ' + g.n + ' rows, ' + g.logged + ' logged, ' + g.first + ' \u2192 ' + g.last + '\n\n';
+    });
+    txt += 'The delete targets cycle_id = ' +
+           ((typeof _tcTargetCycleId === 'function') ? (_tcTargetCycleId() || '(none)') : '?') + '\n';
+    if (out) out.textContent = txt;
+  }catch(e){ if (out) out.textContent = 'Error: ' + (e && e.message || e); }
+}
+function buildStoredRowsCard(){
+  var card = document.getElementById('s-stored-card');
+  if (!card) return;
+  card.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'
+    + sSecHdr('stored','Stored Doses') + sSecBody('stored')
+    + '<div style="padding:14px 16px;">'
+    + '<div style="font-size:12px;color:var(--muted2);margin-bottom:10px;line-height:1.5">'
+    + 'Lists the testosterone doses actually stored from today onward, grouped by the '
+    + 'cycle id and compound id a delete keys on. Read-only.</div>'
+    + '<button onclick="_tcLoadStoredRows()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Load</button>'
+    + '<pre id="tc-stored-out" style="white-space:pre-wrap;word-break:break-all;user-select:text;-webkit-user-select:text;background:#0a0a0a;border:1px solid #2a2a2a;border-radius:8px;padding:10px;font-size:11px;line-height:1.45;color:#ccc;max-height:360px;overflow:auto;margin:10px 0 0">Tap Load.</pre>'
+    + '</div></div></div>';
+}
+
 function _tcCurveLog(){
   // The greyed-out planner does not contribute. Its data is untouched and comes
   // straight back when the switch is flipped, but a planner that is visibly
