@@ -1747,6 +1747,49 @@ function _tcCurveSnap(merged){
   }catch(_e){}
 }
 
+// Unconditional capture. The diff above only fires when _tcCurveLog's OUTPUT moves;
+// if the curve grows while that output is identical, the cause is downstream — the PK
+// scale, the SHBG stack, or the calibration inputs — and a diff-only log stays empty and
+// says nothing. This records the state whether or not anything changed, including the
+// drawn peak, so two taps around the growth always bracket it.
+var _tcMarkN = 0;
+function _tcCurveMark(tag){
+  try{
+    _tcMarkN++;
+    var log = _tcCurveLog();
+    var sorted = log.slice().sort(function(a,b){ return a.date < b.date ? -1 : 1; });
+    var peak = 0, series = null;
+    if (sorted.length){
+      series = _tcFreeTSeries(sorted, {});
+      for (var t = 0; t <= series.totalDays; t++){
+        var v = series.total[t] * (series.calFT_arr ? series.calFT_arr[t] : series.scale);
+        if (v > peak) peak = v;
+      }
+    }
+    _tcCurveWatch.push({
+      MARK:  tag || ('snapshot ' + _tcMarkN),
+      t:     new Date().toTimeString().slice(0,8),
+      doses: log.length,
+      first: sorted.length ? sorted[0].date : null,
+      last:  sorted.length ? sorted[sorted.length-1].date : null,
+      peak:  Math.round(peak),
+      scale: series ? Number((series.scale||0).toFixed(4)) : null,
+      calFT: series ? Math.round(series.measuredFT||0) : null,
+      mode:  (typeof _tcPlannerMode==='function') ? _tcPlannerMode() : '?',
+      dirty: (typeof _tcPlanDirty==='function') ? !!_tcPlanDirty() : null,
+      draft: !!_tcPlanDraft,
+      hist:  (_tcHistory||[]).length,
+      mlog:  ((_tcp&&_tcp.manualLog)||[]).length,
+      cache: (typeof _tcProtocolInjections==='function') ? _tcProtocolInjections().length : -1,
+      simple:(typeof _tcSimplePlanInjections==='function') ? _tcSimplePlanInjections().length : -1,
+      gh:    (typeof _tcGhStack!=='undefined' && _tcGhStack) ? _tcGhStack.length : -1,
+      bw:    (typeof _tcBwEntries!=='undefined' && _tcBwEntries) ? (_tcBwEntries||[]).length : -1
+    });
+    if (_tcCurveWatch.length > 25) _tcCurveWatch.shift();
+    buildCurveWatchCard();
+  }catch(e){ _tcCurveWatch.push({MARK:'error', err:String(e&&e.message||e)}); }
+}
+
 // Rendered into Settings so the capture is readable on a phone, where there is no
 // console. Selectable text plus a copy button; nothing is sent anywhere.
 function buildCurveWatchCard(){
@@ -1762,7 +1805,8 @@ function buildCurveWatchCard(){
     + 'Records every time the plasma curve\u2019s contents change, with the state that could explain it. '
     + 'Diagnostic only \u2014 it changes nothing.</div>'
     + '<div style="display:flex;gap:8px;margin-bottom:10px">'
-    + '<button onclick="_tcCurveWatch.length=0;_tcCurveLastSig=null;buildCurveWatchCard();" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Clear</button>'
+    + '<button onclick="_tcCurveWatch.length=0;buildCurveWatchCard();" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Clear</button>'
+    + '<button onclick="_tcCurveMark()" style="background:#5ad1b0;color:#000;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Snapshot</button>'
     + '<button onclick="_tcCopyCurveWatch(this)" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Copy</button>'
     + '<button onclick="buildCurveWatchCard()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Refresh</button>'
     + '</div>'
