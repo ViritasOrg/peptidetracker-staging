@@ -10712,8 +10712,12 @@ console.log('\n─────────────────────�
 
   const refIdx = rawScript.indexOf('async function refreshInjectionsCache()');
   const ref = rawScript.slice(refIdx, rawScript.indexOf('\n}', rawScript.indexOf('_injCacheReady=true', refIdx)));
+  // Still a finally, so a throw cannot leave Today spinning forever — the point of the
+  // original check. It now also wakes the plasma curve, which waits on this cache.
   check('refreshInjectionsCache sets _injCacheReady in a finally',
-    /finally\{\s*_injCacheReady=true;\s*\}/.test(ref));
+    /finally\{\s*_injCacheReady=true;/.test(ref));
+  check('  …and tells the curve the cache has landed',
+    /finally\{[\s\S]{0,400}?buildTCalc\(\)/.test(ref));
   check('  …and catches its own throws', /catch\(_e\)\{_logErr\('refreshInjCache',_e\);\}/.test(ref));
 
   // The gate itself must stay — the fix is that the flags always resolve, not that

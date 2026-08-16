@@ -1871,6 +1871,30 @@ function _tcCopyCurveWatch(btn){
     if (btn){ btn.textContent = 'Selected \u2014 long-press to copy'; }
   }
 }
+// ── THE CURVE IS DRAWN ONCE, FROM COMPLETE INPUTS ────────────────────────────
+// It rests on three sources that arrive at DIFFERENT TIMES: the logged history
+// (_tcFetchHistory), the injection cache (refreshInjectionsCache) and the bloodwork that
+// calibrates it (_tcFetchBwEntries). Drawing before they have all landed renders a curve
+// built from whatever happens to have arrived, and it changes under the user as the rest
+// turns up — which reads as the curve inflating on its own.
+//
+// Captured in the field on 2026-08-16, one page load, eight seconds apart:
+//   peak 1969, calFT 340   — bloodwork absent, so the age-based population default
+//   peak 1176, cache 0     — injection cache empty, 31 doses, plan ending 26 Aug
+//   peak 1690, cache 30    — cache arrived: 51 doses to 5 Oct, the real record
+// Only the last was the whole truth. The first two were not "wrong maths" — they were
+// correct maths on partial data, which is worse, because they look authoritative.
+//
+// Nothing here changes what the curve MEANS. It defers the drawing until the inputs are
+// all in, and each fetch already calls buildTCalc when it completes, so the wait ends by
+// itself.
+function _tcInputsReady(){
+  if (typeof _tcHistoryState !== 'undefined' && _tcHistoryState !== 'ready' && _tcHistoryState !== 'error') return false;
+  if (typeof _injCacheReady !== 'undefined' && !_injCacheReady) return false;
+  if (typeof _tcBwEntries !== 'undefined' && _tcBwEntries === null) return false;
+  return true;
+}
+
 function _tcCurveLog(){
   // The greyed-out planner does not contribute. Its data is untouched and comes
   // straight back when the switch is flipped, but a planner that is visibly
@@ -4749,7 +4773,14 @@ function buildTCalc() {
   // drawn pmol/L values rather than recomputing them, so it cannot disagree with
   // the chart above it. Empty until then, and empty when the curve is uncalibrated.
   html += '<div id="tc-exposure-note"></div>';
-  if (validLog.length > 0) {
+  // Say the curve is still loading rather than drawing a partial one. See
+  // _tcInputsReady — each outstanding fetch calls buildTCalc when it lands, so this
+  // resolves on its own within a second or two.
+  if (!_tcInputsReady()) {
+    html += '<div style="padding:8px 16px 18px;font-size:11px;color:var(--muted2)">'
+         + 'Loading your injections and bloodwork\u2026 the curve is drawn once they are all in, '
+         + 'so it cannot change under you.</div>';
+  } else if (validLog.length > 0) {
     html += '<div style="padding:2px 16px 10px">';
     html += '<div style="display:flex;gap:4px;margin-bottom:8px">';
     ['today','week','month','3mo','whole'].forEach(function(z) {
