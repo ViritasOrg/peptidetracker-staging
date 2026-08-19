@@ -11959,3 +11959,65 @@ console.log('\n── Dose units are shown as stored ─────────
 
   G5._userTier = _uSave.tier; G5._editBuf = _uSave.buf;
 }
+
+// ── Half-life on every compound card ─────────────────────────────────────────
+// Henrik, 2026-08-19: "For all compounds can we list half time? Instead of the
+// 'short ester' etc." A class label and a phrase like "Short ester" are ways of saying
+// a number without saying it — and the number is what decides injection frequency and
+// how long a side effect persists after stopping.
+console.log('\n── Half-life on compound cards ────────────────────────────');
+{
+  const G5 = sandbox;
+  const hl = G5._halfLifeLabel;
+
+  check('a peptide half-life is read straight off the catalogue',
+    hl({id:'cjc-ipa', halfLife:'GHRH ~30 min · IPA ~2 h'}) === 't½ GHRH ~30 min · IPA ~2 h');
+  check('an enhanced compound reads its cadence half-life',
+    hl({id:'deca', cadence:{halfLife:'~6 days'}}) === 't½ ~6 days');
+
+  // The stored strings are written for a detail panel, not a 44px card.
+  check('a long clinical string is trimmed to its leading figure',
+    hl({id:'nebido'}) === 't½ ~56 days', hl({id:'nebido'}));
+  // A blend states both components with a middle dot; keeping only the first would hide
+  // half the answer, so that separator is deliberately not a split point.
+  check('  …but a two-part blend keeps both parts',
+    hl({id:'cjc-ipa', halfLife:'GHRH ~30 min · IPA ~2 h'}) === 't½ GHRH ~30 min · IPA ~2 h');
+  check('  …and a clause with no figure never wins over one that has it',
+    hl({id:'sus-x', cadence:{halfLife:'blended esters; effective ~4–5 days'}}) === 't½ effective ~4–5 days',
+    hl({id:'sus-x', cadence:{halfLife:'blended esters; effective ~4–5 days'}}));
+  check('  …and a trailing qualification after a semicolon is dropped',
+    hl({id:'x', cadence:{halfLife:'~34 days terminal; released over ~10–14 weeks'}}) === 't½ ~34 days terminal');
+
+  // NOTHING IS INVENTED. A compound with no published half-life keeps its old subtitle
+  // rather than being given a number — this app has shipped an invented fallback before
+  // (the mg/day free-T axis, 2026-08-02) and it cost a day.
+  check('a compound with no half-life gets no label', hl({id:'unknown-thing'}) === '');
+  check('  …and neither does a missing entry', hl(null) === '' && hl(undefined) === '');
+
+  // The vial spec is concrete data, so it survives behind the half-life.
+  check('the TRT card keeps its vial spec after the half-life',
+    G5._metaWithHalfLife({id:'nebido', halfLife:'~56 days'}, 'Testosterone Undecanoate 1000mg/4ml') ===
+    't½ ~56 days · Testosterone Undecanoate 1000mg/4ml');
+  check('  …and shows the spec alone when the half-life is unknown',
+    G5._metaWithHalfLife({id:'nope'}, 'Some 250mg/ml') === 'Some 250mg/ml');
+
+  // The backend PK catalogue outranks the bundled fallback: the card must not disagree
+  // with the curve, which integrates that same figure.
+  const _exSave = G5._tcExtraCatalog;
+  G5._tcExtraCatalog = [{id:'nebido', halfLife:'~56 days (backend)'}];
+  check('the backend PK catalogue wins over the bundled guide',
+    hl({id:'nebido'}) === 't½ ~56 days');
+  G5._tcExtraCatalog = _exSave;
+
+  // Rendered, not just computed: every tier's card must carry it.
+  const _cSave = {cat:G5.ENHANCEMENT_COMPOUNDS, buf:G5._editBuf, tier:G5._userTier};
+  G5._userTier = 3;
+  G5.ENHANCEMENT_COMPOUNDS = [{id:'deca', name:'Deca', group:'19-Nor', cls:'19nor',
+                               dot:'#888', defaultDose:300, unit:'mg/week',
+                               cadence:{halfLife:'~6 days', rec:'Twice weekly'}}];
+  G5._editBuf = {trt:{enabled:false,compounds:[]}, enhanced:{enabled:false,compounds:[]}};
+  const enhHtml = G5._renderEditEnhanced({enabled:false, compounds:[]});
+  check('an enhanced card shows the half-life instead of its class',
+    /t½ ~6 days/.test(enhHtml) && !/>19-Nor<\/div><\/div>/.test(enhHtml));
+  G5.ENHANCEMENT_COMPOUNDS = _cSave.cat; G5._editBuf = _cSave.buf; G5._userTier = _cSave.tier;
+}
