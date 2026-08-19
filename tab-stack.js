@@ -980,13 +980,24 @@ function _noteInjSuppressed(stack,cycleId,c,reason){
 }
 // The banner shown wherever testosterone is configured but not scheduled. Deep-links
 // to T-Calc, which is where the dose, cadence and dates actually live now.
-function _tcalcOwnsTestoNote(what){
-  return '<div onclick="var b=document.getElementById(\'tab-btn-tcalc\');if(b)b.click();" style="cursor:pointer;background:rgba(102,136,204,0.08);border:1px solid #6688cc44;border-left:3px solid #6688cc;border-radius:8px;padding:10px 12px;margin-bottom:10px">'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:3px">'
-      +'<div style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#6688cc">Scheduled in T-Calc</div>'
-      +'<div style="font-size:11px;color:#6688cc;flex-shrink:0">Open →</div>'
-    +'</div>'
-    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5">'+_esc(what||'Testosterone')+' is planned in T-Calc, which is the only place testosterone is scheduled — one stream, one plasma curve. The settings here are kept for reference and generate no injections. Tap to set the ester, dose and cadence.</div>'
+// The "Scheduled in T-Calc" note explained the 2026-08-14 suppression: a testosterone
+// that sat in a protocol and generated nothing. Phase 5 removed the suppression, so the
+// note would now be a lie — the compound schedules from right here.
+//
+// It is replaced, not simply deleted, because one case still needs explaining: a
+// protocol that has not been migrated yet holds its testosterone under the Enhanced
+// spelling, which still schedules but under a non-canonical id. That is worth a nudge,
+// and nothing else is.
+function _tcalcOwnsTestoNote(what){ return ''; }
+
+function _unmigratedTestoNote(c){
+  if(!c||!_isTestoCompoundId(c.id))return '';
+  if(_canonCompoundId(c.id)===c.id)return '';
+  return '<div style="background:rgba(102,136,204,0.08);border:1px solid #6688cc44;border-left:3px solid #6688cc;border-radius:8px;padding:10px 12px;margin:8px 0;">'
+    +'<div style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#6688cc;margin-bottom:3px">Older format</div>'
+    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5">'+_esc((c&&(c.name||c.id))||'This compound')
+    +' is stored under its old id (<code>'+_esc(c.id)+'</code>). It schedules normally. '
+    +'Settings ▸ Data ▸ Merge tiers moves it to <code>'+_esc(_canonCompoundId(c.id))+'</code>.</div>'
   +'</div>';
 }
 // Renders the schedule control: mode chips, then either weekday chips or an interval
@@ -1409,9 +1420,19 @@ function _tcalcTrtSummary(){
 }
 // Info card for the TRT tab that mirrors the T-Calc-planned testosterone and
 // deep-links to the T-Calc tab. Returns '' when nothing is planned there.
+// Stored testosterone rows that no compound in this protocol accounts for.
+//
+// Before Phase 5 this card said "Planned in T-Calc … not configured as a TRT compound
+// here", which was true then and is a lie now: testosterone schedules from the protocol
+// like everything else. The card survives for the one case that still matters — rows
+// left behind by an older T-Calc plan with nothing in the protocol generating them.
+// That is exactly the stray-series shape that cost a day on 2026-08-16, so it is worth
+// surfacing; when the protocol does configure testosterone, the card says nothing.
 function _renderTcalcTrtCard(){
   var comps=(typeof _tcalcTrtSummary==='function')?_tcalcTrtSummary():null;
   if(!comps) return '';
+  var _buf=(typeof _editBuf!=='undefined'&&_editBuf)?_editBuf:null;
+  if(_buf&&typeof _stackTestoComp==='function'&&_stackTestoComp(_buf)) return '';
   var rows=comps.map(function(c){
     var nextTxt=c.next?('Next '+fmtDate(new Date(c.next.replace(/-/g,'/')))):'No upcoming doses';
     return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
@@ -1423,11 +1444,11 @@ function _renderTcalcTrtCard(){
   }).join('');
   return '<div onclick="var b=document.getElementById(\'tab-btn-tcalc\');if(b)b.click();" style="cursor:pointer;background:var(--surface2);border:1px solid #6688cc44;border-left:3px solid #6688cc;border-radius:10px;padding:12px 14px;margin-bottom:12px">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
-      +'<div style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#6688cc">Planned in T-Calc</div>'
+      +'<div style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#6688cc">Doses with no compound</div>'
       +'<div style="font-size:11px;color:#6688cc">Open →</div>'
     +'</div>'
     +rows
-    +'<div style="font-size:10px;color:var(--muted2);margin-top:6px">Testosterone is scheduled from the T-Calc planner (not configured as a TRT compound here). Tap to view or adjust the dose.</div>'
+    +'<div style="font-size:10px;color:var(--muted2);margin-top:6px">These doses are stored against this protocol but no compound here generates them — they came from an older T-Calc plan. Add the compound in Compounds to take them over, or clear them in the admin Records tab.</div>'
   +'</div>';
 }
 // TRT tab content for stack view (read-only): compounds + injection log
@@ -2054,8 +2075,9 @@ function editSetEnhDays(id,di){var c=((_editBuf.enhanced&&_editBuf.enhanced.comp
 // no longer depends on what the TRT tier holds. The parameter stays so the three call
 // sites (editor, wizard, view) keep their shape.
 function _enhDormantNoteHtml(c,stackLike){
-  if(!_isTestosteroneComp('enhanced',c))return '';
-  return _tcalcOwnsTestoNote(c&&(c.name||c.id));
+  // Nothing is dormant any more — Phase 5 gave every compound back its own schedule.
+  // The only thing left worth saying is that an unmigrated id is an old spelling.
+  return _unmigratedTestoNote(c);
 }
 function _renderEditEnhanced(enh,opts){
   if(!enh)enh={enabled:false,compounds:[]};
@@ -2773,26 +2795,37 @@ function _genInjBatches(stack,cycleId,fromDate){
     if(compEntries.length)batches.push({compound_id:p.id,from_date:dateKey(genStart),entries:compEntries});
   });
 
-  // ── Testosterone is scheduled by T-CALC and by nothing else ────────────────
-  // Henrik, 2026-08-14: "I want T-calc to own all testosterone injections […] The only
-  // way to schedule testo must be using t-calc."
+  // ── Testosterone generates here, like everything else (Phase 5) ────────────
+  // Henrik, 2026-08-16: "we are dropping the T-calc style scheduling and returning to
+  // the compound UI that is much easier to understand for a user."
   //
-  // Both tiers used to generate their own testosterone, which put two rows for the
-  // same molecule on the same day (reported 2026-08-07). The first fix made the TRT
-  // tier win over Enhanced — one stream, but still the wrong owner: T-Calc holds the
-  // PK model, the ester, the cadence and the curve, and it was scheduling a third
-  // stream of its own. So neither tier generates testosterone now.
+  // The 2026-08-14 rule made both tiers suppress testosterone so T-Calc could own it.
+  // That rule was right about the problem — two tiers each generating the same
+  // molecule put 27 enhanced/test_u rows beside 23 trt/nebido rows in one protocol —
+  // and wrong about the remedy: it moved ownership to a THIRD scheduler instead of
+  // removing the duplication.
   //
-  // Nothing is deleted or hidden. The compound stays in the stack, still renders in
-  // its tier's config with a note naming T-Calc as the scheduler, and every injection
-  // already stored stays exactly as it is — the injection log is the record of what
-  // was injected and this changes only what is generated from here on.
+  // Phase 4 merged the tiers, so there is no second generator left to contend with,
+  // and one-stream-per-molecule is now structural rather than enforced by suppression.
+  // T-Calc's write paths are disabled in the same change (_tcWritesDisabled) so it
+  // cannot open a second stream from the other side.
+  //
+  // _injSuppressed stays, emptied per rebuild: nothing suppresses testosterone any
+  // more, but a compound that stops generating for some OTHER reason still has to be
+  // able to say so. A row that vanishes with no explanation is the bug, not the fix.
   if(typeof _injSuppressed!=='undefined'&&_injSuppressed)_injSuppressed[stack.id||cycleId]=[];
+
+  // Which molecules the TRT block already scheduled, canonically. An unmigrated
+  // protocol can hold the same testosterone in both blocks under two spellings —
+  // Protocol 2 held enhanced/test_u beside trt/nebido — and generating both is exactly
+  // the doubling this rewrite exists to end. Migration fixes the data; this makes the
+  // generator safe whether or not the user has run it.
+  var _genDone={};
 
   // TRT compounds
   if(stack.trt&&stack.trt.enabled){
     (stack.trt.compounds||[]).forEach(function(c){
-      if(_isTestosteroneComp('trt',c)){_noteInjSuppressed(stack,cycleId,c,'tcalc');return;}
+      _genDone[_canonCompoundId(c.id)]=true;
       var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(t){return t.id===c.id;}):null;
       var dot=cat?cat.dot:'#e8a020';
       var cStart=c.start_date?new Date(Math.max(parseLocalDate(c.start_date).getTime(),genStart.getTime())):new Date(genStart);
@@ -2813,9 +2846,17 @@ function _genInjBatches(stack,cycleId,fromDate){
   // Enhanced compounds
   if(stack.enhanced&&stack.enhanced.enabled){
     (stack.enhanced.compounds||[]).forEach(function(c){
-      // Testosterone belongs to T-Calc — see the block above the TRT loop. Everything
-      // else in the Enhanced tier (nandrolone, GH, orals…) generates as before.
-      if(_isTestosteroneComp('enhanced',c)){_noteInjSuppressed(stack,cycleId,c,'tcalc');return;}
+      // A testosterone still configured here — an unmigrated protocol — generates too.
+      // The tiers are one tier now; what a row is filed under stops deciding whether it
+      // exists. Migrating it (Settings ▸ Data ▸ Merge tiers) moves it to the canonical
+      // id; until then it schedules under the id it has, and readers canonicalise.
+      //
+      // Unless the same molecule already generated from the other block, in which case
+      // this one is the duplicate and is recorded as suppressed — visibly, with a
+      // reason, because a row that stops generating without explanation is the bug.
+      var _cid=_canonCompoundId(c.id);
+      if(_genDone[_cid]){_noteInjSuppressed(stack,cycleId,c,'duplicate');return;}
+      _genDone[_cid]=true;
       var dot=c.dot||'#a855f7';
       var eCat=(typeof ENHANCEMENT_COMPOUNDS!=='undefined')?(ENHANCEMENT_COMPOUNDS||[]).find(function(ec){return ec.id===c.id;}):null;
       var isAmPm=c.amPm||(eCat&&eCat.amPm);

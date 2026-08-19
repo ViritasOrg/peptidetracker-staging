@@ -305,13 +305,15 @@ if(typeof G._tcalcTrtSummary==='function'){
   check('_tcalcTrtSummary: finds the tcalc testosterone compound', !!_ttSum && _ttSum.length===1 && _ttSum[0].name==='Testosterone Enanthate');
   check('_tcalcTrtSummary: counts only tcalc entries (ignores stack peptide)', _ttSum[0].count===2);
   var _ttCard=G._renderTcalcTrtCard();
-  check('_renderTcalcTrtCard: labels it Planned in T-Calc', /Planned in T-Calc/.test(_ttCard));
+  // Phase 5: the card no longer claims T-Calc schedules these. It now reports stored
+  // doses that NO compound in the protocol generates — the stray-series shape.
+  check('_renderTcalcTrtCard: labels it as doses with no compound', /Doses with no compound/.test(_ttCard));
   check('_renderTcalcTrtCard: names the compound', /Testosterone Enanthate/.test(_ttCard));
   check('_renderTcalcTrtCard: deep-links to the T-Calc tab', /tab-btn-tcalc/.test(_ttCard));
   // _renderTRTViewTab shows the card and suppresses "No TRT configured"
   if(typeof G._renderTRTViewTab==='function'){
     var _ttView=G._renderTRTViewTab({trt:{enabled:false,compounds:[]}});
-    check('_renderTRTViewTab: shows T-Calc card when planned there', /Planned in T-Calc/.test(_ttView));
+    check('_renderTRTViewTab: shows the orphan-dose card', /Doses with no compound/.test(_ttView));
     check('_renderTRTViewTab: suppresses "No TRT configured" when T-Calc card shows', !/No TRT configured/.test(_ttView));
     // with no tcalc plan, the empty message returns
     G._injectionsCache={};
@@ -324,13 +326,13 @@ if(typeof G._tcalcTrtSummary==='function'){
       '2026-07-10':[{cycle_id:'tcalc',tier:'trt',compound_id:'test-e',compound_name:'Testosterone Enanthate',dose:'50',unit:'mg',dot:'#e8a020',date:'2026-07-10',source:'tcalc'}]
     };
     var _ttEditOff=G._renderEditTRT({enabled:false,compounds:[]});
-    check('_renderEditTRT: shows T-Calc card when toggle OFF', /Planned in T-Calc/.test(_ttEditOff));
+    check('_renderEditTRT: shows the orphan-dose card when toggle OFF', /Doses with no compound/.test(_ttEditOff));
     var _ttEditOn=G._renderEditTRT({enabled:true,compounds:[]});
-    var _cardIdx=_ttEditOn.indexOf('Planned in T-Calc');
-    var _protoIdx=_ttEditOn.indexOf('TRT Protocol');
+    var _cardIdx=_ttEditOn.indexOf('Doses with no compound');
+    var _protoIdx=_ttEditOn.indexOf('Testosterone');
     check('_renderEditTRT: card sits above the compound list', _cardIdx>-1 && _cardIdx>_protoIdx);
     G._injectionsCache={};
-    check('_renderEditTRT: no card when nothing planned', !/Planned in T-Calc/.test(G._renderEditTRT({enabled:true,compounds:[]})));
+    check('_renderEditTRT: no card when nothing planned', !/Doses with no compound/.test(G._renderEditTRT({enabled:true,compounds:[]})));
   }
   G._injectionsCache=_ttSaved;
 }
@@ -1443,14 +1445,17 @@ console.log(`\n${'─'.repeat(59)}`);
   check('  …and a unit with no period passes straight through',
     dpi({dose:'100',unit:'mg'}).dose === '100' && dpi({dose:'100',unit:'mg'}).unit === 'mg');
 
-  // ── B. T-CALC OWNS TESTOSTERONE (rule 2026-08-14) ───────────────────────────
-  // Henrik: "I want T-calc to own all testosterone injections, in stack wizard TRT and
-  // Enhanced should use T-calc. The only way to schedule testo must be using t-calc."
+  // ── B. ONE SCHEDULER: THE PROTOCOL (Phase 5, 2026-08-19) ────────────────────
+  // Henrik: "we are dropping the T-calc style scheduling and returning to the compound
+  // UI that is much easier to understand for a user."
   //
-  // The predecessor of this block asserted that the TRT tier won over Enhanced. That
-  // gave ONE stream but the wrong owner — T-Calc was scheduling a third one of its
-  // own, which is how a protocol ended up with 27 `enhanced/test_u` rows alongside
-  // 23 `trt/nebido` rows for the same molecule. Neither tier generates it now.
+  // This block used to assert the opposite: that NEITHER tier generated testosterone,
+  // because T-Calc owned it (rule of 2026-08-14). That rule was right about the problem
+  // — two tiers each generating the same molecule put 27 enhanced/test_u rows beside 23
+  // trt/nebido rows in one protocol — and wrong about the remedy: it moved ownership to
+  // a third scheduler rather than removing the duplication. Phase 4 merged the tiers, so
+  // the requirement that survives is ONE STREAM PER MOLECULE, and that is what is
+  // asserted here now.
   const mkStack = (trtOn) => ({
     id:'s1', name:'Protocol 1', cycle_start:'2026-08-01', cycle_length:12,
     trt:{enabled:trtOn, compounds:trtOn?[{id:'nebido',name:'Nebido',dose:'100',unit:'mg',freqVal:5,freqUnit:'days'}]:[]},
@@ -1461,30 +1466,38 @@ console.log(`\n${'─'.repeat(59)}`);
   });
   const idsOf = st => G._genInjBatches(st,'s1',null).map(b => b.compound_id);
 
-  check('the Enhanced tier never schedules testosterone',
-    idsOf(mkStack(true)).indexOf('test-u') === -1 &&
-    idsOf(mkStack(false)).indexOf('test-u') === -1);
-  check('  …and neither does the TRT tier — T-Calc owns it',
-    idsOf(mkStack(true)).indexOf('nebido') === -1);
-  check('  …while the rest of the Enhanced tier is untouched',
+  check('testosterone schedules from the protocol again',
+    idsOf(mkStack(true)).indexOf('nebido') !== -1);
+  check('  …including one still filed under the Enhanced spelling',
+    idsOf(mkStack(false)).indexOf('test-u') !== -1);
+  check('  …while the rest of the tier is untouched',
     idsOf(mkStack(true)).indexOf('hgh') !== -1 && idsOf(mkStack(false)).indexOf('hgh') !== -1);
 
   // Every TRT_CAT id is a testosterone ester, and the brand names do NOT all contain
-  // the word — so the tier, not the name, is what identifies them there.
+  // the word — so none of them may be skipped for want of matching on "testosterone".
   check('  …for EVERY ester in the TRT catalogue, brand-named or not',
     G.TRT_CAT.every(cat => idsOf({
       id:'s1', cycle_start:'2026-08-01', cycle_length:12,
       trt:{enabled:true, compounds:[{id:cat.id,name:cat.name,dose:'100',unit:'mg',freqVal:1,freqUnit:'weeks',days:[1]}]},
-    }).length === 0),
+    }).length === 1),
     G.TRT_CAT.map(c => c.id).join(','));
-  check('  …and the predicate says so directly',
-    G.TRT_CAT.every(c => G._isTestosteroneComp('trt', c) === true) &&
-    G._isTestosteroneComp('enhanced', {name:'Testosterone Undecanoate (Nebido)'}) === true &&
-    G._isTestosteroneComp('enhanced', {name:'HGH'}) === false &&
-    G._isTestosteroneComp('peptide',  {name:'Testosterone'}) === false);
 
-  // Peptides are a separate tier and must keep generating — the guard is scoped to
-  // testosterone, not "anything in a stack that also has TRT configured".
+  // ONE STREAM PER MOLECULE — the requirement the 2026-08-14 rule existed to protect,
+  // now structural: the merged tier means there is no second generator to contend with.
+  // A protocol that still holds the same molecule in both blocks (unmigrated) is the
+  // case that used to double it.
+  const bothBlocks = {
+    id:'s1', cycle_start:'2026-08-01', cycle_length:12,
+    trt:{enabled:true, compounds:[{id:'nebido',name:'Nebido',dose:'100',unit:'mg',freqVal:5,freqUnit:'days'}]},
+    enhanced:{enabled:true, compounds:[{id:'test_u',name:'Testosterone Undecanoate (Nebido)',dose:'350',unit:'mg/week',cadence:'interval',freqVal:5,freqUnit:'days'}]},
+  };
+  const canon = id => (G._canonCompoundId ? G._canonCompoundId(id) : id);
+  const bothIds = idsOf(bothBlocks).map(canon);
+  check('an unmigrated protocol does not schedule the same molecule twice',
+    bothIds.filter(x => x === 'nebido').length === 1,
+    'ids: ' + idsOf(bothBlocks).join(','));
+
+  // Peptides are a separate tier and must keep generating.
   check('  …and peptides still generate alongside a testosterone protocol',
     idsOf({
       id:'s1', cycle_start:'2026-08-01', cycle_length:12,
@@ -1492,20 +1505,19 @@ console.log(`\n${'─'.repeat(59)}`);
       trt:{enabled:true, compounds:[{id:'nebido',name:'Nebido',dose:'100',unit:'mg',freqVal:5,freqUnit:'days'}]},
     }).indexOf('reta') !== -1);
 
-  idsOf(mkStack(true));   // _injSuppressed reflects the LAST generation — regenerate
-  check('  …both suppressed entries are recorded, not silently dropped',
-    (G._injSuppressed['s1']||[]).some(x => x.id === 'test-u' && x.reason === 'tcalc') &&
-    (G._injSuppressed['s1']||[]).some(x => x.id === 'nebido' && x.reason === 'tcalc'));
-  check('  …and the config says so where the user configured it, naming T-Calc',
-    /function _tcalcOwnsTestoNote\(/.test(stackJs) &&
-    /Scheduled in T-Calc/.test(stackJs) &&
-    /_enhDormantNoteHtml\(c,_editBuf\)/.test(stackJs) &&
-    /_enhDormantNoteHtml\(c,_wiz\)/.test(stackJs));
-  check('  …in the TRT tier too — editor, wizard and read-only view',
-    (stackJs.match(/_tcalcOwnsTestoNote\('Testosterone'\)/g)||[]).length >= 3);
-  check('  …and the note is unconditional for a testosterone entry',
-    G._enhDormantNoteHtml({id:'test-u',name:'Testosterone Undecanoate (Nebido)'},{trt:{enabled:false,compounds:[]}}).indexOf('T-Calc') !== -1 &&
-    G._enhDormantNoteHtml({id:'hgh',name:'HGH'},{trt:{enabled:true,compounds:[{id:'nebido'}]}}) === '');
+  // Nothing is suppressed any more, so nothing may be RECORDED as suppressed — a note
+  // saying "scheduled elsewhere" beside a compound that schedules right here is worse
+  // than no note at all.
+  idsOf(mkStack(true));
+  check('nothing is recorded as suppressed for testosterone',
+    (G._injSuppressed['s1']||[]).length === 0,
+    JSON.stringify(G._injSuppressed['s1']||[]));
+  check('  …and no config screen still claims T-Calc schedules it',
+    G._tcalcOwnsTestoNote('Testosterone') === '');
+  check('  …replaced by one that only fires for an unmigrated id',
+    G._enhDormantNoteHtml({id:'test_u',name:'Testosterone Undecanoate (Nebido)'},{}).indexOf('Older format') !== -1 &&
+    G._enhDormantNoteHtml({id:'nebido',name:'Nebido'},{}) === '' &&
+    G._enhDormantNoteHtml({id:'hgh',name:'HGH'},{}) === '');
 
   // No generated injection may carry a rate unit — that is the "350 mg/week" row.
   const units = G._genInjBatches(mkStack(false),'s1',null)
@@ -2409,20 +2421,29 @@ if (typeof G._tcConfirmAddSheet === 'function' && typeof G._tcSaveEditSeries ===
       r === expect.records && b === expect.future && p === 0,
       'records=' + r + ' (want ' + expect.records + '), future=' + b + ' (want ' + expect.future + '), plans=' + p);
   };
-  // A dose already taken is a RECORD; a dose ahead is a PLAN. A series spanning
-  // today splits, and nothing is lost at the seam.
+  // A dose already taken is a RECORD; a dose ahead is a PLAN.
+  //
+  // Phase 5 (2026-08-19) removed T-Calc's planning and kept its record entry: the
+  // protocol is the only thing that writes a schedule now, and there is no other way
+  // to log a dose you already took. So the past half of this matrix still asserts the
+  // exact dose counts — that is the vial arithmetic, and a series that comes back two
+  // doses short is a vial that no longer adds up — while the future half must write
+  // NOTHING and say where planning went.
   await _add('single dose in the past', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-5)}, false,
              {records:1, future:0});
-  await _add('single dose in the future', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(5)}, false,
-             {records:0, future:1});
+  await _add('single dose in the future — refused, not planned',
+             {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(5)}, false,
+             {records:0, future:0});
   await _add('series entirely in the past', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-20),
              'tc-as-count':'5','tc-as-interval':'2'}, true, {records:5, future:0});
-  await _add('series entirely in the future', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(4),
-             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:0, future:5});
-  await _add('series straddling today', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-4),
-             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:3, future:2});
+  await _add('series entirely in the future — refused', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(4),
+             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:0, future:0});
+  // The seam is where doses used to go missing: the past half must still land in full.
+  await _add('series straddling today — the past half is still recorded in full',
+             {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(-4),
+             'tc-as-count':'5','tc-as-interval':'2'}, true, {records:3, future:0});
   await _add('series starting exactly today', {'tc-as-comp':'nebido','tc-as-dose':'100','tc-as-date':_d(0),
-             'tc-as-count':'10','tc-as-interval':'2'}, true, {records:1, future:9});
+             'tc-as-count':'10','tc-as-interval':'2'}, true, {records:1, future:0});
 
   // ── SERIES EDITOR ────────────────────────────────────────────────────────
   // The reported bug: a straddling edit dropped its past-dated doses on every save.
@@ -2440,20 +2461,22 @@ if (typeof G._tcConfirmAddSheet === 'function' && typeof G._tcSaveEditSeries ===
       '), records=' + r + ' (want ' + expect.records + ')');
   };
   const _ex = [_d(-4), _d(-2), _d(0), _d(2)];
-  // Re-typing a cadence never asserts a dose was injected: the past half is written
-  // as PLAN rows, never records.
-  await _edit('grown, straddling today', _ex,
+  // Editing a series is planning, and planning left T-Calc in Phase 5. Every one of
+  // these permutations must now write NOTHING — a second writer beside the protocol
+  // generator is the duplication this rewrite exists to end. The dose-count arithmetic
+  // these guarded is asserted against _genInjBatches in the "one scheduler" block.
+  await _edit('grown, straddling today — refused', _ex,
     {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-4),'tc-es-count':'10','tc-es-interval':'2'},
-    {plans:2, future:8, records:0});
-  await _edit('entirely in the future', _ex,
+    {plans:0, future:0, records:0});
+  await _edit('entirely in the future — refused', _ex,
     {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(4),'tc-es-count':'6','tc-es-interval':'2'},
-    {plans:0, future:6, records:0});
-  await _edit('entirely in the past', _ex,
+    {plans:0, future:0, records:0});
+  await _edit('entirely in the past — refused', _ex,
     {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-20),'tc-es-count':'4','tc-es-interval':'2'},
-    {plans:4, future:0, records:0});
-  await _edit('shrunk, straddling today', _ex,
+    {plans:0, future:0, records:0});
+  await _edit('shrunk, straddling today — refused', _ex,
     {'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(-4),'tc-es-count':'3','tc-es-interval':'2'},
-    {plans:2, future:1, records:0});
+    {plans:0, future:0, records:0});
 
 
   // ── REMOVAL — the inverse, and historically the most fragile ──────────────
@@ -2477,9 +2500,13 @@ if (typeof G._tcConfirmAddSheet === 'function' && typeof G._tcSaveEditSeries ===
   await _del('a stored row deletes the record, not just the cache',
     [_stored(_d(-6),1), _stored(_d(-4),2)],
     () => G._tcRemoveManualEntry(0), 1);
-  await _del('a whole stored series deletes every record in it',
+  // Phase 5: removing a SERIES is a planning action and is refused — the protocol owns
+  // the schedule now, so deleting a run happens by editing the compound in
+  // Plan ▸ Compounds. Deleting a single stored dose is record maintenance and still
+  // works (the cases below), because that is the user correcting their own record.
+  await _del('removing a whole series is refused, not silently partial',
     [_stored(_d(-6),1,'sA'), _stored(_d(-4),2,'sA'), _stored(_d(-2),3,'sA')],
-    () => G._tcRemoveSeries('sA'), 3);
+    () => G._tcRemoveSeries('sA'), 0);
   await _del('a profile-only row (no injId) reaches no endpoint',
     [{compId:'nebido', doseMg:'100', date:_d(4), draft:true}],
     () => G._tcRemoveManualEntry(0), 0);
@@ -2519,27 +2546,43 @@ if (typeof G._tcConfirmAddSheet === 'function' && typeof G._tcSaveEditSeries ===
       made.indexOf(_d(-6)) < 0 && made.indexOf(_d(-4)) < 0,
       'POSTed ' + JSON.stringify(made) + ' — ' + _d(-6) + '/' + _d(-4) + ' already exist');
   }
-  check('edit · …while the genuinely new date is still created',
-    (await _dupCase('sOld')).indexOf(_d(-2)) >= 0);
+  check('edit · a refused edit creates nothing at all',
+    (await _dupCase('sOld')).length === 0);
 
-  // THE REGRESSION, stated as the invariant it broke: an edit writes as many doses as
-  // it was asked for. The old code wrote only the future half, so "10 every 2 days"
-  // starting four days ago persisted 8 — and each further save shed two more.
-  const _acct = async (count, startOff) => {
-    _reset();
-    G._tcp.manualLog = _ex.map(d => ({compId:'nebido', doseMg:'100', date:d, seriesId:'sX'}));
-    G._tcEditSeriesId = 'sX';
-    const calls = _arm({'tc-es-comp':'nebido','tc-es-dose':'100','tc-es-date':_d(startOff),
-                        'tc-es-count':String(count),'tc-es-interval':'2'});
-    await G._tcSaveEditSeries();
-    return _plans(calls).length + _recs(calls).length + _batch(calls);
+  // THE REGRESSION these guarded: a schedule must write as many doses as it was asked
+  // for. T-Calc's editor wrote only the future half, so "10 every 2 days" starting four
+  // days ago persisted 8, and each further save shed two more — a vial that no longer
+  // adds up (CLAUDE.md: a series usually maps to a VIAL).
+  //
+  // The editor is refused now, so the invariant moves to the thing that does the
+  // scheduling: _genInjBatches over a protocol whose cycle started before today.
+  const _genCount = (startOff, intervalDays) => {
+    const st = {id:'acct', cycle_start:_d(startOff), cycle_length:8,
+                trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100',
+                     unit:'mg', freqVal:intervalDays, freqUnit:'days'}]}};
+    return G._genInjBatches(st, 'acct', null)
+            .reduce((n, b) => n + (b.entries||[]).length, 0);
   };
-  check('edit · every dose asked for is accounted for (10 from −4d)',
-    (await _acct(10, -4)) === 10, 'wrote ' + (await _acct(10, -4)) + ' of 10');
-  check('edit · …and re-saving the same run does not shed doses',
-    (await _acct(10, -4)) === (await _acct(10, -4)));
-  check('edit · a 20-dose run from 10 days ago is written in full',
-    (await _acct(20, -10)) === 20, 'wrote ' + (await _acct(20, -10)) + ' of 20');
+  const _genDates = (startOff, intervalDays) => {
+    const st = {id:'acct', cycle_start:_d(startOff), cycle_length:8,
+                trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100',
+                     unit:'mg', freqVal:intervalDays, freqUnit:'days'}]}};
+    return G._genInjBatches(st, 'acct', null)
+            .reduce((a, b) => a.concat((b.entries||[]).map(e => e.date)), []);
+  };
+  const _d10 = _genDates(-10, 2), _d4 = _genDates(-4, 2);
+  check('gen · a protocol that began 10 days ago keeps its past-dated doses',
+    _d10.filter(x => x < _d(0)).length >= 4, 'past doses: ' + _d10.filter(x => x < _d(0)).length);
+  check('gen · …every one of them, none shed at the seam',
+    _d10.filter(x => x < _d(0)).length > _d4.filter(x => x < _d(0)).length,
+    _d10.filter(x => x < _d(0)).length + ' vs ' + _d4.filter(x => x < _d(0)).length);
+  check('gen · …and regenerating writes exactly the same run',
+    JSON.stringify(_genDates(-10, 2)) === JSON.stringify(_d10));
+  check('gen · …on the cadence asked for, with no gaps',
+    (() => {
+      const gap = (a,b) => Math.round((new Date(b+'T12:00:00') - new Date(a+'T12:00:00'))/86400000);
+      return _d10.length > 2 && gap(_d10[0], _d10[1]) === 2 && gap(_d10[1], _d10[2]) === 2;
+    })(), JSON.stringify(_d10.slice(0,3)));
 
   G._tcp = _pmSave.tp; G._userStacks = _pmSave.us; G._tcHistory = _pmSave.h;
   G._tcHistoryState = _pmSave.hs; G._injectionsCache = _pmSave.c;
@@ -2803,37 +2846,41 @@ if (typeof G._genInjBatches === 'function') {
   check('  …carrying the compound id unchanged', _e.every(x => x.compound_id === 'reta'));
   check('  …and a PK snapshot field for the history to read', _e.every(x => 'half_life_days' in x));
 
-  // ── T-CALC OWNS TESTOSTERONE (rule 2026-08-14) ────────────────────────────
-  // These three checks previously asserted the opposite: that the TRT tier generated
-  // `tier:'trt'`, that the Enhanced tier generated `tier:'enhanced'`, and that when
-  // both held testosterone the TRT tier won. That was ONE stream but the wrong owner
-  // — T-Calc was scheduling a third of its own, and a real protocol ended up with 27
-  // `enhanced/test_u` rows beside 23 `trt/nebido` rows for the same molecule.
-  // Henrik: "The only way to schedule testo must be using t-calc."
+  // ── ONE SCHEDULER: THE PROTOCOL (Phase 5, 2026-08-19) ──────────────────────
+  // These checks asserted the 2026-08-14 rule: that neither tier generated
+  // testosterone, because T-Calc owned it. Phase 4 merged the tiers and Phase 5 gave
+  // the generator testosterone back, so what they assert now is the requirement that
+  // actually survives — ONE stream per molecule, generated here.
   _b = G._genInjBatches({id:'s2', cycle_start:_d(-10), cycle_length:4,
     trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
       freqVal:2, freqUnit:'days'}]}}, 'cyc2', null);
-  check('the TRT tier generates NO injections — T-Calc schedules testosterone',
-    _flat(_b).length === 0, 'ids: ' + _flat(_b).map(x => x.compound_id).join(','));
+  _e = _flat(_b);
+  check('the protocol generates its testosterone', _e.length > 0);
+  check('  …tagged trt, so the free-T model still finds it',
+    _e.every(x => x.tier === 'trt' && x.compound_id === 'nebido'));
 
   _b = G._genInjBatches({id:'s3', cycle_start:_d(-10), cycle_length:4,
     enhanced:{enabled:true, compounds:[{id:'test_u', name:'Testosterone Undecanoate',
       dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]}}, 'cyc3', null);
-  check('  …and neither does Enhanced-tier testosterone',
-    _flat(_b).length === 0, 'ids: ' + _flat(_b).map(x => x.compound_id).join(','));
+  check('  …and so does one still filed under the Enhanced spelling',
+    _flat(_b).length > 0, 'ids: ' + _flat(_b).map(x => x.compound_id).join(','));
 
+  // The case that used to double: an unmigrated protocol holding the same molecule in
+  // both blocks. 27 enhanced/test_u rows beside 23 trt/nebido rows is what that cost.
   _b = G._genInjBatches({id:'s3b', cycle_start:_d(-10), cycle_length:4,
     trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
       freqVal:2, freqUnit:'days'}]},
     enhanced:{enabled:true, compounds:[{id:'test_u', name:'Testosterone Undecanoate',
       dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]}}, 'cyc3b', null);
   _e = _flat(_b);
-  check('  …so testosterone in BOTH tiers schedules ZERO times here, not once',
-    _e.length === 0,
+  const _canonIds = [...new Set(_e.map(x => G._canonCompoundId(x.compound_id)))];
+  check('  …and the same molecule in both blocks still schedules ONCE',
+    _canonIds.length === 1 && _canonIds[0] === 'nebido',
     'ids generated: ' + [...new Set(_e.map(x => x.compound_id))].join(','));
-  check('  …and both are recorded as suppressed, naming T-Calc',
-    (G._injSuppressed['s3b']||[]).length === 2 &&
-    (G._injSuppressed['s3b']||[]).every(x => x.reason === 'tcalc'));
+  check('  …with the duplicate recorded, not silently dropped',
+    (G._injSuppressed['s3b']||[]).length === 1 &&
+    (G._injSuppressed['s3b']||[]).every(x => x.reason === 'duplicate'),
+    JSON.stringify(G._injSuppressed['s3b']||[]));
 
   // A non-testosterone Enhanced compound is never suppressed by that rule.
   _b = G._genInjBatches({id:'s4', cycle_start:_d(-10), cycle_length:4,
@@ -2911,11 +2958,12 @@ if (typeof G._tcSetManualField === 'function' && typeof G._tcPushLogToSchedule =
   // fixture — so after the flush there is legitimately no row 0 to read.
   check('editing a dose updates the entry', G._tcp.manualLog[0].doseMg === '125');
   await _flush();
-  check('  …and reaches the backend, not just the local object',
-    _calls.some(c => /\/injections\/batch$/.test(c.url) && c.method === 'POST'),
+  // Phase 5: T-Calc no longer writes. The edit stays local to the planner view until
+  // the planner itself is removed in Phase 6 — the protocol is what schedules now, so
+  // a write from here would open the second stream this rewrite exists to close.
+  check('  …and no longer reaches the backend — T-Calc does not schedule',
+    !_calls.some(c => /\/injections/.test(c.url) && c.method === 'POST'),
     'calls: ' + _calls.map(c => c.method + ' ' + c.url.split('/').pop()).join(', '));
-  check('  …writing the edited dose, not the old one',
-    _calls.some(c => (c.body && c.body.entries || []).some(e => String(e.dose) === '125')));
   // An out-of-range index must be a no-op, not a crash.
   let _threw = false;
   try { G._tcSetManualField(99, 'doseMg', '1'); } catch (e) { _threw = true; }
@@ -2939,19 +2987,12 @@ if (typeof G._tcSetManualField === 'function' && typeof G._tcPushLogToSchedule =
     {compId:'nebido', doseMg:'100', date:_d(2)},
     {compId:'nebido', doseMg:'100', date:_d(4)}]};
   _calls = _arm();
-  await G._tcPushLogToSchedule();
-  check('  …and with one bound it syncs the plan',
-    _calls.some(c => /\/injections\/batch$/.test(c.url) && c.method === 'POST'));
-  check('  …reporting the FUTURE count, not the whole log',
-    _alerts.some(m => /Pushed 2 future injections/.test(m)), 'alerts: ' + JSON.stringify(_alerts));
-  // An empty log says so rather than posting nothing silently.
   _alerts.length = 0;
-  G._tcp = {targetStackId:'sP', plannerMode:'advanced', manualLog:[]};
-  _calls = _arm();
   await G._tcPushLogToSchedule();
-  check('  …and an empty log is reported, not silently ignored',
-    _alerts.some(m => /No injections logged/i.test(m)) &&
-    !_calls.some(c => c.method === 'POST'));
+  check('  …and with one bound it still writes nothing',
+    !_calls.some(c => /\/injections/.test(c.url) && c.method === 'POST'));
+  check('  …saying where scheduling lives instead',
+    _alerts.some(m => /Plan ▸ Compounds/.test(m)), 'alerts: ' + JSON.stringify(_alerts));
 
   G._tcp = _pfSave.tp; G._userStacks = _pfSave.us; G.fetch = _pfSave.f; G.alert = _pfSave.a;
   G._tcHistory = _pfSave.h; G._tcHistoryState = _pfSave.hs; G._injectionsCache = _pfSave.c;
@@ -3157,10 +3198,11 @@ console.log('\n── Today: testosterone configured but not scheduled ───
 
   _alert = ''; G.buildToday();
   check('Today says testosterone is not scheduled', /Testosterone not scheduled/.test(_alert));
-  check('  …naming the compound and the tier it sits in',
-    /Nebido/.test(_alert) && /Enhanced tier/.test(_alert), _alert.slice(0,120));
-  check('  …and pointing at T-Calc, which is the only thing that schedules it',
-    /T-Calc/.test(_alert) && /tab-btn-tcalc/.test(_alert));
+  check('  …naming the compound', /Nebido/.test(_alert), _alert.slice(0,120));
+  // Phase 5: the cause changed. It no longer means "T-Calc owns this" — the protocol
+  // schedules testosterone now, so an empty calendar means it has not generated yet.
+  check('  …and pointing at Plan, which is what schedules it now',
+    /Plan ▸ Compounds/.test(_alert) && /tab-btn-stack/.test(_alert) && !/T-Calc/.test(_alert));
 
   // Bound plan → scheduled → the note must go away.
   G._injectionsCache[TODAY].push({id:'c', compound_id:'test_u', tier:'trt', cycle_id:'tcalc:P2',
@@ -3271,10 +3313,11 @@ console.log('\n── T-Calc: saving a plan writes its injections ────�
   G._userStacks = [st]; G._activeStackIndices = [0]; G._stacksLoaded = true;
   G.saveStacksToBackend = async () => {};
 
-  // The gap this closes, as data: the generator produces no testosterone for this stack.
+  // Phase 5 inverted this: the generator is what produces testosterone now, which is
+  // why T-Calc's own write path is disabled below rather than duplicating it.
   const _gen = G._genInjBatches(st, 'P2', new Date(_n.getFullYear(), _n.getMonth(), _n.getDate(), 12,0,0,0));
-  check('the stack generator produces no testosterone rows',
-    !_gen.some(b => ['nebido','test_u'].includes(b.compound_id)));
+  check('the stack generator produces the testosterone rows',
+    _gen.some(b => ['nebido','test_u'].includes(b.compound_id)));
 
   const POSTED = [], DELETED = [];
   G.fetch = async (url, opt) => {
@@ -3285,28 +3328,29 @@ console.log('\n── T-Calc: saving a plan writes its injections ────�
     }
     return {ok:true, status:200, json:async()=>[]};
   };
+  // Phase 5: _tcWritePlanToStack no longer writes. What used to be asserted here — that
+  // saving a T-Calc plan produced the ester's injections on its own cadence, from today
+  // forward, as planned rows, never past the cycle end — is now the PROTOCOL
+  // generator's job, and is asserted against _genInjBatches above and in the
+  // "one scheduler" block. What matters here is that the old path stays silent, so the
+  // two cannot both write.
   await G._tcWritePlanToStack(st, {compId:'nebido', doseMg:'250', cadenceN:2, cadenceUnit:'day',
                                    cadenceDays:2, startDate:_bk(50)});
-  const testo = POSTED.filter(p => p.compound_id === 'nebido');
-  const rows  = testo.reduce((a,p) => a + (p.entries||[]).length, 0);
-  check('saving a plan writes the ester\'s injections', rows > 0, `${rows} rows`);
-  check('  …clearing the old ones first, so the save is not additive', DELETED.length > 0);
-  check('  …writing only from today onward, never over the record',
-    testo.every(p => (p.entries||[]).every(e => e.date >= TODAY)));
-  check('  …as PLANNED rows, not as administered ones',
-    testo.every(p => (p.entries||[]).every(e => e.logged === false && e.tier === 'trt')));
-  check('  …on the plan\'s own cadence', (() => {
-    if (!testo.length || !(testo[0].entries||[]).length) return false;   // fail, don't throw
-    const ds = testo[0].entries.map(e => e.date).slice(0,3);
-    if (ds.length < 3) return false;
-    const gap = (a,b) => Math.round((new Date(b+'T12:00:00') - new Date(a+'T12:00:00'))/86400000);
-    return gap(ds[0],ds[1]) === 2 && gap(ds[1],ds[2]) === 2;
-  })(), JSON.stringify((testo[0]&&testo[0].entries||[]).slice(0,3).map(e=>e.date)));
-  // A protocol that ends must not be scheduled past its end.
+  check('T-Calc\'s plan write is disabled — the protocol schedules instead',
+    POSTED.length === 0 && DELETED.length === 0,
+    `posted ${POSTED.length}, deleted ${DELETED.length}`);
+
+  // …and the doses it used to write are exactly what the generator now produces, on
+  // the protocol's own cadence, never past its cycle end.
+  const _genRows = _gen.filter(b => ['nebido','test_u'].includes(b.compound_id))
+                       .reduce((a,b) => a.concat(b.entries||[]), []);
+  check('  …with the generator writing them instead', _genRows.length > 0);
+  check('  …as planned rows, not administered ones',
+    _genRows.every(e => e.logged === false));
   check('  …and never past the protocol\'s own cycle end', (() => {
     const cs = new Date(_bk(50)+'T12:00:00');
     const ce = new Date(cs.getTime() + 44*7*86400000);
-    return testo.every(p => (p.entries||[]).every(e => new Date(e.date+'T12:00:00') <= ce));
+    return _genRows.every(e => new Date(e.date+'T12:00:00') <= ce);
   })());
 
   G.fetch = _spSave.f; G._userStacks = _spSave.us; G._activeStackIndices = _spSave.ai;
@@ -11053,38 +11097,42 @@ console.log('\n── injection deletes: scoped, and never a record ────
     G._userStacks=_shSave.us; G._tcp=_shSave.tp; G._isActiveStack=_shSave.ia; G.document=_shSave.doc;
   }
 
-  // ── Save keeps the sheet up until the write lands ──────────────────────────
-  // "the moment I hit Save the dialog disappears and the T-calc screen is shown, but
-  // the same warning that 7 injections isnt saved in any protocol is still visible
-  // for a few seconds." It closed FIRST and awaited afterwards, returning the user to
-  // a T-Calc still rendering the pre-save state — an orange "NOT SCHEDULED YET"
-  // banner shown immediately after pressing Save.
+  // ── Save no longer writes: scheduling moved to Plan ▸ Compounds ────────────
+  // These checks used to guard the in-flight UI of T-Calc's "save to protocol" — the
+  // spinner and the disabled Cancel that stopped the sheet closing before the write
+  // landed. Phase 5 disabled every T-Calc write path, because a second scheduler
+  // beside the protocol generator is the duplication this rewrite exists to end. The
+  // flow is deleted in Phase 6; until then it must REFUSE clearly rather than write.
   {
-    const _svSave = { doc: G.document, sts: G._tcSetTargetStack, aft: G._tcAfterSavedToStack };
-    let card = { innerHTML: '' }, removed = false;
-    const overlay = { id:'tc-save-stack-overlay', firstChild: card,
-                      parentNode: { removeChild(){ removed = true; } } };
-    G.document = Object.assign({}, G.document, {
-      getElementById: (i) => (i === 'tc-save-stack-overlay' && !removed) ? overlay : null
-    });
-    let resolveWrite; 
-    G._tcSetTargetStack = () => new Promise(r => { resolveWrite = r; });   // hangs
-    G._tcAfterSavedToStack = async () => {};
+    const _svSave = { alert: G.alert, sts: G._tcSetTargetStack };
+    let _said = '';
+    G.alert = (m) => { _said = m; };
+    let _wrote = false;
+    G._tcSetTargetStack = async () => { _wrote = true; };
 
-    if (typeof G._tcSaveToExistingStack === 'function') {
-      G._tcSaveToExistingStack('protocol_2_nostart');   // deliberately NOT awaited
-    }
-    // Synchronously after the call the write is still in flight.
-    check('Save leaves the sheet OPEN while the write is in flight', !removed);
-    check('  …showing a spinner', /today-spinner-dot/.test(card.innerHTML), card.innerHTML.slice(0,120));
-    check('  …and saying what it is doing', /Saving to protocol/.test(card.innerHTML));
-    // Conjoined with the spinner: on the pre-fix source innerHTML is '' and a bare
-    // "no Cancel" assertion passes vacuously.
-    check('  …with no Cancel while the write is in flight',
-      /today-spinner-dot/.test(card.innerHTML) && !/_tcCloseSaveToStack\(\)/.test(card.innerHTML));
+    // Re-arm before each call: this block runs after the synchronous suite and other
+    // in-flight tests share the stubbed alert.
+    const _armAlert = () => { _said = ''; G.alert = (m) => { _said = m; }; };
 
-    if (resolveWrite) resolveWrite();
-    G.document = _svSave.doc; G._tcSetTargetStack = _svSave.sts; G._tcAfterSavedToStack = _svSave.aft;
+    (async () => {
+      _armAlert();
+      await G._tcSaveToExistingStack('protocol_2_nostart');
+      check('T-Calc "save to protocol" no longer writes', _wrote === false);
+      check('  …and says where scheduling lives now', /Plan ▸ Compounds/.test(_said), _said.slice(0,80));
+
+      _armAlert();
+      await G._tcPushLogToSchedule();
+      check('"push to schedule" is refused too', /Plan ▸ Compounds/.test(_said), _said.slice(0,80));
+
+      // Capture every message: the migration block shares the stubbed alert here.
+      const _msgs = [];
+      G.alert = (m) => { _msgs.push(String(m)); };
+      await G._tcSaveEditSeries();
+      check('  …and so is editing a series',
+        _msgs.some(m => /Plan ▸ Compounds/.test(m)), _msgs.join(' || ').slice(0,120));
+
+      G.alert = _svSave.alert; G._tcSetTargetStack = _svSave.sts;
+    })();
   }
 
   // Ordering: the close must come AFTER both awaits, and a failure must not close.
@@ -11793,10 +11841,13 @@ console.log('\n── Protocol migration ─────────────
     check('  …and persisting it', _saved > _before);
 
     // Running it twice must be a no-op, not a second round of moves.
-    _told = '';
+    // Capture every message: other blocks share the stubbed alert in this window.
+    const _msgs2 = [];
+    G3.alert = (m) => { _msgs2.push(String(m)); };
     const _snapshot = JSON.stringify(_stacks);
     await G3.migrateProtocolsToCompounds(_stacks);
-    check('running it again reports nothing to do', /Nothing to migrate/.test(_told));
+    check('running it again reports nothing to do',
+      _msgs2.some(m => /Nothing to migrate/.test(m)), _msgs2.join(' || ').slice(0,120));
     // Idempotence is the real requirement — asserting on a save COUNT is unreliable
     // here, because other in-flight blocks share the stubbed saveStacksToBackend.
     check('  …and changes nothing the second time', JSON.stringify(_stacks) === _snapshot);

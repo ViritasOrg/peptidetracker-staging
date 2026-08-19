@@ -1042,7 +1042,37 @@ function _tcBlankSimplePlan(){
 // the cumulative offset rounded so fractional cadences land on whole days, and the same
 // horizon and count caps. Bounded by the stack's own cycle end when it has one, and it
 // never writes before `fromDate`, because the delete above only clears from there.
+// ── T-Calc no longer schedules (Phase 5) ─────────────────────────────────────
+// Henrik, 2026-08-16: "we are dropping the T-calc style scheduling […] The
+// visualisation of Free T will still be avail under Levels, but we wont keep the
+// planning from t-calc at all."
+//
+// Phase 5 gave the protocol generator testosterone back. If T-Calc kept writing too,
+// the app would have two schedulers for one molecule again — the exact failure the
+// 2026-08-14 rule was invented to stop, arriving from the other direction.
+//
+// So every write path here returns early, in ONE place, rather than being deleted
+// piecemeal: the curve, the history and the whole read side keep working while the
+// planner UI is removed in Phase 6. A guard that can be read in a single function is
+// also a guard that can be verified in a single test.
+//
+// _tcCreateLoggedInjections is deliberately NOT guarded. It records a dose the user
+// says they already took, which is record entry, not planning — see §3.4 of the plan.
+var _TC_PLANNING_REMOVED = true;
+
+function _tcWritesDisabled(what){
+  if(!_TC_PLANNING_REMOVED) return false;
+  if(typeof alert === 'function'){
+    alert((what || 'Scheduling') + ' has moved to Plan ▸ Compounds.\n\n' +
+          'T-Calc still shows the curve and the history; the protocol is what ' +
+          'schedules an injection now, so there is only ever one stream per compound.');
+  }
+  return true;
+}
+
 async function _tcPostPlanInjections(st, cyc, c, plan, fromDate){
+  if(_TC_PLANNING_REMOVED) return 0;   // silent: an internal step, not a user action
+
   var h = (typeof authHeaders === 'function') ? authHeaders({'Content-Type':'application/json'}) : null;
   if (!h || !cyc || !c || !c.id) return 0;
   var cad   = parseDec(plan && plan.cadenceDays) || 0;
@@ -1085,6 +1115,8 @@ async function _tcPostPlanInjections(st, cyc, c, plan, fromDate){
 // stack's injections. This is the only write path for a bound plan — nothing is kept
 // in the profile for it, so the card can never show a schedule the stack does not have.
 async function _tcWritePlanToStack(st, plan){
+  if(_TC_PLANNING_REMOVED) return;
+
   var c = (st.trt.compounds || [])[0];
   if (!c) return;
   var oldId = c.id;
@@ -1133,6 +1165,8 @@ async function _tcWritePlanToStack(st, plan){
 // ── Save / Discard ───────────────────────────────────────────────────────────
 // The ONLY path from a draft to the protocol. Nothing else writes.
 async function _tcSavePlanToStack(btnId){
+  if(_tcWritesDisabled('Saving a plan to a protocol')) return;
+
   var st = _tcSimplePlanStack();
   var d  = st && _tcDraftFor(st);
   if (!st || !d || !_tcPlanDirty()) return;
@@ -2146,6 +2180,8 @@ async function _tcCreateLoggedInjections(compId, doseMg, dates, seriesId){
 // user is explicitly entering doses they took. Today is the only place a plan becomes
 // a record.
 async function _tcCreatePlannedInjections(compId, doseMg, dates, seriesId){
+  if(_TC_PLANNING_REMOVED) return 0;
+
   if (typeof authHeaders !== 'function') return 0;
   var cd   = _tcCompInfo(compId);
   var meta = (typeof _injPkMeta === 'function') ? _injPkMeta('trt', compId)
@@ -2165,7 +2201,15 @@ async function _tcCreatePlannedInjections(compId, doseMg, dates, seriesId){
   return ok;
 }
 
+// RECORD ENTRY SURVIVES; PLANNING DOES NOT (Phase 5).
+// The Add sheet does two different things through one button: dates already gone by are
+// doses the user says they TOOK (records), and dates ahead are a PLAN. Phase 5 removed
+// T-Calc's planning, but removing record entry with it would take away the only way to
+// log a past dose — the mid-cycle onboarding path — and §8 of the plan has not yet
+// settled where that lives. So the past half still writes, and the future half is
+// refused, naming where planning went.
 async function _tcConfirmAddSheet() {
+
   var compEl=document.getElementById('tc-as-comp');
   var doseEl=document.getElementById('tc-as-dose');
   var dateEl=document.getElementById('tc-as-date');
@@ -2198,6 +2242,15 @@ async function _tcConfirmAddSheet() {
   var past=dates.filter(function(d){return d<=todayStr;});
   var future=dates.filter(function(d){return d>todayStr;});
 
+  // The plan half goes to the protocol now. With nothing in the past there is nothing
+  // to do here at all; with both, the records are written and the rest is named.
+  var refusedFuture=0;
+  if(future.length&&_TC_PLANNING_REMOVED){
+    if(!past.length){ _tcWritesDisabled('Planning future doses'); return; }
+    refusedFuture=future.length;
+    future=[];
+  }
+
   // One id across the WHOLE run. A series that straddles today is split into records
   // and plan for storage, but it is still one series the user authored — giving each
   // half its own id would render it as two unrelated cards.
@@ -2227,6 +2280,12 @@ async function _tcConfirmAddSheet() {
     await _tcSyncLogToBackend();
   }
   _tcCloseAddSheet();
+  if(refusedFuture&&typeof alert==='function'){
+    alert('Logged ' + past.length + ' dose' + (past.length===1?'':'s') + ' you already took.\n\n' +
+          'The ' + refusedFuture + ' future dose' + (refusedFuture===1?'':'s') +
+          ' were not planned here — schedule those in Plan ▸ Compounds, which is the ' +
+          'only thing that writes a schedule now.');
+  }
   if(past.length){
     await _tcFetchHistory(true);                                  // re-read; do not guess
     if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
@@ -2313,6 +2372,8 @@ async function _tcRemoveManualEntry(idx) {
 }
 
 async function _tcRemoveSeries(seriesId) {
+  if(_tcWritesDisabled('Removing a series')) return;
+
   if (!_tcp.manualLog || !seriesId) return;
   var stored = _tcp.manualLog.filter(function(e){ return e.seriesId === seriesId && e.injId; });
   if (stored.length) {
@@ -2502,6 +2563,8 @@ function _tcAttachPanListeners(canvas) {
 }
 
 async function _tcSaveEditSeries() {
+  if(_tcWritesDisabled('Editing a series')) return;
+
   var sid = _tcEditSeriesId;
   if (!sid || !_tcp || !_tcp.manualLog) return;
   var compEl=document.getElementById('tc-es-comp');
@@ -4168,6 +4231,8 @@ async function _tcClearStackConfigTrt(stack){
 // Assign (copy) the T-Calc testosterone to a stack — active OR inactive. Clears the
 // previous home so it never duplicates, then re-syncs into the new one.
 async function _tcSetTargetStack(stackId){
+  if(_tcWritesDisabled('Binding a plan to a protocol')) return;
+
   // Single-source guard: a stack gets testosterone from ONE source. If the chosen
   // stack already has its own TRT config, warn and let the user choose — OK replaces
   // the config with the T-Calc source (clears it), Cancel keeps the config (aborts).
@@ -4234,6 +4299,8 @@ function _tcStackPickerHtml(){
 }
 
 async function _tcSyncLogToBackend() {
+  if(_TC_PLANNING_REMOVED) return;   // internal: called by the paths above
+
   var h=(typeof authHeaders==='function')?authHeaders():null;
   if(!h)return;
   var _cid=_tcTargetCycleId();
@@ -4501,6 +4568,8 @@ function _tcOpenSaveToStack(){
 // Errors keep the sheet OPEN and say so, rather than closing and leaving the user to
 // infer failure from a banner that never cleared.
 async function _tcSaveToExistingStack(id){
+  if(_tcWritesDisabled('Saving to a protocol')) return;
+
   if(!id){_tcCloseSaveToStack();return;}
   _tcSaveSheetBusy('Saving to protocol…');
   try{
@@ -4592,6 +4661,8 @@ async function _tcAfterSavedToStack(){
 }
 
 async function _tcPushLogToSchedule() {
+  if(_tcWritesDisabled('Pushing a plan to the schedule')) return;
+
   var log=_tcp.manualLog||[];
   if(!log.length){alert('No injections logged yet.');return;}
   var h=(typeof authHeaders==='function')?authHeaders():null;
