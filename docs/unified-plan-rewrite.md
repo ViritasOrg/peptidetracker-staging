@@ -1,6 +1,7 @@
 # Unified Plan rewrite — one scheduler, three tabs
 
-Status: **proposed, not started**
+Status: **in progress** — Phase 0 (decisions) and Phase 1 (catalogue merge) landed
+2026-08-19; Phase 2 largely already in place. See §6 for the phase table.
 Author: drafted 2026-08-16 with Henrik
 Scope: multi-day. Ships in phases, each independently mergeable and revertible.
 
@@ -222,9 +223,12 @@ which is what `_isTestosteroneComp('trt', c) === (tier === 'trt')` does today an
 One catalogue, one id per molecule. `_TC_TESTO_ALIAS` becomes a **migration table**, not
 a runtime lookup: read both spellings, write only the canonical one, and stop.
 
-Choose the surviving id space in Phase 0. Recommendation: keep the **TRT/PK ids**
-(`nebido`, `enanthate`, …) because the PK model, `_TC_T_FRACTION` and the plasma curve
-already key on them, and the backend's `trt_catalog.py` is the richer source.
+**Decided 2026‑08‑19: the TRT/PK ids** (`nebido`, `enanthate`, …) — the PK model,
+`_TC_T_FRACTION` and the plasma curve already key on them, and the backend's
+`trt_catalog.py` is the richer source. Shipped in `claude-agent-backend` as
+`GET /compounds/catalog`: one entry per molecule, `aliases` carrying the Enhanced
+spelling, `isTestosterone`, and `sources` naming which catalogue each field came from.
+`/compounds/enhanced` and `/trt-catalog` are unchanged, because prod still reads them.
 
 ### 4.3 Backend
 
@@ -298,8 +302,8 @@ Each phase is a mergeable PR that leaves the app working.
 
 | # | Phase | Deliverable | Risk |
 |---|-------|-------------|------|
-| 0 | Decisions | §8 answered; id space chosen; Recon/Timeline placement settled | — |
-| 1 | Catalogue merge (backend) | one compound list, `isTestosterone` flag, both ids resolvable | low |
+| 0 | Decisions | **DONE** — id space = PK ids; prod held; Recon under Peptides; Timeline dropped | — |
+| 1 | Catalogue merge (backend) | **DONE 2026‑08‑19** — `GET /compounds/catalog`, `isTestosterone`, alias map | low |
 | 2 | Read‑both/write‑one | every id comparison canonicalised; dry‑run report | low |
 | 3 | Scheduler extraction | one module owns all injection writes; existing UI calls into it | **high** |
 | 4 | Plan: Compounds tab | TRT + Enhanced editors merged into one | medium |
@@ -336,15 +340,25 @@ Those encode bugs that cost a day; they must survive the restructure.
 
 ---
 
-## 8. Open questions for Henrik
+## 8. Decisions and open questions
 
-1. **Id space** — keep `nebido`/`enanthate` (PK‑aligned, recommended) or `test_u`/`test_e`?
-2. **Where does "log a past dose" live?** `_tcCreateLoggedInjections` is the only
+**Answered 2026‑08‑19:**
+
+1. **Id space — the PK ids win.** `nebido`, `enanthate`, `cypionate`, `propionate`,
+   `sustanon`. The PK model, `_TC_T_FRACTION` and the plasma curve already key on them,
+   and `trt_catalog.py` carries the provenance. The Enhanced spellings become aliases.
+2. **`Push to Prod` — hold prod until the whole rewrite lands.** Prod stays at 1.289
+   behaviour throughout, including its testosterone double‑scheduling, which this rewrite
+   is what finally fixes. Every phase must still leave staging working, but no phase needs
+   to be independently promotable.
+
+**Still open:**
+
+3. **Where does "log a past dose" live?** `_tcCreateLoggedInjections` is the only
    surviving record‑entry path from T‑Calc (§3.4). Today, or the Compounds tab?
-3. **Migration timing** — backfill everything in one action, or leave legacy rows readable
-   and only write new ones canonically?
-4. **`Push to Prod`** — this is a multi‑day change on staging. Promote per phase, or hold
-   prod at the current version until the whole rewrite lands?
+   Needed by Phase 6, not before.
+4. **Migration timing** — backfill everything in one action, or leave legacy rows readable
+   and only write new ones canonically? Needed by Phase 7.
 
 ---
 
@@ -376,18 +390,19 @@ time, and **a backup before every destructive write**. The delete flow is alread
 steps — dry run, then a confirm dialog naming the account, the file, the matched count
 and the untouched-other-accounts count.
 
-So the stray rows are removable today, by hand, per app namespace (`peptide` and
-`peptide-stage` are separate data and both carry them). What is still missing is small:
+So the stray rows are removable per app namespace (`peptide` and `peptide-stage` are
+separate data and both carry them). **The three gaps listed here on 2026‑08‑16 shipped on
+2026‑08‑19** (admin UI 1.19–1.20):
 
-1. **Structured filters.** Search is a free-text AND over the row JSON. The strays
-   present as a `(cycle_id, compound_id, tier)` group, so filters on those fields plus a
-   date range and `logged` would turn a 26-checkbox selection into one action.
-2. **A guard on `logged` rows.** They are the user's record. Today they are labelled
-   `logged` in the row summary and are otherwise selectable like any other row — a bulk
-   selection can include one without a second look. Deleting a logged dose should take
-   its own explicit confirmation naming the dose and date.
-3. **A "select all matching" action**, so a filtered group can be deleted without
-   ticking each row.
+1. **Filters.** A `Show` filter (all / unlogged / logged) and a `Container` filter
+   (any / orphans only / live only). A row is an orphan when its `cycle_id` matches no
+   protocol that still exists, read from the account's own `stacks.json` — not
+   pattern‑matched off the id. `manual` and the `tcalc` namespace are never orphans, and
+   an unreadable `stacks.json` disables the filter rather than reporting zero.
+2. **A guard on `logged` rows.** A selection containing logged doses takes a second
+   confirmation listing them by date, compound and dose, counted from the dry run.
+3. **Select all shown**, over the filtered list only, with the page size raised to the
+   API maximum so a group is never silently truncated before "select all".
 
 This lives in **`claude-agent-backend`**, not in either app repo.
 
