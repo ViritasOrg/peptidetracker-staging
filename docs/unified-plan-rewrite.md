@@ -1,8 +1,9 @@
 # Unified Plan rewrite — one scheduler, three tabs
 
 Status: **in progress** — Phases 0–6 landed 2026‑08‑19/20 (Phase 2 was largely
-already in place). Remaining: Phase 7 (migrating stored rows to the canonical id)
-and Phase 8 (dropping the alias at runtime). See §6.
+already in place). Phase 7's dry run is done (§6.1): staging holds exactly one
+non‑canonical row, and it is blocked on Henrik deciding what its dose meant, not on
+code. Phase 8 (dropping the alias at runtime) follows. See §6.
 Author: drafted 2026-08-16 with Henrik
 Scope: multi-day. Ships in phases, each independently mergeable and revertible.
 
@@ -339,8 +340,39 @@ Each phase is a mergeable PR that leaves the app working.
 | 4 | Plan: Compounds tab | TRT + Enhanced editors merged into one | medium |
 | 5 | Un‑suppress the generator | **DONE 2026‑08‑19** — `_genInjBatches` emits testosterone; T‑Calc's writes disabled | **high** |
 | 6 | T‑Calc read‑only | **DONE 2026‑08‑20** — planner UI and every write path deleted; curve reads stored rows only | medium |
-| 7 | Migration | backfill tiers and ids, after dry‑run approval | **high** |
+| 7 | Migration | dry run done (§6.1) — one row to patch, awaiting Henrik's call on its dose | **high** |
 | 8 | Cleanup | `_TC_TESTO_ALIAS` runtime use and the curve's dedup removed | low |
+
+### 6.1 Phase 7 dry run — staging, read 2026‑08‑20
+
+Read straight off `GET /admin-data/records?app=peptide-stage&file=injections.json`
+(254 rows, read‑only credential — nothing was written):
+
+| compound_id | tier | cycle_id | rows | logged | span |
+|---|---|---|---|---|---|
+| `glow` | peptide | `protocol_2_nostart` | 61 | 13 | 06 Aug – 05 Oct |
+| `hgh` | enhanced | `protocol_2_nostart` | 122 | 17 | 06 Aug – 05 Oct |
+| `nebido` | trt | `manual` | 20 | 20 | 29 Jun – 06 Aug |
+| `nebido` | trt | `protocol_2_nostart` | 30 | 6 | 08 Aug – 05 Oct |
+| `retatrutide` | peptide | `protocol_2_nostart` | 18 | 4 | 06 Aug – 04 Oct |
+| **`test_u`** | **enhanced** | `protocol_2_nostart` | **1** | **1** | 06 Aug |
+| `testoviron` | trt | `manual` | 2 | 2 | 26–27 Jun |
+
+Everything already carries a canonical id — `testoviron` is a catalogue id in its own
+right — **except one row**: the single logged `test_u`/`enhanced` dose of 6 Aug, stored
+as `350 mg/week`. So the whole of Phase 7 in staging is that one row, and it needs two
+independent decisions:
+
+1. **Id and tier** — `test_u` → `nebido`, `enhanced` → `trt`. Mechanical.
+2. **The dose itself** — `mg/week` is a rate, not a per‑injection amount, so the free‑T
+   model reads it as a real 350 mg dose on 6 Aug. Whether that is a 350 mg injection, a
+   weekly rate mis‑stored on a single day, or a stray, is Henrik's call, not a migration
+   rule. **The backfill must not guess it.**
+
+Because it is one row, no migration endpoint is warranted: the admin Records tab can
+patch it directly. Phase 7 reduces to that patch plus re‑running this query to confirm
+zero non‑canonical ids remain. Answers §8.4 — legacy rows stay readable, new writes are
+canonical, and the backfill is this single correction rather than a bulk pass.
 
 Phases 3 and 5 are where this can go wrong. Both touch the code that writes the user's
 record; both need the full behavioural test set below green before merge.
@@ -387,8 +419,10 @@ Those encode bugs that cost a day; they must survive the restructure.
 3. **Where does "log a past dose" live?** `_tcCreateLoggedInjections` is the only
    surviving record‑entry path from T‑Calc (§3.4). Today, or the Compounds tab?
    Needed by Phase 6, not before.
-4. **Migration timing** — backfill everything in one action, or leave legacy rows readable
-   and only write new ones canonically? Needed by Phase 7.
+4. ~~**Migration timing**~~ — **answered by the dry run (§6.1).** Legacy rows stay
+   readable, new writes are canonical, and the backfill is one row rather than a bulk
+   pass. What is still open is not the timing but the *value*: what the 350 mg/week on
+   that row was meant to be.
 
 ---
 
