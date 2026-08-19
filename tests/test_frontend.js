@@ -77,7 +77,7 @@ const sandbox = vm.createContext({
 });
 vm.runInContext(patchedScript, sandbox);
 // Load tab files so their functions/vars are available in the same sandbox
-const tabFiles = ['tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js',
+const tabFiles = ['inj-writer.js','tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js',
                   'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-labs.js','tab-supplements.js'];
 const dir = path.dirname(path.resolve(htmlPath));
 tabFiles.forEach(f => {
@@ -1638,6 +1638,7 @@ console.log(`\n${'─'.repeat(59)}`);
 // Nebido's 56-day half-life essentially nothing from June had cleared.
 {
   const tcJs = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+  const injJs = require('fs').readFileSync(require('path').join(__dirname,'../inj-writer.js'),'utf8');
   const _svH = G._tcHistory, _svHS = G._tcHistoryState, _svC = G._injectionsCache, _svP = G._tcp;
 
   check('T-Calc fetches its own history, not the 14-day shared cache',
@@ -1749,9 +1750,13 @@ console.log(`\n${'─'.repeat(59)}`);
   // injections back?" The mirror of the same cause — manualLog is a cache, so a
   // past-dated push was rebuilt away by the next render, and _tcSyncLogToBackend
   // only writes from TODAY forward so nothing persisted it either.
+  // The POST moved into inj-writer.js in Phase 3 (one module owns every write).
+  // Same requirement, followed to where it now lives: the add path must reach a
+  // real POST /injections, not just mutate manualLog.
   check('a past-dated add POSTs a real injection record',
     /async function _tcCreateLoggedInjections\(/.test(tcJs) &&
-    /AGENT_URL \+ '\/injections',\s*\n\s*\{method:'POST'/.test(tcJs));
+    /await injWriteOne\(body, 'tcAddInj'\)/.test(tcJs) &&
+    /fetch\(AGENT_URL \+ '\/injections', \{\s*\n\s*method:'POST'/.test(injJs));
   check('  …marked logged, which is what makes it the past',
     /active: true, logged: true, source: 'manual'/.test(tcJs));
   check('  …carrying the PK snapshot, like the T-History back-fill does',
@@ -1790,8 +1795,13 @@ console.log(`\n${'─'.repeat(59)}`);
   // The plan sync clears before it re-posts. That delete had no logged filter, so it
   // removed logged records dated today or later and the re-post recreated them as
   // unlogged plans — a record silently downgraded to a schedule.
+  // Stronger than it was: this used to pass if the string appeared anywhere in
+  // tab-tcalc.js. Every clear now goes through one function, and that function
+  // defaults to unlogged_only — a caller cannot forget it any more, it has to
+  // pass unloggedOnly:false on purpose.
   check('the plan sync clears only the plan, never a logged record',
-    /'&unlogged_only=true'/.test(tcJs));
+    /injClearFuture/.test(tcJs) &&
+    /var unloggedOnly = \(o\.unloggedOnly === false\) \? false : true;/.test(injJs));
 
   // ── A planned dose is a DRAFT until Save to protocol ───────────────────────
   // Henrik, 2026-08-08: "the user flow would always be add injections and when happy
@@ -11519,4 +11529,113 @@ console.log('\n── No fixed banners over the navbar ────────�
   try { G._markUpdateAvailable('9.99'); } catch(e){ _threw = true; }
   check('  …and does nothing when that row is not on screen', !_threw);
   G.document = _uSave.doc;
+}
+
+// ── Phase 3: one module owns every injection write ───────────────────────────
+// docs/unified-plan-rewrite.md §3.2. Ten call sites across tab-stack.js and
+// tab-tcalc.js each built their own request and did not agree with each other.
+// Every injection bug of 2026-08-15/16 lived in that gap.
+console.log('\n── One writer for injections ──────────────────────────────');
+{
+  const _fs2 = require('fs'), _p2 = require('path');
+  const _injSrc = _fs2.readFileSync(_p2.join(__dirname, '../inj-writer.js'), 'utf8');
+
+  // The invariant, checked by construction: no module but inj-writer.js may issue a
+  // planning write. Today's tick is the documented exception — it records an event
+  // that already happened.
+  const _mods = _fs2.readdirSync(_p2.join(__dirname, '..'))
+    .filter(f => (f.endsWith('.js') && f !== 'inj-writer.js'))
+    .concat(['index.html']);
+  const _writeRe = /fetch\(\s*AGENT_URL\s*\+\s*'(\/injections[^']*)'[^;]{0,300}?method:'(POST|DELETE|PUT)'/gs;
+  const _offenders = [];
+  _mods.forEach(f => {
+    const body = _fs2.readFileSync(_p2.join(__dirname, '..', f), 'utf8');
+    let m;
+    const re = new RegExp(_writeRe.source, 'gs');
+    while((m = re.exec(body)) !== null){
+      const isTick = m[2] === 'PUT' && f === 'tab-today.js';
+      if(!isTick) _offenders.push(`${f}: ${m[2]} ${m[1]}`);
+    }
+  });
+  check('nothing outside inj-writer.js writes an injection', _offenders.length === 0,
+        _offenders.join(' | '));
+
+  // …and the exception is still exactly two ticks, not a door left open.
+  const _todaySrc = _fs2.readFileSync(_p2.join(__dirname, '../tab-today.js'), 'utf8');
+  check('  …except Today\'s tick, which records rather than plans',
+    (_todaySrc.match(/method:'PUT'/g) || []).length === 2 &&
+    /body:JSON.stringify\(\{logged:newLogged\}\)/.test(_todaySrc));
+
+  // Behavioural: drive the writer against a stubbed fetch. The stub is re-armed
+  // immediately before each call — this block runs after the synchronous suite, and
+  // other in-flight async tests swap the shared fetch between awaits.
+  const _wSave = {fetch:G.fetch, auth:G.authHeaders};
+  let _calls = [];
+  const _arm2 = (impl) => {
+    _calls = [];
+    G.authHeaders = (extra) => Object.assign({Authorization:'Bearer x'}, extra || {});
+    G.fetch = impl || (async (url, opts) => {
+      _calls.push({url, opts});
+      return {ok:true, status:200, json:async()=>({})};
+    });
+  };
+
+  (async () => {
+    _arm2();
+    await G.injWriteBatch('cyc1', 'nebido', '2026-08-19', [{date:'2026-08-19', dose:'100'}], 'test');
+    const _batchCalls = _calls.filter(c => /\/injections\/batch$/.test(c.url) &&
+                                          String(c.opts.body).includes('"cycle_id":"cyc1"'));
+    check('injWriteBatch posts one batch to /injections/batch',
+      _batchCalls.length === 1 && _batchCalls[0].opts.method === 'POST',
+      'saw ' + _batchCalls.length);
+    const _body = JSON.parse(_batchCalls[0].opts.body);
+    check('  …carrying cycle, compound, from_date and the entries',
+      _body.cycle_id === 'cyc1' && _body.compound_id === 'nebido' &&
+      _body.from_date === '2026-08-19' && _body.entries.length === 1);
+
+    _arm2();
+    await G.injClearFuture('cyc1', 'nebido', '2026-08-19', {tag:'test'});
+    const _del = _calls.filter(c => c.opts.method === 'DELETE');
+    check('injClearFuture deletes only from the given date forward',
+      _del.length === 1 && /cycle_id=cyc1/.test(_del[0].url) &&
+      /compound_id=nebido/.test(_del[0].url) && /from_date=2026-08-19/.test(_del[0].url),
+      'saw ' + _del.length);
+    // The whole point of the default: a logged dose is the record of something that
+    // was administered, and clearing a plan must never take one with it.
+    check('  …and spares logged doses unless told otherwise, by default',
+      /unlogged_only=true/.test(_del[0].url));
+
+    _arm2();
+    await G.injClearFuture('cyc1', 'nebido', '2026-08-19', {unloggedOnly:false});
+    check('  …with removing the record itself requiring an explicit flag',
+      _calls.some(c => /unlogged_only=false/.test(c.url)));
+
+    _arm2();
+    await G.injClearFutureMany('cyc1', ['nebido','test_u','enanthate'], '2026-08-19', {});
+    check('injClearFutureMany covers every id it is given',
+      ['nebido','test_u','enanthate'].every(id =>
+        _calls.some(c => c.url.includes('compound_id=' + id))));
+
+    // A phone doing these one at a time was slow enough to see, and the sequential
+    // version moved the following write down the microtask queue.
+    let _open = 0, _maxOpen = 0;
+    _arm2(async () => { _open++; _maxOpen = Math.max(_maxOpen, _open);
+                        await Promise.resolve(); _open--; return {ok:true, status:200}; });
+    await G.injClearFutureMany('cyc1', ['a','b','c'], '2026-08-19', {});
+    check('  …in parallel, not one round trip after another', _maxOpen > 1, `maxOpen ${_maxOpen}`);
+
+    // One failure must not abort the rest, nor the write that follows it.
+    _arm2(async (url) => { if(String(url).includes('compound_id=b')) throw new Error('network');
+                           return {ok:true, status:200}; });
+    let _blew = false;
+    try { await G.injClearFutureMany('cyc1', ['a','b','c'], '2026-08-19', {}); }
+    catch(e){ _blew = true; }
+    check('  …and one failed prune does not abort the others', !_blew);
+
+    _arm2(async () => { throw new Error('offline'); });
+    const _r = await G.injWriteBatch('c','n','2026-08-19',[], 'test');
+    check('a network failure returns null rather than throwing at the caller', _r === null);
+
+    G.fetch = _wSave.fetch; G.authHeaders = _wSave.auth;
+  })();
 }

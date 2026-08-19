@@ -513,7 +513,7 @@ async function saveEditBuf(){
     var _cycId=_stackCycleId(_editBuf);
     for(var _pi=0;_pi<_oldProtoCids.length;_pi++){
       if(!_newProtoCids.includes(_oldProtoCids[_pi])){
-        try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cycId)+'&compound_id='+encodeURIComponent(_oldProtoCids[_pi])+'&from='+dateKey(_editToday0)+'&unlogged_only=true',{method:'DELETE',headers:authHeaders()});}catch(e){_logErr('delOrphanInj',e);}
+        await injClearFuture(_cycId,_oldProtoCids[_pi],dateKey(_editToday0),{tag:'delOrphanInj'});
       }
     }
     _trtLogCache={};
@@ -2728,10 +2728,7 @@ async function generateAndPushInjections(stack,fromDate){
   var batches=_genInjBatches(stack,cycleId,fromDate);
   for(var i=0;i<batches.length;i++){
     var b=batches[i];
-    try{
-      var r=await fetch(AGENT_URL+'/injections/batch',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({cycle_id:cycleId,compound_id:b.compound_id,from_date:b.from_date,entries:b.entries})});
-      if(!r.ok)_logHttp('genInj',r.status,'/injections/batch');
-    }catch(e){_logErr('genInj',e);}
+    await injWriteBatch(cycleId,b.compound_id,b.from_date,b.entries,'genInj');
   }
 }
 
