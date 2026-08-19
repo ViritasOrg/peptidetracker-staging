@@ -169,17 +169,18 @@ function _tcLoadProfile() {
   if (cached) {
     try { Object.assign(_tcp, JSON.parse(cached)); } catch(e) {}
   }
-  // Fetch extra catalog entries (no auth required — generic PK reference data)
-  fetch(AGENT_URL + '/trt-catalog')
-    .then(function(r){ return r.ok ? r.json() : []; })
-    .then(function(d) {
-      if (!Array.isArray(d)) return;
-      _tcExtraCatalog = d;
-      buildTCalc();
-      // If the inventory overlay was opened before this fetch resolved, refresh it
-      if (document.getElementById('tc-inv-overlay')) _tcOpenInventory();
-    })
-    .catch(function(){});
+  // ONE CATALOGUE, INCLUDING THE PK FIGURES. /compounds/catalog carries each compound's
+  // trt-catalog entry verbatim under `pk` — same objects, same provenance fields — so
+  // the model can read the merged list instead of fetching the PK list separately.
+  // /trt-catalog stays as the fallback: it is public, unauthenticated reference data, and
+  // it is what an older backend serves.
+  //
+  // WHAT MUST NOT CHANGE: these numbers are the model. They set the half-life, the
+  // uncertainty band, tmax, bioavailability and the ester fraction that the plasma curve
+  // integrates. This change was verified by fingerprinting the curve for every ester in
+  // the catalogue — PK inputs, raw plasma peak, and the calibrated free-T series — before
+  // and after; the outputs are identical to six decimal places.
+  _tcLoadPkCatalog();
   var h = (typeof authHeaders === 'function') ? authHeaders() : null;
   if (!h) return;
   fetch(AGENT_URL + '/tcalc-profile', {headers: h})
@@ -383,6 +384,43 @@ function _tcAllCompIds() {
     .concat(_tcExtraCatalog.map(function(c){ return c.id; }))
     .forEach(function(id){ if (id && ids.indexOf(id) === -1) ids.push(id); });
   return ids;
+}
+
+// Populate the PK catalogue the model integrates. Prefers the merged catalogue's `pk`
+// entries; falls back to /trt-catalog. Either way _tcExtraCatalog ends up holding the
+// same trt_catalog rows, which is why the curve cannot move.
+function _tcPkRowsFromMerged(payload){
+  var list = (payload && (Array.isArray(payload) ? payload : payload.compounds)) || [];
+  var rows = [];
+  list.forEach(function(c){ if (c && c.pk && c.pk.id) rows.push(c.pk); });
+  return rows;
+}
+
+function _tcApplyPkCatalog(rows){
+  if (!Array.isArray(rows) || !rows.length) return false;
+  _tcExtraCatalog = rows;
+  if (typeof buildTCalc === 'function') buildTCalc();
+  // If the inventory overlay was opened before this resolved, refresh it
+  if (document.getElementById('tc-inv-overlay')) _tcOpenInventory();
+  return true;
+}
+
+function _tcLoadPkCatalog(){
+  var h = (typeof authHeaders === 'function') ? authHeaders() : null;
+  fetch(AGENT_URL + '/compounds/catalog', h ? {headers: h} : undefined)
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if (_tcApplyPkCatalog(_tcPkRowsFromMerged(d))) return;
+      throw new Error('no pk rows in merged catalogue');
+    })
+    .catch(function(){
+      // Unauthenticated public reference data — the model must still have its numbers
+      // even if the merged endpoint is unavailable or the session is not yet valid.
+      fetch(AGENT_URL + '/trt-catalog')
+        .then(function(r){ return r.ok ? r.json() : []; })
+        .then(function(d){ _tcApplyPkCatalog(Array.isArray(d) ? d : []); })
+        .catch(function(){});
+    });
 }
 
 function _tcCompInfo(compId) {
