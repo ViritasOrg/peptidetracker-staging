@@ -11353,17 +11353,15 @@ console.log('\n── Today: finished cycle empty state ────────
   G._syncPending = _ceSave.sp; G._injHidden = _ceSave.hid;
 }
 
-// ── Week strip: a year of history ─────────────────────────────────────────────
-// Henrik, 2026-08-17: "Make Today views day selector scrollable backwards in time
-// for a year." The strip ran NOW-7 .. NOW+6, so nothing older than last week could
-// be opened from Today at all.
-console.log('\n── Week strip: a year back ────────────────────────────────');
+// ── Week strip: a week back, plus the calendar card ──────────────────────────
+// Briefly a year (2026-08-17), reverted 2026-08-19: "Restore the 7 days only
+// carousel." The calendar card is what reaches an older day now.
+console.log('\n── Week strip ─────────────────────────────────────────────');
 {
   const _wsSave = {doc:G.document, cache:G._injectionsCache, plog:G.window._peptideLog};
-  let _layout = false;                       // false = element has no layout yet
   const _strip = {dataset:{}, scrollLeft:0, clientWidth:350, children:[],
                   set innerHTML(v){ if(v==='') this.children=[]; }, get innerHTML(){ return ''; },
-                  appendChild(el){ el.offsetLeft = _layout ? (this.children.length+1)*50 : 0;
+                  appendChild(el){ el.offsetLeft = (this.children.length+1)*50;
                                    this.children.push(el); }};
   G.document = Object.assign({}, _wsSave.doc, {
     getElementById:(id)=> id==='week-strip' ? _strip : _wsSave.doc.getElementById(id),
@@ -11374,33 +11372,20 @@ console.log('\n── Week strip: a year back ───────────�
   G.window._peptideLog = [];
 
   G.buildWeekStrip();
-  check('the strip reaches a year back',            G.WEEK_STRIP_BACK === 365);
-  check('  …and the forward window is unchanged',   G.WEEK_STRIP_FWD === 6);
+  check('the strip covers a week back',             G.WEEK_STRIP_BACK === 7);
+  check('  …and six days forward',                  G.WEEK_STRIP_FWD === 6);
   check('  …so it renders back + today + forward, plus the calendar card',
-    _strip.children.length === 373, `got ${_strip.children.length}`);
+    _strip.children.length === 15, `got ${_strip.children.length}`);
   check('  …with the calendar card at the far-left end of the strip',
     /week-cal/.test(_strip.children[0].className));
   check('  …with exactly one tile marked today',
     _strip.children.filter(e=>/(^|\s)today(\s|$)/.test(e.className)).length === 1);
 
-  // A build before the tab is laid out cannot centre anything, and must not claim it
-  // did — init() builds once immediately and again 100ms later.
-  check('a pre-layout build does not claim the strip is positioned',
-    _strip.dataset.wsCentered !== '1');
-
-  _layout = true;
+  // The strip is rebuilt on every tick and re-centres on today each time — the
+  // scroll-holding added for the year-long window went with it.
+  _strip.scrollLeft = 0;
   G.buildWeekStrip();
-  const _centred = _strip.scrollLeft;
-  check('once laid out it centres on today',        _centred > 0);
-  check('  …and records that it did',               _strip.dataset.wsCentered === '1');
-
-  // The strip is rebuilt on every tick. Re-centring there would yank the user back
-  // from wherever they had scrolled, which makes a year of history unusable.
-  _strip.scrollLeft = 42;
-  G.buildWeekStrip();
-  check('a rebuild holds the scroll position instead of jumping to today',
-    _strip.scrollLeft === 42, `got ${_strip.scrollLeft}`);
-  check('  …and still renders the whole year',      _strip.children.length === 373);
+  check('every build re-centres on today',          _strip.scrollLeft > 0);
 
   G.document = _wsSave.doc; G._injectionsCache = _wsSave.cache;
   G.window._peptideLog = _wsSave.plog;
