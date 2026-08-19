@@ -12021,3 +12021,79 @@ console.log('\n── Half-life on compound cards ──────────
     /t½ ~6 days/.test(enhHtml) && !/>19-Nor<\/div><\/div>/.test(enhHtml));
   G5.ENHANCEMENT_COMPOUNDS = _cSave.cat; G5._editBuf = _cSave.buf; G5._userTier = _cSave.tier;
 }
+
+// ── The app reads the merged catalogue ───────────────────────────────────────
+// Henrik, 2026-08-19: "Didn't we merge the catalogs?" We had — in the backend, in
+// Phase 1 — and nothing in the app was reading it. Two sources were still being
+// fetched and reconciled client-side, which is the work the merged endpoint removes.
+console.log('\n── Merged catalogue: the app reads it ─────────────────────');
+{
+  const G6 = sandbox;
+  const _mcSave = {fetch:G6.fetch, cat:G6.ENHANCEMENT_COMPOUNDS, merged:G6._COMPOUND_CATALOG,
+                   al:G6._COMPOUND_ALIASES};
+  const MERGED = {
+    compounds:[
+      {id:'nebido', name:'Nebido', group:'Base', isTestosterone:true, aliases:['test_u'],
+       pk:{halfLife:'~56 days plateau-equivalent (37-75 d individual range)'},
+       cadence:{halfLife:'~34 days terminal'}},
+      {id:'deca', name:'Deca', group:'19-Nor', isTestosterone:false,
+       cadence:{halfLife:'~14–16 days'}},
+      {id:'hgh', name:'HGH', group:'GH Axis', isTestosterone:false, cadence:{halfLife:'~20 min active'}},
+    ],
+    aliases:{test_u:'nebido', test_e:'enanthate'},
+  };
+
+  (async () => {
+    // Only this call's catalogue requests: other in-flight blocks share the stub.
+    let asked = [];
+    const _armCat = (handler) => { asked = []; G6.fetch = async (u, o) => {
+      const url = String(u);
+      if (/\/compounds\//.test(url)) asked.push(url);
+      return handler(url, o);
+    }; };
+
+    _armCat(async () => ({ok:true, status:200, json: async () => MERGED}));
+    await G6.syncEnhancedCompoundsFromAgent();
+    check('the app fetches /compounds/catalog', asked.some(u => /\/compounds\/catalog$/.test(u)));
+    // Ordering is asserted on the source rather than on a call log: this block runs
+    // after the synchronous suite, and other in-flight tests swap the shared fetch stub
+    // between the two awaits inside the function — a flaky log, not a real signal.
+    const _cycSrc = fs.readFileSync(path.join(__dirname, '../tab-cycles.js'), 'utf8');
+    check('  …with the pre-merge endpoint only as a fallback beneath it',
+      _cycSrc.indexOf("'/compounds/catalog'") < _cycSrc.indexOf("'/compounds/enhanced'") &&
+      /A backend that predates the merge still serves the old endpoint/.test(_cycSrc));
+    check('  …keeping the whole merged list for lookups',
+      G6._COMPOUND_CATALOG.length === 3);
+    check('  …and the alias map the backend owns',
+      G6._COMPOUND_ALIASES.test_u === 'nebido');
+
+    // ENHANCEMENT_COMPOUNDS must keep meaning what it meant: the compounds the Enhanced
+    // editor renders. Testosterone has its own section in the merged tab, and listing
+    // the esters in both would show every one of them twice.
+    check('the Enhanced list excludes testosterone, which has its own section',
+      G6.ENHANCEMENT_COMPOUNDS.length === 2 &&
+      !G6.ENHANCEMENT_COMPOUNDS.some(c => c.id === 'nebido'));
+
+    // The join is what removes the client-side reconciliation: pk wins over cadence for
+    // the same compound, because pk is the figure the plasma curve integrates.
+    // The PK string is the one the curve integrates, qualifier and all: Nebido's
+    // "plateau-equivalent" is the difference between the depot releasing and
+    // testosterone clearing, which is exactly what a reader needs to know.
+    check('a half-life comes from the merged entry\'s PK figure, not its cadence text',
+      G6._halfLifeLabel({id:'nebido', pk:MERGED.compounds[0].pk,
+                         cadence:MERGED.compounds[0].cadence}) === 't½ ~56 days plateau-equivalent',
+      G6._halfLifeLabel({id:'nebido', pk:MERGED.compounds[0].pk, cadence:MERGED.compounds[0].cadence}));
+    check('  …and a non-PK compound reads its own catalogue entry',
+      G6._halfLifeLabel({id:'deca', cadence:{halfLife:'~14–16 days'}}) === 't½ ~14–16 days');
+
+    // A backend that predates the merge must still work.
+    check('an older backend still gets a catalogue, from the old endpoint',
+      /if\(!r2\.ok\)\{_logHttp\('syncEnhanced'/.test(_cycSrc) &&
+      /ENHANCEMENT_COMPOUNDS=Array\.isArray\(d2\)/.test(_cycSrc));
+    check('  …and a failed catalogue fetch is reported, not swallowed',
+      /_logHttp\('syncCatalog',r\.status,'\/compounds\/catalog'\)/.test(_cycSrc));
+
+    G6.fetch = _mcSave.fetch; G6.ENHANCEMENT_COMPOUNDS = _mcSave.cat;
+    G6._COMPOUND_CATALOG = _mcSave.merged; G6._COMPOUND_ALIASES = _mcSave.al;
+  })();
+}

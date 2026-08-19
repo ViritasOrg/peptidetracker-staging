@@ -188,9 +188,50 @@ async function syncCycleTemplatesFromAgent(){try{var _sx=_userSexCyc();var r=awa
 // #640: recommended lab-marker panels per checkpoint phase (marker keys only — not
 // proprietary compound data, safe to cache for offline).
 async function syncCycleBloodworkRecsFromAgent(){try{var r=await fetch(AGENT_URL+'/cycles/bloodwork-recommendations?sex='+_userSexCyc(),{headers:authHeaders()});if(!r.ok){_logHttp('syncCycleBwRecs',r.status,'/cycles/bloodwork-recommendations');return;}var d=await r.json();if(d&&d.panels){_cycleBwPanels=d.panels;setData('proto-cycle-bw-panels',_cycleBwPanels);if(typeof renderCyclesTab==='function')renderCyclesTab();}}catch(e){_logErr('syncCycleBwRecs',e);}}
+// ONE CATALOGUE, FROM THE BACKEND (Phase 1 of the unified Plan rewrite).
+// Henrik, 2026-08-19: "Didn't we merge the catalogs?" — we did, in the backend, and
+// nothing here was reading it. /compounds/catalog returns one entry per molecule with
+// the Enhanced identity and dosing joined to the PK figures from trt-catalog, plus
+// `aliases` and `isTestosterone`. Reading the two sources separately and reconciling
+// them in the client is the work that endpoint exists to remove.
+//
+// _COMPOUND_CATALOG is the whole merged list, used for lookups that need any compound
+// (the half-life on a card, the alias map). ENHANCEMENT_COMPOUNDS keeps meaning exactly
+// what it meant before — the non-testosterone compounds the Enhanced editor renders —
+// because the testosterone esters have their own section in the merged Compounds tab
+// and listing them in both would show every ester twice.
+var _COMPOUND_CATALOG=[];
+var _COMPOUND_ALIASES={};
+
 async function syncEnhancedCompoundsFromAgent(){
   var ctrl=new AbortController();var tid=setTimeout(function(){ctrl.abort();},10000);
-  try{var r=await fetch(AGENT_URL+'/compounds/enhanced',{headers:authHeaders(),signal:ctrl.signal});clearTimeout(tid);if(!r.ok){_logHttp('syncEnhanced',r.status,'/compounds/enhanced');return{ok:false,status:r.status};}var d=await r.json();ENHANCEMENT_COMPOUNDS=Array.isArray(d)?d:(d.compounds||[]);if(typeof _absorbCitations==='function')_absorbCitations(d);return{ok:true};}catch(e){clearTimeout(tid);_logErr('syncEnhanced',e);return{ok:false,status:null,msg:String(e&&e.message||e)};}
+  try{
+    var r=await fetch(AGENT_URL+'/compounds/catalog',{headers:authHeaders(),signal:ctrl.signal});
+    clearTimeout(tid);
+    if(r.ok){
+      var d=await r.json();
+      var all=Array.isArray(d)?d:(d.compounds||[]);
+      _COMPOUND_CATALOG=all;
+      _COMPOUND_ALIASES=(d&&d.aliases)||{};
+      ENHANCEMENT_COMPOUNDS=all.filter(function(c){return !c.isTestosterone;});
+      if(typeof _absorbCitations==='function')_absorbCitations(d);
+      return{ok:true};
+    }
+    _logHttp('syncCatalog',r.status,'/compounds/catalog');
+  }catch(e){clearTimeout(tid);_logErr('syncCatalog',e);}
+  // A backend that predates the merge still serves the old endpoint. Falling back keeps
+  // the app working against it rather than rendering an empty catalogue.
+  var ctrl2=new AbortController();var tid2=setTimeout(function(){ctrl2.abort();},10000);
+  try{
+    var r2=await fetch(AGENT_URL+'/compounds/enhanced',{headers:authHeaders(),signal:ctrl2.signal});
+    clearTimeout(tid2);
+    if(!r2.ok){_logHttp('syncEnhanced',r2.status,'/compounds/enhanced');return{ok:false,status:r2.status};}
+    var d2=await r2.json();
+    ENHANCEMENT_COMPOUNDS=Array.isArray(d2)?d2:(d2.compounds||[]);
+    _COMPOUND_CATALOG=ENHANCEMENT_COMPOUNDS;
+    if(typeof _absorbCitations==='function')_absorbCitations(d2);
+    return{ok:true};
+  }catch(e){clearTimeout(tid2);_logErr('syncEnhanced',e);return{ok:false,status:null,msg:String(e&&e.message||e)};}
 }
 var _cwiz={step:1,tpl:null,phase:'foundational',weeks:20,startDate:'',compounds:[]};
 function cycleWizardOpen(){
