@@ -1,7 +1,7 @@
 # Unified Plan rewrite — one scheduler, three tabs
 
-Status: **in progress** — Phase 0 (decisions) and Phase 1 (catalogue merge) landed
-2026-08-19; Phase 2 largely already in place. See §6 for the phase table.
+Status: **in progress** — Phases 0, 1 and 3 landed 2026-08-19; Phase 2 largely
+already in place. Next is Phase 4, the merged Compounds tab. See §6.
 Author: drafted 2026-08-16 with Henrik
 Scope: multi-day. Ships in phases, each independently mergeable and revertible.
 
@@ -131,6 +131,10 @@ Rules, non‑negotiable:
    `/injections/batch`, or `DELETE /injections` for planning purposes. Today's tick
    (`PUT /injections/{id}` to set `logged`) is the sole exception — that records an
    event, it does not plan one.
+   **Shipped 2026‑08‑19 as `inj-writer.js`** — `injWriteBatch`, `injWriteOne`,
+   `injClearFuture`, `injClearFutureMany`. A test scans every module and fails if any
+   of them issues a planning write; `unlogged_only` now defaults to true inside the
+   writer, so a caller can no longer forget it.
 2. **Every write is followed by `refreshInjectionsCache()`**, then the affected views
    rebuild. Bug #2 above was exactly this step missing.
 3. **The scheduler is the only thing that expands a series into dates.** Curves,
@@ -305,7 +309,7 @@ Each phase is a mergeable PR that leaves the app working.
 | 0 | Decisions | **DONE** — id space = PK ids; prod held; Recon under Peptides; Timeline dropped | — |
 | 1 | Catalogue merge (backend) | **DONE 2026‑08‑19** — `GET /compounds/catalog`, `isTestosterone`, alias map | low |
 | 2 | Read‑both/write‑one | every id comparison canonicalised; dry‑run report | low |
-| 3 | Scheduler extraction | one module owns all injection writes; existing UI calls into it | **high** |
+| 3 | Scheduler extraction | **DONE 2026‑08‑19** — `inj-writer.js` owns every write; all ten call sites go through it | **high** |
 | 4 | Plan: Compounds tab | TRT + Enhanced editors merged into one | medium |
 | 5 | Un‑suppress the generator | `_genInjBatches` emits testosterone again; CLAUDE.md rule replaced | **high** |
 | 6 | T‑Calc read‑only | every write path in §3.4 deleted; curve reads stored rows only | medium |
