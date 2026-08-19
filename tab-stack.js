@@ -2828,6 +2828,15 @@ function _genInjBatches(stack,cycleId,fromDate){
       _genDone[_canonCompoundId(c.id)]=true;
       var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(t){return t.id===c.id;}):null;
       var dot=cat?cat.dot:'#e8a020';
+      // A RATE IS NOT THE AMOUNT IN THE SYRINGE — in this block too, as of Phase 4.
+      // TRT compounds were always configured as a plain per-injection mg, so this
+      // branch never had to convert. The merged tier changed that: a compound that
+      // arrives here from the Enhanced side carries its rate unit with it, and
+      // Henrik's migration moved exactly such a row ("350 mg/week", every 2 days).
+      // Written verbatim it would render "Nebido 350 mg/week" on every second day —
+      // the rendering the 2026-08-07 fix removed, at 3.5x the real dose. Same helper
+      // the Enhanced branch uses; a plain "100 mg" passes through untouched.
+      var _tpd=(typeof _enhDosePerInjection==='function')?_enhDosePerInjection(c):{dose:c.dose,unit:c.unit};
       var cStart=c.start_date?new Date(Math.max(parseLocalDate(c.start_date).getTime(),genStart.getTime())):new Date(genStart);
       var cEnd=c.end_date?new Date(Math.min(parseLocalDate(c.end_date).getTime(),cycleEnd.getTime())):new Date(cycleEnd);
       var compEntries=[];
@@ -2837,7 +2846,7 @@ function _genInjBatches(stack,cycleId,fromDate){
         if(c.id!=='nebido'&&c.days&&c.days.length){hit=c.days.includes(d.getDay());}
         else{var freqDays=c.freqUnit==='weeks'?(c.freqVal||1)*7:(c.freqVal||1);hit=freqDays>0&&daysSince%freqDays===0;}
         if(!hit)continue;
-        compEntries.push({cycle_id:cycleId,date:dateKey(d),compound_id:c.id,compound_name:c.name,tier:'trt',dose:c.dose||'',unit:c.unit||'mg',dot:dot,time_of_day:(c.time==='PM'?'PM':'AM'),active:true,logged:false});
+        compEntries.push({cycle_id:cycleId,date:dateKey(d),compound_id:c.id,compound_name:c.name,tier:'trt',dose:_tpd.dose||'',unit:_tpd.unit||'mg',dot:dot,time_of_day:(c.time==='PM'?'PM':'AM'),active:true,logged:false});
       }
       if(compEntries.length)batches.push({compound_id:c.id,from_date:dateKey(cStart),entries:compEntries});
     });
