@@ -1,8 +1,8 @@
 # Unified Plan rewrite — one scheduler, three tabs
 
-Status: **in progress** — Phases 0–5 landed 2026-08-19 (Phase 2 was largely already
-in place). Next is Phase 6: deleting T‑Calc's planner UI, which is currently
-disabled rather than removed. See §6.
+Status: **in progress** — Phases 0–6 landed 2026‑08‑19/20 (Phase 2 was largely
+already in place). Remaining: Phase 7 (migrating stored rows to the canonical id)
+and Phase 8 (dropping the alias at runtime). See §6.
 Author: drafted 2026-08-16 with Henrik
 Scope: multi-day. Ships in phases, each independently mergeable and revertible.
 
@@ -338,7 +338,7 @@ Each phase is a mergeable PR that leaves the app working.
 | 3 | Scheduler extraction | **DONE 2026‑08‑19** — `inj-writer.js` owns every write; all ten call sites go through it | **high** |
 | 4 | Plan: Compounds tab | TRT + Enhanced editors merged into one | medium |
 | 5 | Un‑suppress the generator | **DONE 2026‑08‑19** — `_genInjBatches` emits testosterone; T‑Calc's writes disabled | **high** |
-| 6 | T‑Calc read‑only | every write path in §3.4 deleted; curve reads stored rows only | medium |
+| 6 | T‑Calc read‑only | **DONE 2026‑08‑20** — planner UI and every write path deleted; curve reads stored rows only | medium |
 | 7 | Migration | backfill tiers and ids, after dry‑run approval | **high** |
 | 8 | Cleanup | `_TC_TESTO_ALIAS` runtime use and the curve's dedup removed | low |
 
