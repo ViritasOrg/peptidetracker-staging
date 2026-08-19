@@ -299,6 +299,64 @@ function _editFoldTestosterone(buf){
   return moved;
 }
 
+// ── Migrating a stored protocol to the merged tier ───────────────────────────
+// Henrik, 2026-08-19: "any pre existing protocol needs to be merged into the new
+// format" and then "Ok just migrate" — i.e. do it to the stored protocols rather
+// than waiting for each one to be opened and saved.
+//
+// The same fold the editor applies, run over every protocol and written back. It
+// moves testosterone into the one tier under its canonical id; nothing else moves,
+// no protocol is merged into another, and no injection row is touched. The
+// generator still suppresses testosterone until Phase 5, so this changes what the
+// protocol SAYS, not what it schedules — which is what makes it safe to run first.
+// Takes the list it operates on, defaulting to the app's. A migration that can only
+// read a global cannot be exercised without mutating one.
+function _migrateProtocolsReport(stacks){
+  var moves=[];
+  (stacks||_userStacks||[]).forEach(function(st,i){
+    var copy=JSON.parse(JSON.stringify(st));
+    var before=((copy.enhanced&&copy.enhanced.compounds)||[]).filter(function(c){
+      return _isTestoCompoundId(c.id);
+    });
+    if(!before.length)return;
+    var hadTrt=(((copy.trt&&copy.trt.compounds)||[]).map(function(c){return _canonCompoundId(c.id);}));
+    _editFoldTestosterone(copy);
+    before.forEach(function(c){
+      var cid=_canonCompoundId(c.id);
+      moves.push({idx:i, stack:st.name||st.id||('#'+i), from:c.id, to:cid,
+                  dose:c.dose, unit:c.unit,
+                  dropped:hadTrt.indexOf(cid)>=0});
+    });
+  });
+  return moves;
+}
+
+async function migrateProtocolsToCompounds(stacks){
+  var list=stacks||_userStacks||[];
+  var moves=_migrateProtocolsReport(list);
+  if(!moves.length){
+    alert('Nothing to migrate — every protocol already keeps its testosterone in one tier.');
+    return;
+  }
+  var lines=moves.map(function(m){
+    return '· ' + m.stack + ': ' + m.from + ' → ' + m.to +
+           (m.dose ? ' (' + m.dose + (m.unit ? ' ' + m.unit : '') + ')' : '') +
+           (m.dropped ? ' — duplicate, the existing entry is kept' : '');
+  }).join('\n');
+  if(!confirm('Merge ' + moves.length + ' compound' + (moves.length===1?'':'s') +
+              ' into the Compounds tier?\n\n' + lines +
+              '\n\nProtocols stay separate and no injection is added, changed or ' +
+              'deleted. This rewrites the protocol config in the backend.')) return;
+  var n=0;
+  list.forEach(function(st){ n+=_editFoldTestosterone(st); });
+  try{
+    if(typeof saveStacksToBackend==='function')await saveStacksToBackend();
+  }catch(e){ _logErr('migrateProtocols', e); alert('Save failed — nothing was migrated.'); return; }
+  if(typeof buildStackStore==='function')buildStackStore();
+  if(typeof buildToday==='function')buildToday();
+  alert('Migrated ' + n + ' compound' + (n===1?'':'s') + ' into the Compounds tier.');
+}
+
 function showStackEditor(idx){
   if(idx<0||idx>=_userStacks.length)return;
   _editIdx=idx;_editBuf=JSON.parse(JSON.stringify(_userStacks[idx]));
