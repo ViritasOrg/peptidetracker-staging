@@ -18,11 +18,12 @@ var _tcp = {
   planCompId:          '',  // kept for backward-compat with saved profiles; ignored
   backboneStartDay:    0,   // days into cycle before first backbone injection (default 0)
   manualLog:           [],  // [{compId, doseMg, date}, ...] — manual injection history
-  // T-Calc is the single place a testosterone schedule is built. Two planners share
-  // that job: the SIMPLE one (ester + dose + cadence) and the ADVANCED manual log
-  // below it. Exactly one is live at a time; the other is greyed out but never
-  // deleted, and its data is left intact so switching back restores it untouched.
-  plannerMode:         '',  // '' = derive (see _tcPlannerMode), else 'simple' | 'advanced'
+  // plannerMode and simplePlan are RETAINED FIELDS, not live ones. T-Calc stopped
+  // planning in Phase 6 — the protocol is the only place a schedule is built — but a
+  // stored profile still carries whatever the planner last wrote, and dropping the keys
+  // would rewrite the user's saved profile as a side effect of a UI change. Nothing
+  // reads them; they age out with the next profile write.
+  plannerMode:         '',
   simplePlan:          {compId:'', doseMg:'', cadenceDays:0, startDate:''},
   targetStackId:       ''   // stack this T-Calc testosterone is assigned to ('' = unassigned/global)
 };
@@ -933,128 +934,26 @@ function _tcManualComps() {
 // there underneath for multi-compound work, historical injections and what-ifs —
 // this is a second way in, not a replacement.
 
-// Which planner is live. An explicit choice always wins. Absent one, a profile that
-// already has a manual log stays on ADVANCED so nothing an existing user built
-// changes underneath them; a fresh profile starts SIMPLE.
-function _tcPlannerMode(){
-  var m = _tcp && _tcp.plannerMode;
-  if (m === 'simple' || m === 'advanced') return m;
-  return ((_tcp && _tcp.manualLog && _tcp.manualLog.length) ? 'advanced' : 'simple');
-}
 
-function _tcSetPlannerMode(mode){
-  if (mode !== 'simple' && mode !== 'advanced') return;
-  _tcp.plannerMode = mode;
-  _tcSaveProfile();
-  buildTCalc();
-}
 
-// Toggle handler for the advanced switch — turning it ON makes advanced live and
-// greys the simple planner; turning it OFF does the reverse. Neither discards data.
-function _tcToggleAdvancedPlanner(el){
-  _tcSetPlannerMode((el && el.checked) ? 'advanced' : 'simple');
-}
 
-// ── The plan lives in the stack, not beside it ────────────────────────────────
-// The simple planner used to keep its own {compId, doseMg, cadence, startDate} in
-// tcalc_profiles.json and generate injections from it. That is a testosterone
-// schedule existing outside a stack, which is the thing this app is not allowed to
-// have — and it produced exactly the contradiction reported on 2026-08-07: the plan
-// card read "Testoviron Depot · 75 mg · every 2 days from 4 Aug" while the protocol
-// it was assigned to held Nebido 100 mg, and _tcCurveLog's "the plan owns this day"
-// rule then SUPPRESSED the stack's real injections in favour of the stale plan.
+// ── Historical note: the plan used to live in the stack (2026-08-07) ────────
+// The simple planner kept its own {compId, doseMg, cadence, startDate} and generated
+// injections from it — a testosterone schedule outside a protocol. It produced the
+// contradiction reported that day: the plan card read "Testoviron Depot · 75 mg ·
+// every 2 days from 4 Aug" while the protocol it was assigned to held Nebido 100 mg,
+// and the curve's "the plan owns this day" rule then SUPPRESSED the protocol's real
+// injections in favour of the stale plan.
 //
-// Once a stack is chosen, the stack's TRT config IS the plan: the card reads from it
-// and every edit writes back to it. _tcp.simplePlan remains only for the unassigned
-// case — a draft being built before "Save to stack" gives it a home.
-//
-// The planner can express ONE ester on ONE cadence. A stack whose TRT tier holds more
-// than one compound cannot be represented by it, so that stack is not adopted here
-// and the advanced planner stays the place to edit it (see _tcSimplePlanStack).
-function _tcSimplePlanStack(){
-  var tid = _tcp && _tcp.targetStackId;
-  if (!tid || typeof _userStacks === 'undefined' || !_userStacks) return null;
-  var st = _userStacks.find(function(s){ return s && s.id === tid; });
-  if (!st || !st.trt || !st.trt.enabled) return null;
-  var comps = st.trt.compounds || [];
-  if (comps.length !== 1) return null;
-  return st;
-}
+// Phase 6 removed the planner outright, which is the version of that fix that cannot
+// come apart: there is no second plan to reconcile, no adoption rule, and no
+// suppression. The protocol is the schedule.
 
-// The plan as the bound stack states it. Cadence comes from the same freqVal/freqUnit
-// pair the injection generator reads, so what the card shows and what gets injected
-// cannot drift apart.
-function _tcPlanFromStack(st){
-  var c = (st.trt.compounds || [])[0] || {};
-  var n = parseInt(c.freqVal, 10); if (!(n > 0)) n = 1;
-  var unit = (c.freqUnit === 'weeks') ? 'week' : 'day';
-  return {
-    compId:      c.id || '',
-    doseMg:      String(c.dose || ''),
-    cadenceN:    n,
-    cadenceUnit: unit,
-    cadenceDays: _tcCadenceToDays(n, unit),
-    startDate:   c.start_date || st.cycle_start || ''
-  };
-}
 
-// ── Edits are a draft until Save is pressed ──────────────────────────────────
-// Writing each keystroke straight into the protocol was silent: "right now it
-// redraws the graph but how do I know if this update actually rewrote the TRT
-// schedule?" (Henrik 2026-08-07). Rewriting a stored schedule is not something to
-// infer from a chart moving.
-//
-// So a bound plan edits an in-memory draft. The curve previews it — that is what
-// T-Calc is for — but the card says in words that the protocol still holds the old
-// values, and nothing reaches the backend until Save. Discard drops the draft.
-//
-// The draft is deliberately NOT persisted anywhere. A half-finished plan surviving a
-// reload is another store that can disagree with the protocol, which is the whole
-// class of bug this tab has been fighting.
-var _tcPlanDraft = null;   // {stackId, compId, doseMg, cadenceN, cadenceUnit, cadenceDays, startDate}
-
-function _tcDraftFor(st){
-  return (_tcPlanDraft && st && _tcPlanDraft.stackId === st.id) ? _tcPlanDraft : null;
-}
-
-// What the protocol actually holds right now, ignoring any draft on top of it.
-function _tcStoredPlan(){
-  var st = _tcSimplePlanStack();
-  return st ? _tcPlanFromStack(st) : null;
-}
 
 var _TC_PLAN_FIELDS = ['compId','doseMg','cadenceN','cadenceUnit','cadenceDays','startDate'];
 
-// Which fields the draft would change. Empty = nothing to save.
-function _tcPlanChanges(){
-  var st = _tcSimplePlanStack(); if (!st) return [];
-  var d  = _tcDraftFor(st);      if (!d)  return [];
-  var stored = _tcPlanFromStack(st);
-  return _TC_PLAN_FIELDS.filter(function(k){ return String(d[k]) !== String(stored[k]); });
-}
-function _tcPlanDirty(){ return _tcPlanChanges().length > 0; }
 
-function _tcSimplePlan(){
-  var _st = _tcSimplePlanStack();
-  if (_st) return _tcDraftFor(_st) || _tcPlanFromStack(_st);
-  var p = (_tcp && _tcp.simplePlan) || {};
-  var days = parseDec(p.cadenceDays) || 0;
-  var n    = parseInt(p.cadenceN, 10) || 0;
-  var unit = _TC_CADENCE_UNITS[p.cadenceUnit] ? p.cadenceUnit : '';
-  // Plans saved before the number+unit control carry only cadenceDays. Derive the two
-  // fields for display but keep the stored day count authoritative, so a legacy
-  // fractional cadence (the old 3×/week preset was 2.33 d) generates exactly the same
-  // schedule as before until the user actually changes it.
-  if (!n || !unit){ var d = _tcCadenceFromDays(days); n = d.n; unit = d.unit; }
-  return {
-    compId:      p.compId || '',
-    doseMg:      p.doseMg || '',
-    cadenceN:    n,
-    cadenceUnit: unit,
-    cadenceDays: days || _tcCadenceToDays(n, unit),
-    startDate:   p.startDate || ''
-  };
-}
 
 function _tcBlankSimplePlan(){
   return {compId:'', doseMg:'', cadenceN:0, cadenceUnit:'week', cadenceDays:0, startDate:''};
@@ -1108,121 +1007,8 @@ function _tcWritesDisabled(what){
   return true;
 }
 
-async function _tcPostPlanInjections(st, cyc, c, plan, fromDate){
-  if(_TC_PLANNING_REMOVED) return 0;   // silent: an internal step, not a user action
 
-  var h = (typeof authHeaders === 'function') ? authHeaders({'Content-Type':'application/json'}) : null;
-  if (!h || !cyc || !c || !c.id) return 0;
-  var cad   = parseDec(plan && plan.cadenceDays) || 0;
-  var dose  = parseDec(plan && plan.doseMg)      || 0;
-  var start = parseLocalDate((plan && plan.startDate) || '');
-  if (!(cad > 0) || !(dose > 0) || !start || isNaN(start.getTime())) return 0;
 
-  var f0  = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate(), 12, 0, 0, 0);
-  var end = new Date(Math.max(f0.getTime(), start.getTime()) + _TC_SIMPLE_HORIZON_DAYS * 86400000);
-  // A protocol that ends stops scheduling — the same bound the generator applies.
-  if (st && st.cycle_start && st.cycle_length > 0){
-    var cs = parseLocalDate(st.cycle_start);
-    if (cs && !isNaN(cs.getTime())){
-      var ce = new Date(cs.getTime() + st.cycle_length * 7 * 86400000);
-      if (ce < end) end = ce;
-    }
-  }
-  var cd   = _tcCompInfo(c.id);
-  var meta = (typeof _injPkMeta === 'function') ? _injPkMeta('trt', c.id)
-                                                : {ester:null, half_life_days:null};
-  var entries = [];
-  for (var i = 0; i < _TC_SIMPLE_MAX_INJ; i++){
-    var t = new Date(start.getFullYear(), start.getMonth(),
-                     start.getDate() + Math.round(i * cad), 12, 0, 0, 0);
-    if (t > end) break;
-    if (t < f0) continue;                       // the past belongs to the record, not the plan
-    entries.push({cycle_id: cyc, date: dateKey(t), compound_id: c.id,
-                  compound_name: cd.name || c.id, tier: 'trt',
-                  dose: String(dose), unit: 'mg', dot: cd.dot || '#e8a020',
-                  time_of_day: null, active: true, logged: false, source: 'tcalc',
-                  ester: meta.ester, half_life_days: meta.half_life_days, route: null});
-  }
-  if (!entries.length) return 0;
-  var r = await injWriteBatch(cyc, c.id, dateKey(f0), entries, 'tcPlanInj');
-  if (!r || !r.ok) return 0;
-  return entries.length;
-}
-
-// Push an edited plan into the bound stack's TRT compound, then regenerate that
-// stack's injections. This is the only write path for a bound plan — nothing is kept
-// in the profile for it, so the card can never show a schedule the stack does not have.
-async function _tcWritePlanToStack(st, plan){
-  if(_TC_PLANNING_REMOVED) return;
-
-  var c = (st.trt.compounds || [])[0];
-  if (!c) return;
-  var oldId = c.id;
-  if (plan.compId && plan.compId !== c.id){
-    c.id = plan.compId;
-    var cd = _tcCompInfo(plan.compId);
-    c.name = (cd && cd.name) || plan.compId;
-    c.dot  = (cd && cd.dot)  || c.dot;
-  }
-  if (plan.doseMg    !== undefined) c.dose = String(plan.doseMg);
-  if (plan.startDate !== undefined) c.start_date = plan.startDate || '';
-  if (plan.cadenceN){
-    c.freqVal  = plan.cadenceN;
-    c.freqUnit = (plan.cadenceUnit === 'week') ? 'weeks' : 'days';
-    // An interval cadence and a weekday list are two different schedules and the
-    // generator prefers the weekday list. Clearing it is what makes "every N days"
-    // actually take effect.
-    c.days = null;
-  }
-  c.unit = 'mg';
-  if (typeof saveStacksToBackend === 'function'){ try { await saveStacksToBackend(); } catch(_e){} }
-
-  var cyc = (typeof _stackCycleId === 'function') ? _stackCycleId(st) : (st.id || '');
-  var h   = (typeof authHeaders === 'function') ? authHeaders() : null;
-  var now = new Date(); now.setHours(0,0,0,0);
-  var td  = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-  if (h && cyc){
-    // Drop the old ester's future injections too — switching Testoviron → Nebido must
-    // not leave the Testoviron shots standing beside the new ones.
-    var ids = (oldId && oldId !== c.id) ? [oldId, c.id] : [c.id];
-    for (var i = 0; i < ids.length; i++){
-      await injClearFuture(cyc, ids[i], td, {tag:'tcPlanPrune'});
-    }
-  }
-  // The generator covers every OTHER tier of this stack. It cannot cover testosterone —
-  // it suppresses it — so the plan's own rows are written directly, right after the
-  // delete above that cleared them. Without this the save is a delete and nothing else.
-  if (typeof generateAndPushInjections === 'function') await generateAndPushInjections(st, now);
-  if (h && cyc) await _tcPostPlanInjections(st, cyc, c, plan, now);
-  if (typeof refreshInjectionsCache === 'function')    await refreshInjectionsCache();
-  buildTCalc();
-  if (typeof buildStackStore === 'function') buildStackStore();
-  if (typeof buildToday === 'function')      buildToday();
-}
-
-// ── Save / Discard ───────────────────────────────────────────────────────────
-// The ONLY path from a draft to the protocol. Nothing else writes.
-async function _tcSavePlanToStack(btnId){
-  if(_tcWritesDisabled('Saving a plan to a protocol')) return;
-
-  var st = _tcSimplePlanStack();
-  var d  = st && _tcDraftFor(st);
-  if (!st || !d || !_tcPlanDirty()) return;
-  var btn = btnId && document.getElementById(btnId);
-  if (btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
-  var plan = {};
-  _TC_PLAN_FIELDS.forEach(function(k){ plan[k] = d[k]; });
-  try{
-    await _tcWritePlanToStack(st, plan);
-    _tcPlanDraft = null;
-    _tcPlanSavedAt = Date.now();   // drives the "Saved" confirmation on the card
-  }catch(e){
-    _logErr('tcSavePlan', e);
-    if (btn){ btn.disabled = false; btn.textContent = 'Save failed — try again'; }
-    return;
-  }
-  buildTCalc();
-}
 // How long the post-save confirmation stays on the card. It is a rendered line, not
 // a toast, so it survives the redraw that follows the save.
 var _tcPlanSavedAt = 0;
@@ -1234,78 +1020,10 @@ function _tcDiscardPlanDraft(){
   buildTCalc();
 }
 
-// Plain-language summary of what Save would write, so the button is never a leap of
-// faith. Reads old → new from the protocol and the draft.
-function _tcPlanChangeSummary(){
-  var st = _tcSimplePlanStack(); if (!st) return [];
-  var d  = _tcDraftFor(st);      if (!d)  return [];
-  var was = _tcPlanFromStack(st);
-  var out = [];
-  if (String(d.compId) !== String(was.compId))
-    out.push('Ester: ' + (_tcCompInfo(was.compId).name || was.compId || '—') + ' → ' + (_tcCompInfo(d.compId).name || d.compId || '—'));
-  if (String(d.doseMg) !== String(was.doseMg))
-    out.push('Dose: ' + (was.doseMg || '—') + ' → ' + (d.doseMg || '—') + ' mg per injection');
-  if (String(d.cadenceDays) !== String(was.cadenceDays))
-    out.push('Cadence: every ' + was.cadenceDays + ' d → every ' + d.cadenceDays + ' d');
-  if (String(d.startDate) !== String(was.startDate))
-    out.push('First injection: ' + (was.startDate || '—') + ' → ' + (d.startDate || '—'));
-  return out;
-}
 
-// Start (or extend) the draft for the bound stack. Seeded from what the protocol
-// currently holds, so an untouched field always equals the stored value and
-// _tcPlanChanges reports only what the user actually altered.
-function _tcTouchDraft(st){
-  if (!_tcDraftFor(st)) _tcPlanDraft = Object.assign({stackId: st.id}, _tcPlanFromStack(st));
-  return _tcPlanDraft;
-}
 
-function _tcSetSimplePlanField(field, value){
-  var st = _tcSimplePlanStack();
-  if (st){
-    _tcTouchDraft(st)[field] = value;
-    buildTCalc();
-    return;
-  }
-  if (!_tcp.simplePlan) _tcp.simplePlan = _tcBlankSimplePlan();
-  _tcp.simplePlan[field] = value;
-  _tcSaveProfile();
-  buildTCalc();
-}
 
-// Cadence is two fields but one stored interval — set either and cadenceDays is
-// recomputed from both, which is also the point where a legacy fractional interval
-// is replaced by the user's explicit choice.
-function _tcSetSimplePlanCadence(field, value){
-  var cur  = _tcSimplePlan();
-  var n    = field === 'cadenceN'    ? parseInt(value, 10) || 0 : cur.cadenceN;
-  var unit = field === 'cadenceUnit' ? value                    : cur.cadenceUnit;
-  if (!_TC_CADENCE_UNITS[unit]) unit = 'week';
-  if (n > _TC_CADENCE_MAX_N) n = _TC_CADENCE_MAX_N;
-  if (n < 0) n = 0;
-  var _st = _tcSimplePlanStack();
-  if (_st){
-    // A stack's TRT cadence is whole days or whole weeks — 'month' has no
-    // representation in freqUnit, so it is stored as its day count.
-    if (unit === 'month'){ n = n * 30; unit = 'day'; }
-    var d = _tcTouchDraft(_st);
-    d.cadenceN = n; d.cadenceUnit = unit; d.cadenceDays = _tcCadenceToDays(n, unit);
-    buildTCalc();
-    return;
-  }
-  if (!_tcp.simplePlan) _tcp.simplePlan = _tcBlankSimplePlan();
-  _tcp.simplePlan.cadenceN    = n;
-  _tcp.simplePlan.cadenceUnit = unit;
-  _tcp.simplePlan.cadenceDays = _tcCadenceToDays(n, unit);
-  _tcSaveProfile();
-  buildTCalc();
-}
 
-// A plan only produces a curve once every field it needs is set.
-function _tcSimplePlanComplete(){
-  var p = _tcSimplePlan();
-  return !!(p.compId && parseDec(p.doseMg) > 0 && p.cadenceDays > 0 && p.startDate);
-}
 
 // How far ahead a simple plan projects. Long enough to show a depot ester reaching
 // steady state (Nebido needs months), bounded so a daily cadence cannot generate an
@@ -1313,185 +1031,9 @@ function _tcSimplePlanComplete(){
 var _TC_SIMPLE_HORIZON_DAYS = 365;
 var _TC_SIMPLE_MAX_INJ      = 800;
 
-// Expand the plan into the same {compId, doseMg, date} shape the log uses. Generated
-// on the fly — never written into manualLog, which stays the user's own data.
-function _tcSimplePlanInjections(){
-  // A SAVED plan that lives in a stack has already been turned into stored injections
-  // by that stack's generator. Expanding it again here would be the same schedule from
-  // two sources — the double-count this whole rework exists to remove.
-  //
-  // An UNSAVED draft is the exception, and it is the point of the tab: it expands here
-  // so the curve previews the change before it is written. Nothing generated from a
-  // draft is ever persisted — _tcSavePlanToStack writes the plan's parameters to the
-  // protocol and lets the protocol's own generator produce the injections.
-  if (_tcSimplePlanStack() && !_tcPlanDirty()) return [];
-  if (!_tcSimplePlanComplete()) return [];
-  var p = _tcSimplePlan();
-  var start = parseLocalDate(p.startDate);
-  if (!start || isNaN(start.getTime())) return [];
-  var end = new Date(Math.max(NOW.getTime(), start.getTime()) + _TC_SIMPLE_HORIZON_DAYS * 86400000);
-  var out = [];
-  // Step in CALENDAR DAYS, never in milliseconds.
-  //
-  // This used to advance by i * cadenceDays * 86400000 ms from parseLocalDate(startDate),
-  // which is LOCAL MIDNIGHT. A fixed number of milliseconds is not a fixed number of local
-  // days: at each daylight-saving transition the wall clock moves an hour, and anchored at
-  // midnight that immediately crosses a date boundary. Real output for "every 5 days" from
-  // 2026-08-02 in a European timezone:
-  //     2026-10-21 -> 2026-10-25   a 4-DAY gap  (clocks back, landed 23:00 the day before)
-  //     2027-03-24 -> 2027-03-30   a 6-DAY gap  (clocks forward)
-  // i.e. one dose crammed in and one dropped, which drew two visible kinks in the plasma
-  // curve — an artifact of the calendar, mistaken for pharmacology.
-  //
-  // Date arithmetic through the Date constructor normalises in local time, so day offsets
-  // are DST-proof. Cadence can still be fractional (3x/week = 7/3 d): round the CUMULATIVE
-  // offset rather than each step, so doses land on whole days without drifting over a long
-  // horizon — 7/3 gives 0, 2, 5, 7, 9, 12, 14 ... which is exactly 3 per week.
-  var cadence = parseDec(p.cadenceDays) || 0;
-  if (!(cadence > 0)) return [];
-  for (var i = 0; i < _TC_SIMPLE_MAX_INJ; i++){
-    var t = new Date(start.getFullYear(), start.getMonth(),
-                     start.getDate() + Math.round(i * cadence), 12, 0, 0, 0);
-    if (t > end) break;
-    out.push({ compId: p.compId, doseMg: String(parseDec(p.doseMg)), date: dateKey(t), source: 'simple' });
-  }
-  return out;
-}
 
 
-// The simple planner card: 1) ester 2) dose 3) cadence 4) start — then the curve at
-// the top of the page renders it. Greyed (and non-interactive) when the advanced
-// planner is the live one.
-function _tcSimplePlannerHtml(iSty, lSty){
-  var live = _tcPlannerMode() === 'simple';
-  var p    = _tcSimplePlan();
-  var ids  = (typeof _tcAllCompIds === 'function') ? _tcAllCompIds() : [];
-  var dim  = live ? '' : 'opacity:0.4;pointer-events:none;filter:grayscale(1)';
 
-  var h = '<div class="card">';
-  h += '<div class="card-header"><div class="card-title-wrap">';
-  h += '<div class="card-dot" style="background:' + (live ? '#5ad1b0' : 'var(--muted2)') + '"></div>';
-  h += '<div class="card-title">TESTOSTERONE PLAN</div></div>';
-  var boundSt = _tcSimplePlanStack();
-  var hdr = live
-    ? (boundSt ? (_tcPlanDirty() ? 'unsaved changes' : _esc(boundSt.name || 'protocol')) : 'not saved to a protocol')
-    : 'off — advanced planner is on';
-  h += '<span style="font-size:10px;font-weight:' + (live && boundSt && _tcPlanDirty() ? '700' : '400') +
-       ';color:' + (live && boundSt && _tcPlanDirty() ? '#e8a020' : 'var(--muted2)') + '">' + hdr + '</span>';
-  h += '</div>';
-  h += '<div style="padding:14px 16px;' + dim + '">';
-
-  // 1 — ester
-  h += '<label style="' + lSty + '">1 · Ester</label>';
-  h += '<select onchange="_tcSetSimplePlanField(\'compId\', this.value)" style="' + iSty + ';width:100%;margin-bottom:14px">';
-  h += '<option value="">Select a testosterone ester…</option>';
-  ids.forEach(function(id){
-    var cd = _tcCompInfo(id);
-    h += '<option value="' + id + '"' + (p.compId === id ? ' selected' : '') + '>' + cd.name +
-         (cd.halfLifeDays ? ' · ' + cd.halfLifeDays + ' d half-life' : '') + '</option>';
-  });
-  h += '</select>';
-
-  // 2 — dose
-  h += '<label style="' + lSty + '">2 · Dose per injection (mg)</label>';
-  h += '<input type="number" inputmode="decimal" min="0" step="any" value="' + (p.doseMg || '') + '" placeholder="125" ' +
-       'onchange="_tcSetSimplePlanField(\'doseMg\', this.value)" style="' + iSty + ';width:100%;margin-bottom:14px">';
-
-  // 3 — cadence: "every N day/week/month". Two fields rather than a preset list, so
-  // every 3 days, every 5 weeks and so on are all reachable.
-  h += '<label style="' + lSty + '">3 · Injection cadence</label>';
-  h += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px">';
-  h += '<span style="font-size:13px;color:var(--muted2);flex-shrink:0">Every</span>';
-  h += '<select onchange="_tcSetSimplePlanCadence(\'cadenceN\', this.value)" style="' + iSty + ';flex:1;min-width:0">';
-  h += '<option value="0"' + (p.cadenceN ? '' : ' selected') + '>—</option>';
-  for (var _n = 1; _n <= _TC_CADENCE_MAX_N; _n++)
-    h += '<option value="' + _n + '"' + (p.cadenceN === _n ? ' selected' : '') + '>' + _n + '</option>';
-  h += '</select>';
-  h += '<select onchange="_tcSetSimplePlanCadence(\'cadenceUnit\', this.value)" style="' + iSty + ';flex:1.4;min-width:0">';
-  _TC_CADENCE_ORDER.forEach(function(u){
-    h += '<option value="' + u + '"' + (p.cadenceUnit === u ? ' selected' : '') + '>' +
-         _tcCadenceUnitLabel(u, p.cadenceN) + '</option>';
-  });
-  h += '</select>';
-  h += '</div>';
-
-  // 4 — start date. Required: without it there is no timeline to place doses on.
-  h += '<label style="' + lSty + '">4 · First injection</label>';
-  h += '<input type="date" value="' + (p.startDate || '') + '" ' +
-       'onchange="_tcSetSimplePlanField(\'startDate\', this.value)" style="' + iSty + ';width:100%">';
-
-  if (live) {
-    var _bound = _tcSimplePlanStack();
-    var _dirty = _tcPlanDirty();
-
-    // ── Unsaved changes: say what is NOT yet written, and offer the only write ──
-    if (_bound && _dirty) {
-      var _chg = _tcPlanChangeSummary();
-      h += '<div style="margin-top:12px;background:rgba(232,168,32,0.10);border:1px solid rgba(232,168,32,0.45);border-radius:10px;padding:11px 12px">' +
-        '<div style="font-size:12px;font-weight:700;color:#e8a020;margin-bottom:5px">Not saved yet</div>' +
-        '<div style="font-size:11px;color:var(--muted2);line-height:1.55;margin-bottom:7px">' +
-          'The curve above previews this. “' + _esc(_bound.name || 'This protocol') + '” still holds its current schedule until you save.' +
-        '</div>' +
-        (_chg.length
-          ? '<div style="font-size:11px;color:var(--text);line-height:1.6;margin-bottom:9px">' +
-              _chg.map(function(t){ return '• ' + _esc(t); }).join('<br>') +
-            '</div>'
-          : '') +
-        '<div style="font-size:11px;color:var(--muted2);line-height:1.55;margin-bottom:9px">' +
-          'Saving replaces that protocol’s testosterone injections from today forward. Past and already-logged injections are not touched.' +
-        '</div>' +
-        '<div style="display:flex;gap:8px">' +
-          '<button id="tc-plan-save" onclick="_tcSavePlanToStack(\'tc-plan-save\')" style="flex:1;background:#e8a020;border:none;border-radius:9px;color:#0a0a0a;font-size:12px;font-weight:800;letter-spacing:0.4px;padding:9px;cursor:pointer;font-family:inherit">Save to ' + _esc(_bound.name || 'protocol') + '</button>' +
-          '<button onclick="_tcDiscardPlanDraft()" style="background:none;border:1px solid var(--border);border-radius:9px;color:var(--muted2);font-size:12px;font-weight:600;padding:9px 14px;cursor:pointer;font-family:inherit">Discard</button>' +
-        '</div>' +
-      '</div>';
-    } else if (_bound && _tcJustSaved()) {
-      h += '<div style="margin-top:12px;background:rgba(90,209,176,0.10);border:1px solid rgba(90,209,176,0.35);border-radius:10px;padding:10px 12px">' +
-        '<div style="font-size:12px;color:#5ad1b0;font-weight:700">Saved to ' + _esc(_bound.name || 'protocol') + '</div>' +
-        '<div style="font-size:11px;color:var(--muted2);margin-top:3px;line-height:1.5">Its testosterone injections were rewritten from today forward. Check Today and Plan.</div>' +
-      '</div>';
-    }
-
-    if (_tcSimplePlanComplete()) {
-      // Saved and bound, the injections are the protocol's stored ones, not a local
-      // expansion — count those, so the card never claims a schedule the protocol
-      // does not actually hold. While a draft is live this is the preview's count.
-      var n  = (_bound && !_dirty) ? _tcProtocolInjections().length : _tcSimplePlanInjections().length;
-      var wk = (parseDec(p.doseMg) * 7 / p.cadenceDays);
-      h += '<div style="margin-top:12px;background:rgba(90,209,176,0.08);border:1px solid rgba(90,209,176,0.25);border-radius:10px;padding:10px 12px">' +
-        '<div style="font-size:12px;color:#5ad1b0;font-weight:600">' + (Math.round(wk * 10) / 10) + ' mg/week · ' + n + ' injections ' + (_dirty ? 'in this preview' : 'scheduled') + '</div>' +
-        '<div style="font-size:11px;color:var(--muted2);margin-top:3px">' +
-          (_dirty ? 'Preview only — nothing is stored until you save above.'
-                  : (_bound ? ('Stored in ' + _esc(_bound.name || 'this protocol') + '.')
-                            : 'Shown in the plasma curve at the top of this page. Use Save to stack to store it in a protocol.')) +
-        '</div>' +
-      '</div>';
-    } else {
-      h += '<div style="margin-top:12px;font-size:11px;color:var(--muted2);line-height:1.5">Fill in all four and the curve above will render this plan.</div>';
-    }
-  }
-  h += '</div></div>';
-  return h;
-}
-
-// The switch that decides which planner is live.
-function _tcPlannerSwitchHtml(){
-  var adv = _tcPlannerMode() === 'advanced';
-  return '<div class="card" style="margin-bottom:0">' +
-    '<div style="padding:12px 16px;display:flex;align-items:center;gap:12px">' +
-      '<label style="display:flex;align-items:center;gap:9px;cursor:pointer;flex:1">' +
-        '<input type="checkbox" ' + (adv ? 'checked' : '') + ' onchange="_tcToggleAdvancedPlanner(this)" ' +
-          'style="accent-color:#6688cc;width:17px;height:17px;cursor:pointer;flex-shrink:0">' +
-        '<span style="min-width:0">' +
-          '<span style="display:block;font-size:13px;font-weight:600;color:var(--text)">Advanced planner</span>' +
-          '<span style="display:block;font-size:11px;color:var(--muted2);line-height:1.45">' +
-            (adv ? 'Multi-compound log below is live. The simple plan above is off — its settings are kept.'
-                 : 'Off: the simple plan above drives the curve. Turn on for multi-compound schedules, blends and back-dated injections.') +
-          '</span>' +
-        '</span>' +
-      '</label>' +
-    '</div></div>';
-}
 
 // ── Planned TRT protocol → T-Calc ─────────────────────────────────────────────
 // A testosterone protocol configured in the Stack builder used to be invisible to
@@ -1900,46 +1442,21 @@ function _tcCurveLog(){
   // logged TRT contributed nothing (2026-08-07).
   _add(_tcLoggedHistory());
 
-  // ── 2. the live planner ────────────────────────────────────────────────────
-  // The greyed-out planner does not contribute. Its data is untouched and comes
-  // straight back when the switch is flipped, but a planner that is visibly
-  // disabled must not be silently driving the curve.
-  if (_tcPlannerMode() === 'simple') {
-    _add(_tcSimplePlanInjections());
-  } else {
-    _add(((_tcp && _tcp.manualLog) || []).map(function(e){
-      return (e.source === 'manual') ? e : Object.assign({}, e, { source: 'manual' });
-    }));
-  }
-  // From the day the simple plan starts, the plan IS the testosterone schedule —
-  // T-Calc is the single place one is built, so a stack's own TRT protocol covering
-  // the same days is the same injections described twice. De-duplicating only on an
-  // exact (compound, date) hit is not enough: a plan for a different ester, or on a
-  // different cadence, collides with nothing and gets ADDED to the protocol instead
-  // of replacing it. Reported 2026-08-01 — editing the plan's dose barely moved a
-  // curve that was dominated by the protocol underneath it.
-  // Dates BEFORE the plan starts are left alone: those are real past dosing, and the
-  // plan says nothing about them.
+  // ── 2. THE PLAN, which is now only ever the protocol's ────────────────────
+  // Phase 6 removed T-Calc's planner. What used to sit here — the simple plan, the
+  // manual-log drafts, and the suppression rule that let an unbound plan own its days
+  // against the protocol's stored rows — is gone with it. That apparatus existed to
+  // reconcile two planners; with one there is nothing to reconcile.
   //
-  // ⚠️ Only an UNBOUND plan may do this. When the plan is bound to a stack the
-  // protocol injections it would suppress are its own output, and suppressing them
-  // left the curve with nothing but a locally generated schedule — which is how a
-  // stale "Testoviron Depot, 4 Aug" plan came to override a protocol holding Nebido
-  // (2026-08-07). Bound: the stack's stored injections ARE the curve.
-  var planFrom = '';
-  // Bound AND saved: the protocol's stored injections ARE the curve — a plan that
-  // suppressed them would just be showing its own copy of the same thing, which is
-  // how a stale plan came to override a protocol holding Nebido (2026-08-07).
-  // Bound and DIRTY: the draft is a preview of what Save would produce, so it owns
-  // its days for the duration of the preview and the stored ones step aside.
-  if (_tcPlannerMode() === 'simple' && (!_tcSimplePlanStack() || _tcPlanDirty())) {
-    var _sp = _tcSimplePlan();
-    if (_tcSimplePlanComplete()) planFrom = _sp.startDate || '';
-  }
-  // ── 3. the protocol's remaining planned future ─────────────────────────────
-  _add(_tcProtocolInjections().filter(function(e){
-    return !(planFrom && e.date >= planFrom);     // the plan owns this day
-  }));
+  // Leaving it would have been worse than untidy: the planner mode is still whatever
+  // the profile last stored, so a user left on 'simple' would have had an invisible
+  // plan driving the curve with no UI to see it or edit it.
+  //
+  // The curve is now exactly: every logged dose (above) plus the protocol's stored
+  // rows (below) — the same two sources Today and the week strip read.
+
+  // ── 3. the protocol's planned future ──────────────────────────────────────
+  _add(_tcProtocolInjections());
   merged.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
   return merged;
 }
@@ -2097,7 +1614,12 @@ function _tcCloseManualLog() {
 
 var _tcAddSheet = null;
 
+// RECORD ENTRY, NOT PLANNING (Phase 6). The Add sheet is the only way to enter a dose
+// that was already taken — the mid-cycle onboarding path — so it survives the planner's
+// removal with its future half closed off: the date cannot be set past today, and the
+// heading says what the sheet is for.
 function _tcAddManualEntry() { _tcShowAddSheet(); }
+function _tcOpenLogPastDose() { _tcShowAddSheet(); }
 
 function _tcShowAddSheet() {
   if (document.getElementById('tc-add-sheet-overlay')) return;
@@ -2126,7 +1648,7 @@ function _tcShowAddSheet() {
   ol.innerHTML =
     '<div style="background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 36px;max-height:85vh;overflow-y:auto">' +
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
-    '<div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--text)">ADD INJECTION</div>' +
+    '<div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--text)">LOG A DOSE TAKEN</div>' +
     '<button onclick="_tcCloseAddSheet()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;line-height:1">×</button>' +
     '</div>' +
     '<div style="margin-bottom:14px"><label style="'+lSty+'">COMPOUND</label>' +
@@ -2135,7 +1657,7 @@ function _tcShowAddSheet() {
     '<div style="min-width:0"><label style="'+lSty+'">DOSE (mg)</label>' +
     '<input id="tc-as-dose" type="text" inputmode="decimal" placeholder="e.g. 100" style="'+iSty+'"></div>' +
     '<div style="min-width:0"><label style="'+lSty+'">DATE</label>' +
-    '<input id="tc-as-date" type="date" value="'+_esc(defaultDate)+'" style="'+iSty+'"></div>' +
+    '<input id="tc-as-date" type="date" max="'+_esc(dateKey(NOW))+'" value="'+_esc(defaultDate)+'" style="'+iSty+'"></div>' +
     '</div>' +
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:14px">' +
     '<div onclick="_tcAsToggle(false)" style="padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)">' +
@@ -2211,33 +1733,6 @@ async function _tcCreateLoggedInjections(compId, doseMg, dates, seriesId){
   return ok;
 }
 
-// Past-dated doses belonging to a PLAN, not to the record: logged:false. Used when an
-// edited series covers days already gone by. Re-typing a cadence is not a claim that
-// those doses were injected, so this must never write logged:true — that is
-// _tcCreateLoggedInjections' job, and it is called only from the Add sheet where the
-// user is explicitly entering doses they took. Today is the only place a plan becomes
-// a record.
-async function _tcCreatePlannedInjections(compId, doseMg, dates, seriesId){
-  if(_TC_PLANNING_REMOVED) return 0;
-
-  if (typeof authHeaders !== 'function') return 0;
-  var cd   = _tcCompInfo(compId);
-  var meta = (typeof _injPkMeta === 'function') ? _injPkMeta('trt', compId)
-                                                : {ester:null, half_life_days:null};
-  var cyc  = _tcTargetCycleId() || 'manual';
-  var ok = 0;
-  for (var i = 0; i < dates.length; i++){
-    var body = {cycle_id: cyc, date: dates[i], compound_id: compId,
-                compound_name: cd.name || compId, tier: 'trt',
-                dose: String(doseMg), unit: 'mg', dot: cd.dot || '#e8a020',
-                time_of_day: null, active: true, logged: false, source: 'tcalc',
-                series_id: seriesId || null,
-                ester: meta.ester, half_life_days: meta.half_life_days, route: null};
-    var r = await injWriteOne(body, 'tcAddPlanInj');
-    if (r && r.ok) ok++;
-  }
-  return ok;
-}
 
 // RECORD ENTRY SURVIVES; PLANNING DOES NOT (Phase 5).
 // The Add sheet does two different things through one button: dates already gone by are
@@ -2302,21 +1797,10 @@ async function _tcConfirmAddSheet() {
       if(!wrote)return;                       // nothing landed: keep the sheet open
     }
   }
-  if(future.length){
-    future.forEach(function(ds){
-      // draft: planned here, not yet in the record. Save to protocol is what
-      // persists it — until then _tcLoadLogFromStack must carry it forward.
-      _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:runId,draft:true});
-    });
-    _tcp.manualLog.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
-    _tcSaveProfile();
-    // MUST be awaited here, before the re-read below. _tcLoadLogFromStack() assigns
-    // _tcp.manualLog outright from the record, so any future dose still only in the
-    // profile is erased by it. Syncing afterwards then wrote that erased state back:
-    // a 10-dose series starting today kept only the one logged dose for today, which
-    // is the single case where past.length and future.length are both non-zero.
-    await _tcSyncLogToBackend();
-  }
+  // The future branch that used to stage drafts here is gone with the planner: `future`
+  // is emptied above, and staging a dose nothing can save is how seven doses came to sit
+  // in a profile looking scheduled (2026-08-14).
+
   _tcCloseAddSheet();
   if(refusedFuture&&typeof alert==='function'){
     alert('Logged ' + past.length + ' dose' + (past.length===1?'':'s') + ' you already took.\n\n' +
@@ -2409,29 +1893,6 @@ async function _tcRemoveManualEntry(idx) {
   _tcSyncLogToBackend();
 }
 
-async function _tcRemoveSeries(seriesId) {
-  if(_tcWritesDisabled('Removing a series')) return;
-
-  if (!_tcp.manualLog || !seriesId) return;
-  var stored = _tcp.manualLog.filter(function(e){ return e.seriesId === seriesId && e.injId; });
-  if (stored.length) {
-    if (typeof confirmGlobalDelete === 'function' &&
-        !confirmGlobalDelete('all ' + stored.length + ' injections in this series')) return;
-    for (var i = 0; i < stored.length; i++) await _tcDeleteStoredInjection(stored[i].injId);
-    await _tcFetchHistory(true);
-    if (typeof refreshInjectionsCache === 'function') await refreshInjectionsCache();
-  }
-  _tcp.manualLog = _tcp.manualLog.filter(function(e){ return e.seriesId !== seriesId; });
-  _tcSaveProfile();
-  if (stored.length) _tcLoadLogFromStack();
-  buildTCalc();
-  if (stored.length) {
-    if (typeof buildToday === 'function') buildToday();
-    if (typeof buildWeekStrip === 'function') buildWeekStrip();
-  } else {
-    _tcSyncLogToBackend();
-  }
-}
 
 function _tcOpenEditSeriesSheet(sid) {
   if (!_tcp || !_tcp.manualLog) return;
@@ -2493,9 +1954,6 @@ function _tcOpenEditSeriesSheet(sid) {
   document.body.appendChild(ol);
 }
 
-function _tcCloseEditSeriesSheet() {
-  var ol=document.getElementById('tc-edit-series-overlay');if(ol)ol.remove();_tcEditSeriesId=null;
-}
 
 function _tcShowSeriesDetail(sid) {
   if (!_tcp || !_tcp.manualLog) return;
@@ -2600,106 +2058,6 @@ function _tcAttachPanListeners(canvas) {
   canvas.addEventListener('mouseup', canvas._tcMouseEnd);
 }
 
-async function _tcSaveEditSeries() {
-  if(_tcWritesDisabled('Editing a series')) return;
-
-  var sid = _tcEditSeriesId;
-  if (!sid || !_tcp || !_tcp.manualLog) return;
-  var compEl=document.getElementById('tc-es-comp');
-  var doseEl=document.getElementById('tc-es-dose');
-  var dateEl=document.getElementById('tc-es-date');
-  var countEl=document.getElementById('tc-es-count');
-  var intervalEl=document.getElementById('tc-es-interval');
-  var compId=compEl?compEl.value:'';
-  var doseMg=doseEl?parseDec(doseEl.value):0;
-  var startDate=dateEl?dateEl.value:'';
-  var count=countEl?Math.max(2,parseInt(countEl.value)||10):10;
-  var intervalDays=intervalEl?Math.max(1,parseInt(intervalEl.value)||2):2;
-  if(!compId||!startDate||!(doseMg>0)){return;}
-  var _prev=_tcp.manualLog.filter(function(e){ return e.seriesId === sid; });
-  _tcp.manualLog = _tcp.manualLog.filter(function(e){ return e.seriesId !== sid; });
-  var sp=startDate.split('-');
-  var _dates=[];
-  for(var i=0;i<count;i++){
-    var sd=new Date(+sp[0],+sp[1]-1,+sp[2]+i*intervalDays);
-    _dates.push(sd.getFullYear()+'-'+String(sd.getMonth()+1).padStart(2,'0')+'-'+String(sd.getDate()).padStart(2,'0'));
-  }
-  // ── THE PAST HALF OF AN EDITED SERIES IS RECONCILED, NOT DISCARDED ──────────
-  // Every dose used to be pushed as draft:true. _tcSyncLogToBackend only writes from
-  // today forward and _tcLoadLogFromStack only carries drafts from today forward, so
-  // each save deleted the past-dated doses that were not already logged records —
-  // "10 injections every 2 days" came back as 8, and every further edit shed two more.
-  //
-  // A past-dated dose is written as a PLAN row (logged:false), never as a record. The
-  // user re-typed a cadence; that is not a statement that they injected on those days,
-  // and only Today may turn a plan into a record. Doses already ticked are left exactly
-  // as they are — the record owns the past.
-  var _editTodayK=dateKey(NOW);
-  var cidNow=_tcTargetCycleId();
-  var _pastDates=_dates.filter(function(d){ return d < _editTodayK; });
-  var _loggedOn={};
-  _tcLoggedHistory().forEach(function(e){ _loggedOn[e.compId+'|'+e.date]=true; });
-  // TWO DIFFERENT QUESTIONS, TWO DIFFERENT KEYS. Getting this wrong duplicated rows.
-  //
-  //  _storedAny — "does the record already hold this dose?" Keyed on (compound, date)
-  //  across EVERY series. A dose is a dose: the series it happens to be filed under is
-  //  irrelevant to whether it exists. Filtering this by seriesId meant a run that had
-  //  been split across two cards (or whose rows carried no series_id at all) failed to
-  //  match, so the edit POSTed a SECOND row for a date the record already had. Today
-  //  de-dupes on (compound, slot) and prefers the logged one, so ticking the dose
-  //  marked one row and left its twin unlogged — _tcSkippedPast kept reporting it, the
-  //  curve kept flat-lining, and the tick looked like it had been thrown away on
-  //  restart. Reported as "even if I go and check those they are gone after app
-  //  restart".
-  //
-  //  _storedMine — "may this edit retire the row?" Keyed the same way but restricted to
-  //  THIS series. An edit to one run must never delete another run's doses; that is the
-  //  never-merge-cards rule expressed in code.
-  var _storedAny={}, _storedMine={};
-  (_tcSkippedPast||[]).forEach(function(e){
-    if(!e||!e.date)return;
-    if(cidNow&&String(e.cycleId||'')&&String(e.cycleId||'')!==cidNow)return;
-    _storedAny[e.compId+'|'+e.date]=e;
-    if(e.seriesId===sid) _storedMine[e.compId+'|'+e.date]=e;
-  });
-  // Retire stored plan rows this edit removed from the run. Only unticked ones, and
-  // only this series' own — a ticked dose is a record and an edit never deletes one.
-  var _stale=Object.keys(_storedMine).filter(function(k){
-    return _pastDates.indexOf(_storedMine[k].date)<0 || _storedMine[k].compId!==compId;
-  }).map(function(k){ return _storedMine[k]; });
-  var _toCreate=_pastDates.filter(function(d){
-    return !_loggedOn[compId+'|'+d] && !_storedAny[compId+'|'+d];
-  });
-  for(var _si=0;_si<_stale.length;_si++){
-    if(_stale[_si].injId) await _tcDeleteStoredInjection(_stale[_si].injId);
-  }
-  if(_toCreate.length) await _tcCreatePlannedInjections(compId,doseMg,_toCreate,sid);
-  // The future half stays a draft until it is synced, exactly as before.
-  _dates.forEach(function(ds){
-    if(ds < _editTodayK) return;
-    _tcp.manualLog.push({compId:compId,doseMg:doseMg,date:ds,seriesId:sid,draft:true});
-  });
-  _tcp.manualLog.sort(function(a,b){return(a.date||'')<(b.date||'')?-1:(a.date||'')>(b.date||'')?1:0;});
-  _tcSaveProfile();
-  _tcCloseEditSeriesSheet();
-  // Persist FIRST. buildTCalc() calls _tcLoadLogFromStack(), which replaces
-  // _tcp.manualLog with what the record holds — running it before the sync threw
-  // the edit away and then wrote the pre-edit state back, so nothing ever saved.
-  await _tcSyncLogToBackend();
-  await _tcFetchHistory(true);
-  // AND RE-READ THE INJECTION CACHE. The sync above cleans the RECORD, but the curve
-  // also draws on _injectionsCache via _tcProtocolInjections, and nothing here refreshed
-  // it — so an edit that shortened a series left the removed doses in the cache and the
-  // curve kept drawing them. Reported 2026-08-16: shortening a Nebido run to 16 Aug left
-  // the curve running to October, apparently ignoring the edit. _tcConfirmAddSheet has
-  // always done this; the edit path simply never did.
-  //
-  // Order matters: history, then cache, then _tcLoadLogFromStack — which reads the cache
-  // for this stack's future rows and would otherwise rebuild manualLog from stale data.
-  if (typeof refreshInjectionsCache === 'function') await refreshInjectionsCache();
-  _tcLoadLogFromStack();
-  buildTCalc();
-}
 
 function _tcConfirmRemoveSeries(sid) {
   var ex = document.getElementById('tc-del-confirm');
@@ -2751,7 +2109,11 @@ async function _tcFetchBwEntries() {
   if (!h) { _tcBwEntries = []; _tcBwLoading = false; buildTCalc(); return; }
   try {
     var r = await fetch(AGENT_URL + '/bloodwork', {headers: h});
-    _tcBwEntries = r.ok ? (await r.json()) : [];
+    var _bw = r.ok ? (await r.json()) : [];
+    // A payload that is not a list is not bloodwork. Assigning it straight through threw
+    // on the sort below and took the whole tab's build with it — the calibration source
+    // failing should degrade to "no bloodwork", which the curve already handles.
+    _tcBwEntries = Array.isArray(_bw) ? _bw : (_bw && Array.isArray(_bw.entries) ? _bw.entries : []);
   } catch(_e) { _tcBwEntries = []; }
   _tcBwEntries.sort(function(a,b){ return (b.date||'') < (a.date||'') ? -1 : 1; });
   // Sync most-recent entry into _tcp so calibration code reads correct values
@@ -4320,21 +3682,6 @@ async function _tcSetTargetStack(stackId){
   if(typeof buildTCalc==='function')buildTCalc();
   if(typeof buildStackStore==='function')buildStackStore();
 }
-// "Copy to stack" picker — lists every stack (active ● or inactive) so testosterone
-// can be assigned to any of them, not just the active one.
-function _tcStackPickerHtml(){
-  var stacks=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks:[];
-  var cur=(_tcp&&_tcp.targetStackId)||'';
-  // No "Unassigned" option: testosterone belongs to a protocol. Picking none is how
-  // the global bucket used to get written.
-  var opts=cur?'':'<option value="" selected disabled>Choose a protocol…</option>';
-  stacks.forEach(function(s,i){
-    if(!s)return;
-    var act=(typeof _isActiveStack==='function'&&_isActiveStack(i))?' ●':'';
-    opts+='<option value="'+_esc(s.id||'')+'"'+((cur&&cur===s.id)?' selected':'')+'>'+_esc(s.name||('Protocol '+(i+1)))+act+'</option>';
-  });
-  return '<select onchange="_tcSetTargetStack(this.value)" title="Assign this testosterone to a protocol (● = active)" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:10px;padding:5px 7px;font-family:inherit;max-width:132px">'+opts+'</select>';
-}
 
 async function _tcSyncLogToBackend() {
   if(_TC_PLANNING_REMOVED) return;   // internal: called by the paths above
@@ -4431,10 +3778,6 @@ function _tcEnhancedAllowed(){
   return (typeof _userTier!=='undefined'&&_userTier>=3);
 }
 
-function _tcCloseSaveToStack(){
-  var ov=document.getElementById('tc-save-stack-overlay');
-  if(ov&&ov.parentNode)ov.parentNode.removeChild(ov);
-}
 
 // ── A DRAFT THAT IS NOT BOUND IS NOT SCHEDULED — SAY SO ──────────────────────
 // _tcSyncLogToBackend() opens with `var _cid=_tcTargetCycleId(); if(!_cid)return;`.
@@ -4451,79 +3794,10 @@ function _tcCloseSaveToStack(){
 // header only. In the manual planner — the one those 7 doses were added from — that
 // header reads "off — advanced planner is on", so there was no indication anywhere.
 //
-// This states the situation and offers the existing action. It deliberately does NOT
-// auto-bind or auto-write: the stack is still the container and Save to protocol is
-// still the moment of persistence. Degrade the visibility of a state, never invent a
-// fallback that silently changes what is stored.
-// The protocol these injections are written into, by name, or null. Distinct from
-// _tcSimplePlanStack, which additionally requires the stack to carry exactly one TRT
-// compound because it drives the SIMPLE planner's card. Binding is binding: this
-// answers "where do my doses go" for any planner mode.
-// The protocols the save sheet will offer, named, with the active one marked — so the
-// destination is knowable before the sheet is opened. Empty string when there are no
-// protocols yet (the sheet then only offers to create one).
-function _tcSaveTargetsHint(){
-  var stacks=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks:[];
-  var names=[];
-  stacks.forEach(function(s,i){
-    if(!s)return;
-    var act=(typeof _isActiveStack==='function'&&_isActiveStack(i))?' (active)':'';
-    names.push(_esc(s.name||('Protocol '+(i+1)))+act);
-  });
-  if(!names.length)return '';
-  return names.join(', ');
-}
 function _tcBoundStack(){
   var tid=_tcp&&_tcp.targetStackId;
   if(!tid||typeof _userStacks==='undefined'||!_userStacks)return null;
   return _userStacks.find(function(s){return s&&s.id===tid;})||null;
-}
-function _tcUnsavedDraftBanner(){
-  // ── BOUND: say WHICH protocol, always ──────────────────────────────────────
-  // Henrik, 2026-08-14: "how do I know which protocol the missing injections get
-  // saved to from T-calc? It just says Save to Protocol (which anyone would assume
-  // is the active protocol)."
-  //
-  // It is not the active protocol — it is _tcp.targetStackId, whatever was last
-  // bound, and the sheet's "New protocol" buttons bind a brand-new empty stack. The
-  // only place the target was ever named is the SIMPLE planner's card header, which
-  // reads "off — advanced planner is on" whenever the manual planner is in use. So
-  // in the mode where doses are actually added, nothing named the destination before
-  // saving or after. That is how a tap in that sheet moved a protocol's injections
-  // to a new empty stack without it being visible anywhere.
-  if(typeof _tcTargetCycleId==='function'&&_tcTargetCycleId()){
-    var _bs=_tcBoundStack();
-    if(!_bs)return '';
-    return '<div style="display:flex;align-items:center;gap:8px;background:rgba(90,209,176,0.08);border:1px solid rgba(90,209,176,0.28);border-left:3px solid #5ad1b0;border-radius:10px;padding:10px 12px;margin-bottom:12px">'
-      +'<div style="flex:1;font-size:12px;color:var(--text);line-height:1.5">'
-        +'<span style="color:var(--muted2)">Injections are saved into</span> <b>'+_esc(_bs.name||'this protocol')+'</b>'
-      +'</div>'
-      +'<button onclick="_tcOpenSaveToStack()" style="flex-shrink:0;background:none;border:1px solid var(--border);border-radius:8px;color:var(--muted2);font-size:11px;font-weight:700;padding:6px 10px;cursor:pointer;font-family:inherit">Change</button>'
-    +'</div>';
-  }
-  var drafts=((_tcp&&_tcp.manualLog)||[]).filter(function(e){return e&&e.draft&&e.date;});
-  if(!drafts.length)return '';
-  var dates=drafts.map(function(e){return e.date;}).sort();
-  var fmt=function(k){var p=String(k).split('-');var d=new Date(+p[0],(+p[1]||1)-1,+p[2]||1);
-    return isNaN(d)?k:d.toLocaleDateString('en-GB',{day:'numeric',month:'short'});};
-  var span=fmt(dates[0])+(dates.length>1?' – '+fmt(dates[dates.length-1]):'');
-  return '<div style="background:rgba(232,168,32,0.10);border:1px solid rgba(232,168,32,0.45);border-left:3px solid #e8a020;border-radius:10px;padding:12px 14px;margin-bottom:12px">'
-    +'<div style="font-size:11px;font-weight:800;letter-spacing:0.5px;text-transform:uppercase;color:#e8a020;margin-bottom:5px">Not scheduled yet</div>'
-    +'<div style="font-size:12px;color:var(--text);line-height:1.55;margin-bottom:10px">'
-      +'<b>'+drafts.length+' planned dose'+(drafts.length===1?'':'s')+'</b> ('+_esc(span)+') '
-      +'show on this curve but are <b>not saved to a protocol</b>, so they do not appear in Today and nothing is scheduled from them.'
-    +'</div>'
-    // Name the destination, or say plainly that there isn't one yet. "Save to
-    // protocol" alone reads as if the app already knows where — it does not, and
-    // there is deliberately no default: picking one for the user is what put a
-    // protocol's injections into a new empty stack. So the button states that the
-    // next step is the choice, and lists what is on offer.
-    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:9px">'
-      +'They have no destination yet. You pick it in the next step'
-      +(_tcSaveTargetsHint()?(' — '+_tcSaveTargetsHint()):'')+'.'
-    +'</div>'
-    +'<button onclick="_tcOpenSaveToStack()" style="width:100%;background:#e8a020;border:none;border-radius:9px;color:#0a0a0a;font-size:13px;font-weight:800;letter-spacing:0.4px;padding:11px;cursor:pointer;font-family:inherit">Choose a protocol…</button>'
-  +'</div>';
 }
 
 // ── SAVE TO PROTOCOL — one dropdown, one button ──────────────────────────────
@@ -4538,57 +3812,6 @@ function _tcUnsavedDraftBanner(){
 // schedule. A destructive option should not sit inside a dialog whose job is
 // "file these doses somewhere".
 //
-// Creating a protocol belongs in Plan, where a protocol is built with its
-// compounds. _tcCreateStackForTesto is left in place and untouched — it is simply
-// no longer reachable from here.
-function _tcOpenSaveToStack(){
-  _tcCloseSaveToStack();
-  var stacks=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks:[];
-  var live=stacks.filter(function(s){return !!s;});
-
-  // Preselect: the protocol already bound if there is one, else the ACTIVE protocol.
-  // The active one is what a user assumes "Save to protocol" means, and that
-  // assumption is now correct because it is what the control starts on.
-  var preId='';
-  if(_tcp&&_tcp.targetStackId&&live.some(function(s){return s.id===_tcp.targetStackId;}))preId=_tcp.targetStackId;
-  if(!preId){
-    for(var _a=0;_a<stacks.length;_a++){
-      if(stacks[_a]&&typeof _isActiveStack==='function'&&_isActiveStack(_a)){preId=stacks[_a].id||'';break;}
-    }
-  }
-  if(!preId&&live.length)preId=live[0].id||'';
-
-  var body;
-  if(!live.length){
-    // No protocol to file into. Say where one is made rather than offering to
-    // create an empty one from here.
-    body='<div style="font-size:13px;color:var(--muted2);line-height:1.6;margin-bottom:16px">'
-      +'You have no protocols yet. Build one in <b>Plan</b> with the compounds you are running, then come back and save these doses into it.'
-      +'</div>';
-  }else{
-    var opts=stacks.map(function(st,i){
-      if(!st)return '';
-      var act=(typeof _isActiveStack==='function'&&_isActiveStack(i))?' · active':'';
-      return '<option value="'+_esc(st.id||'')+'"'+((st.id||'')===preId?' selected':'')+'>'
-        +_esc(st.name||('Protocol '+(i+1)))+act+'</option>';
-    }).join('');
-    body='<select id="tc-save-stack-sel" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:16px;padding:13px 12px;font-family:inherit;margin-bottom:16px">'+opts+'</select>'
-      +'<button onclick="_tcSaveToExistingStack((document.getElementById(\'tc-save-stack-sel\')||{}).value)" '
-      +'style="width:100%;background:#e8a020;border:none;border-radius:10px;color:#0a0a0a;font-size:15px;font-weight:800;letter-spacing:0.4px;padding:15px;cursor:pointer;font-family:inherit">Save</button>';
-  }
-
-  var ov=document.createElement('div');
-  ov.id='tc-save-stack-overlay';
-  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:600;display:flex;align-items:flex-end;justify-content:center';
-  ov.onclick=function(e){if(e.target===ov)_tcCloseSaveToStack();};
-  ov.innerHTML='<div style="background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:20px 18px calc(20px + env(safe-area-inset-bottom,0px));max-height:80vh;overflow:auto">'
-    +'<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">Save to protocol</div>'
-    +'<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;line-height:1.5">Testosterone belongs to a protocol, so its doses show on Today alongside everything else you are running.</div>'
-    +body
-    +'<button onclick="_tcCloseSaveToStack()" style="width:100%;background:none;border:none;color:var(--muted2);font-size:13px;font-family:inherit;cursor:pointer;margin-top:14px;padding:8px">Cancel</button>'
-    +'</div>';
-  document.body.appendChild(ov);
-}
 
 // Keep the sheet up, with a spinner, until the write has landed AND every view has
 // rebuilt — then close.
@@ -4603,116 +3826,10 @@ function _tcOpenSaveToStack(){
 // doses are unsaved — displayed immediately after pressing Save — is the last thing
 // this screen should show. The sheet is the natural place to hold that wait.
 //
-// Errors keep the sheet OPEN and say so, rather than closing and leaving the user to
-// infer failure from a banner that never cleared.
-async function _tcSaveToExistingStack(id){
-  if(_tcWritesDisabled('Saving to a protocol')) return;
 
-  if(!id){_tcCloseSaveToStack();return;}
-  _tcSaveSheetBusy('Saving to protocol…');
-  try{
-    await _tcSetTargetStack(id);          // handles the single-source guard + re-sync
-    await _tcAfterSavedToStack();         // refreshes Today, Plan, T-Calc, the week strip
-  }catch(e){
-    if(typeof _logErr==='function')_logErr('tcSaveToStack',e);
-    _tcSaveSheetError('Could not save. Your doses are still here — check your connection and try again.');
-    return;                               // sheet stays open; nothing is lost
-  }
-  _tcCloseSaveToStack();                  // only now, with T-Calc already rebuilt
-}
 
-// Replace the sheet's controls with a spinner. Keeps the overlay and the heading, so
-// the user sees the same dialog working rather than a screen flicking back to a stale
-// warning. Cancel is removed for the duration: the write is already in flight.
-function _tcSaveSheetBusy(msg){
-  var ov=document.getElementById('tc-save-stack-overlay');
-  if(!ov)return;
-  var card=ov.firstChild;
-  if(!card)return;
-  card.innerHTML='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">Save to protocol</div>'
-    +'<div style="display:flex;align-items:center;gap:12px;padding:18px 2px 6px">'
-      +'<div class="today-spinner"><div class="today-spinner-dot"></div></div>'
-      +'<div style="font-size:13px;color:var(--muted2);line-height:1.5">'+_esc(msg||'Saving…')+'</div>'
-    +'</div>';
-}
-function _tcSaveSheetError(msg){
-  var ov=document.getElementById('tc-save-stack-overlay');
-  if(!ov)return;
-  var card=ov.firstChild;
-  if(!card)return;
-  card.innerHTML='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:6px">Save to protocol</div>'
-    +'<div style="font-size:13px;color:#e05050;line-height:1.55;margin-bottom:14px">'+_esc(msg||'Could not save.')+'</div>'
-    +'<button onclick="_tcOpenSaveToStack()" style="width:100%;background:#e8a020;border:none;border-radius:10px;color:#0a0a0a;font-size:14px;font-weight:800;padding:13px;cursor:pointer;font-family:inherit">Try again</button>'
-    +'<button onclick="_tcCloseSaveToStack()" style="width:100%;background:none;border:none;color:var(--muted2);font-size:13px;font-family:inherit;cursor:pointer;margin-top:12px;padding:8px">Close</button>';
-}
 
-// A protocol created here carries no compounds of its own — the testosterone comes
-// from the T-Calc plan that is about to be assigned to it. Enhanced differs from TRT
-// only in the tier flag, which is what the badges and the wizard read.
-async function _tcCreateStackForTesto(tier){
-  if(tier==='enhanced'&&!_tcEnhancedAllowed())return;
-  var stacks=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks:[];
-  if(stacks.length>=4)return;
-  _tcCloseSaveToStack();
 
-  var base=(tier==='enhanced')?'Enhanced':'TRT';
-  var name=base, n=2;
-  while(stacks.some(function(s){return s&&s.name===name;})){name=base+' '+n;n++;}
-
-  var proto={name:name,cycle_length:12,peptides:[],trt:{},
-             enhanced:(tier==='enhanced')?{enabled:true,compounds:[]}:{}};
-  // Freeze the id BEFORE the start date — _deriveStackCycleId includes cycle_start,
-  // so setting one first would move the id this stack's injections get written under.
-  if(typeof _ensureStackId==='function')_ensureStackId(proto);
-  _userStacks.push(proto);
-  var idx=_userStacks.length-1;
-  if(typeof _activeStackIndices!=='undefined')_activeStackIndices=[idx];
-  if(typeof _ensureCycleStart==='function')_ensureCycleStart(idx);
-  if(typeof saveStacksToBackend==='function')await saveStacksToBackend();
-  await _tcSetTargetStack(proto.id);
-  await _tcAfterSavedToStack();
-}
-
-async function _tcAfterSavedToStack(){
-  // ── Re-read the record before rebuilding, exactly as a cold start does ──────
-  // Reported 2026-08-15 with a before/after in the same build: immediately after
-  // saving 7 doses the curve inflated — peak 1690, steady-state avg 603, exposure
-  // 1665 pmol/L — and after restarting the app the same data gave 1176 / 435 /
-  // 1051. TODAY read 895 in both, so the PAST was identical and only the forward
-  // plan was doubled: the 7 doses counted once as drafts still sitting in
-  // _tcp.manualLog and again as the stored protocol rows they had just become.
-  //
-  // A restart cured it because a cold start re-reads the history and rebuilds
-  // manualLog from the record, retiring drafts the record has caught up with. The
-  // save path skipped both, leaving the drafts alive beside their own output.
-  // _tcFetchHistory(true) is FORCED — it returns early on a warm cache, which is
-  // the state it is always in here.
-  if(typeof _tcFetchHistory==='function')await _tcFetchHistory(true);
-  if(typeof updateWEEKLY==='function')updateWEEKLY();
-  if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
-  if(typeof _tcLoadLogFromStack==='function')_tcLoadLogFromStack();
-  if(typeof buildWeekStrip==='function')buildWeekStrip();
-  if(typeof buildToday==='function')buildToday();
-  if(typeof buildSchedule==='function')buildSchedule();
-  if(typeof buildStackStore==='function')buildStackStore();
-  if(typeof buildTCalc==='function')buildTCalc();
-}
-
-async function _tcPushLogToSchedule() {
-  if(_tcWritesDisabled('Pushing a plan to the schedule')) return;
-
-  var log=_tcp.manualLog||[];
-  if(!log.length){alert('No injections logged yet.');return;}
-  var h=(typeof authHeaders==='function')?authHeaders():null;
-  if(!h){alert('Sign in required.');return;}
-  // Nothing is scheduled outside a protocol. Ask which one first.
-  if(!_tcHasTargetStack()){_tcOpenSaveToStack();return;}
-  var _now=new Date();_now.setHours(0,0,0,0);
-  var todayStr=_now.getFullYear()+'-'+String(_now.getMonth()+1).padStart(2,'0')+'-'+String(_now.getDate()).padStart(2,'0');
-  await _tcSyncLogToBackend();
-  var futureCount=log.filter(function(e){return e.date>=todayStr&&parseDec(e.doseMg)>0;}).length;
-  alert('Pushed '+futureCount+' future injection'+(futureCount===1?'':'s')+' to schedule.');
-}
 
 // ── Main build ────────────────────────────────────────────────────────────────
 
@@ -4756,7 +3873,8 @@ function buildTCalc() {
   var html = '';
 
   // Above the curve, because it is about whether the curve means anything yet.
-  html += _tcUnsavedDraftBanner();
+  // The unsaved-draft banner went with the planner (Phase 6): it existed to offer
+  // "Save to protocol" for doses the planner had staged, and nothing stages one now.
 
   // ── 1. PLASMA CURVE (top — main feature) ─────────────────────────────────────
   var chartDot = (validLog.length > 0 && validLog[0].compId)
@@ -4807,152 +3925,35 @@ function buildTCalc() {
   }
   html += '</div>';
 
-  // ── 2. TESTOSTERONE PLAN (simple planner) + planner switch ────────────────────
-  html += _tcSimplePlannerHtml(iSty, lSty);
-  html += _tcPlannerSwitchHtml();
-
-  // ── 3. INJECTION SCHEDULE (advanced planner — multi-compound manual log) ──────
-  // Kept in full. When the advanced switch is off it is dimmed and non-interactive
-  // rather than hidden: the entries are still the user's data, and hiding them would
-  // suggest they had been lost.
-  var _advLive = _tcPlannerMode() === 'advanced';
-  html += '<div style="' + (_advLive ? '' : 'opacity:0.4;pointer-events:none;filter:grayscale(1)') + '">';
+  // ── 2. THE PLANNER IS GONE (Phase 6) ─────────────────────────────────────────
+  // Henrik, 2026-08-20: "If I only can add injections in the protocol builder why is
+  // the injection scheduler still in t-calc?" — exactly right. Phase 5 disabled these
+  // write paths but left the UI standing, so the buttons were still there and only
+  // said "moved to Plan ▸ Compounds" once pressed. A control that cannot do its job is
+  // worse than no control.
+  //
+  // Removed: the simple planner, the advanced-planner switch, the injection schedule
+  // card (protocol picker, Push to schedule, + Add, and the series cards with their
+  // Edit/× actions). What remains in T-Calc is what it is for — the curve, the exposure
+  // it implies, bloodwork calibration and the stored history.
+  //
+  // Logging a dose already taken is NOT planning and stays: it is record entry, it is
+  // how a mid-cycle user gets their history in, and §8 of the rewrite plan has not
+  // settled where else it would live.
   html += '<div class="card">';
   html += '<div class="card-header"><div class="card-title-wrap">';
   html += '<div class="card-dot" style="background:#6688cc"></div>';
-  html += '<div class="card-title">INJECTION SCHEDULE</div></div>';
-  html += '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;min-width:0">';
-  html += _tcStackPickerHtml();
-  if (log.length > 0) {
-    html += '<button onclick="_tcPushLogToSchedule()" style="background:none;border:1px solid var(--border);border-radius:8px;color:var(--muted2);font-size:10px;font-weight:700;letter-spacing:0.5px;cursor:pointer;padding:5px 10px;font-family:inherit">PUSH TO SCHEDULE</button>';
-  }
-  html += '<button onclick="_tcAddManualEntry()" style="background:linear-gradient(135deg,#6688cc,#4466aa);border:none;border-radius:8px;color:#fff;font-size:11px;font-weight:800;letter-spacing:0.8px;cursor:pointer;padding:7px 14px;font-family:inherit">+ ADD</button>';
-  html += '</div></div>';
-  html += '<div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px">';
-
-  if (log.length === 0) {
-    html += '<div style="text-align:center;padding:16px 0;color:var(--muted2);font-size:13px">No injections logged yet.<br><span style="font-size:12px;opacity:0.6">Tap + ADD to log your first injection.</span></div>';
-  } else {
-    // Pre-compute series metadata
-    var _seriesSeen = {};
-    var _seriesTotals = {};
-    var _seriesMeta = {};
-    log.forEach(function(e){
-      if(!e.seriesId)return;
-      var sid=e.seriesId;
-      _seriesTotals[sid]=(_seriesTotals[sid]||0)+1;
-      if(!_seriesMeta[sid]){_seriesMeta[sid]={compId:e.compId,doseMg:e.doseMg,firstDate:e.date,lastDate:e.date,unticked:0};}
-      else{if(e.date<_seriesMeta[sid].firstDate)_seriesMeta[sid].firstDate=e.date;if(e.date>_seriesMeta[sid].lastDate)_seriesMeta[sid].lastDate=e.date;}
-      // Past-dated doses in the run that were never ticked. They are in the plan (and
-      // in this count) but out of the curve, so the card has to say so.
-      if(e.unticked)_seriesMeta[sid].unticked++;
-    });
-    Object.keys(_seriesMeta).forEach(function(sid){
-      if((_seriesTotals[sid]||0)<2)return;
-      var dates=log.filter(function(e){return e.seriesId===sid;}).map(function(e){return e.date||'';}).sort();
-      // CADENCE IS THE MOST COMMON GAP, NOT THE FIRST ONE. Reading dates[1]-dates[0]
-      // meant one missing dose at the head of the run silently rewrote the label: an
-      // every-2-days series whose 3rd and 4th doses were never ticked came back as
-      // "8 injections · every 6 days · 8 Aug → 26 Aug" — a span that holds 10 doses at
-      // the real cadence and 8 at the printed one, so the card contradicted itself and
-      // the gap was invisible. The modal gap survives holes anywhere in the run.
-      var _gaps={},_best=0,_bestN=0;
-      for(var _gi=1;_gi<dates.length;_gi++){
-        var _g=Math.round((new Date(dates[_gi].replace(/-/g,'/'))-new Date(dates[_gi-1].replace(/-/g,'/')))/86400000);
-        if(!(_g>0))continue;
-        _gaps[_g]=(_gaps[_g]||0)+1;
-        // Ties go to the SHORTER gap: a hole always reads as a longer-than-true interval,
-        // never a shorter one, so the smaller candidate is the honest cadence.
-        if(_gaps[_g]>_bestN||(_gaps[_g]===_bestN&&_g<_best)){_best=_g;_bestN=_gaps[_g];}
-      }
-      _seriesMeta[sid].interval=_best||Math.round((new Date(dates[1].replace(/-/g,'/'))-new Date(dates[0].replace(/-/g,'/')))/86400000);
-      // ⚠️ DO NOT INFER "MISSED DOSES" FROM THE SPAN. A chip here counted
-      // floor(span/cadence)+1 minus this series' own entries and called the remainder
-      // "N missed". Two ways that lies, both hit on the first real schedule:
-      //   • A date covered by a dose in ANOTHER series, or a standalone dose, is not in
-      //     this series' list, so it counted as missed while the dose existed and was
-      //     ticked — "prod says 3 injections missed but I cant see anything not checked
-      //     in today view".
-      //   • An intentionally irregular run reads as missed. Varying dose and cadence
-      //     between runs is the point of the card list (see NEVER MERGE CARDS), so the
-      //     app cannot tell a deliberate gap from a skipped shot and must not guess.
-      // The `unticked` count below is the honest version of this: it counts STORED
-      // doses that were not ticked, which is a fact rather than an inference, and it is
-      // the one the user can act on.
-    });
-    var _tcFmtD=function(iso){if(!iso)return'';var p=iso.split('-');var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];return parseInt(p[2],10)+' '+M[parseInt(p[1],10)-1];};
-
-    log.forEach(function(entry, idx) {
-      var cd = _tcCompInfo(entry.compId || (comps[0] || ''));
-      var sid = entry.seriesId;
-
-      if (sid) {
-        // ── One summary card per seriesId ──
-        if (_seriesSeen[sid]) return;
-        _seriesSeen[sid] = true;
-        var meta = _seriesMeta[sid] || {};
-        var total = _seriesTotals[sid] || 1;
-        var iv = meta.interval;
-        var ivLabel = iv ? ' · every ' + iv + ' day' + (iv === 1 ? '' : 's') : '';
-        var mcd = _tcCompInfo(meta.compId || (comps[0] || ''));
-        var editBtnStyle = 'background:none;border:1px solid #6688cc66;border-radius:6px;color:#6688cc;font-size:10px;font-weight:700;letter-spacing:0.5px;cursor:pointer;padding:4px 8px;font-family:inherit;flex-shrink:0';
-        var deleteBtnStyle = 'background:none;border:none;color:var(--muted2);font-size:16px;cursor:pointer;padding:2px 4px;line-height:1;flex-shrink:0';
-        // Stack visual: box-shadow creates two "cards" peeking behind the top card
-        html += '<div onclick="_tcShowSeriesDetail(\'' + _esc(sid) + '\')" style="background:rgba(102,136,204,0.10);border:1px dashed #6688cc66;border-radius:12px;padding:12px;box-shadow:3px 3px 0 0 rgba(102,136,204,0.18),6px 6px 0 0 rgba(102,136,204,0.09);cursor:pointer;">';
-        html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">';
-        html += '<div style="display:flex;align-items:center;gap:8px;">';
-        html += '<span style="font-size:10px;font-weight:800;letter-spacing:1px;color:#6688cc;text-transform:uppercase">⛓ SERIES</span>';
-        html += '<span style="font-size:10px;color:var(--muted2)">' + total + ' injections' + ivLabel + '</span>';
-        // A hole in the run, stated rather than absorbed into the cadence label.
-        // `unticked` = scheduled, in the past, never ticked: in the plan, out of the
-        // curve. `missing` = dates the span does not hold at all.
-        if (meta.unticked > 0)
-          html += '<span style="font-size:10px;font-weight:700;color:#e8a020">· ' + meta.unticked + ' not ticked</span>';
-        html += '</div>';
-        html += '<div style="display:flex;align-items:center;gap:6px;">';
-        html += '<button onclick="event.stopPropagation();_tcOpenEditSeriesSheet(\'' + _esc(sid) + '\')" style="' + editBtnStyle + '">EDIT</button>';
-        html += '<button onclick="event.stopPropagation();_tcConfirmRemoveSeries(\'' + _esc(sid) + '\')" style="' + deleteBtnStyle + '">✕</button>';
-        html += '</div>';
-        html += '</div>';
-        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">';
-        html += '<span style="width:8px;height:8px;border-radius:50%;background:' + mcd.dot + ';display:inline-block;flex-shrink:0"></span>';
-        html += '<span style="font-size:14px;font-weight:600;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _esc(mcd.name) + '</span>';
-        html += '</div>';
-        html += '<div style="display:flex;gap:24px;">';
-        html += '<div><div style="' + lSty + '">DOSE</div><div style="font-size:14px;font-weight:600;color:var(--text)">' + _esc(String(meta.doseMg || '')) + ' mg</div></div>';
-        if (meta.firstDate) {
-          var dRange = _tcFmtD(meta.firstDate) + (meta.firstDate !== meta.lastDate ? ' → ' + _tcFmtD(meta.lastDate) : '');
-          html += '<div><div style="' + lSty + '">DATES</div><div style="font-size:14px;font-weight:600;color:var(--text)">' + _esc(dRange) + '</div></div>';
-        }
-        html += '</div>';
-        html += '</div>';
-      } else {
-        // Single injection card
-        var compSelect = '<select onchange="_tcSetManualField(' + idx + ',\'compId\',this.value)" style="' + iSty + ';flex:1;min-width:0;font-size:14px">';
-        comps.forEach(function(id) {
-          var n = _tcCompInfo(id).name;
-          compSelect += '<option value="' + _esc(id) + '"' + (entry.compId === id ? ' selected' : '') + '>' + _esc(n) + '</option>';
-        });
-        compSelect += '</select>';
-        var borderCol = cd.dot + '33';
-        html += '<div style="background:var(--surface2);border:1px solid ' + borderCol + ';border-radius:12px;padding:12px;">';
-        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">';
-        html += '<span style="width:8px;height:8px;border-radius:50%;background:' + cd.dot + ';display:inline-block;flex-shrink:0"></span>';
-        html += compSelect;
-        html += '<button onclick="_tcConfirmRemove(' + idx + ')" style="background:none;border:none;color:var(--muted2);font-size:18px;cursor:pointer;padding:2px 4px;flex-shrink:0;line-height:1">✕</button>';
-        html += '</div>';
-        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-        html += '<div style="min-width:0;overflow:hidden"><div style="' + lSty + '">DOSE (mg)</div>';
-        html += '<input type="text" inputmode="decimal" value="' + _esc(String(entry.doseMg || '')) + '" placeholder="e.g. 100" onchange="_tcSetManualField(' + idx + ',\'doseMg\',+this.value)" style="' + iSty + ';font-size:14px"></div>';
-        html += '<div style="min-width:0;overflow:hidden"><div style="' + lSty + '">DATE</div>';
-        html += '<input type="date" value="' + _esc(entry.date || '') + '" onchange="_tcSetManualField(' + idx + ',\'date\',this.value)" style="' + iSty + ';font-size:14px;min-width:0;max-width:100%;-webkit-appearance:none;appearance:none"></div>';
-        html += '</div></div>';
-      }
-    });
-  }
-  html += '</div></div>';
-
-  html += '</div>';   // /advanced planner wrapper
+  html += '<div class="card-title">INJECTIONS</div></div></div>';
+  html += '<div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px">';
+  html += '<div style="font-size:12px;color:var(--muted2);line-height:1.6">'
+       +  'Scheduling lives in <b>Plan ▸ Compounds</b> — one place, so a compound cannot '
+       +  'be scheduled twice. This tab draws what that schedule produces.</div>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  html += '<button onclick="var b=document.getElementById(\'tab-btn-stack\');if(b)b.click();" '
+       +  'style="background:linear-gradient(135deg,#6688cc,#4466aa);border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;font-family:inherit">Open Plan ▸ Compounds</button>';
+  html += '<button onclick="_tcOpenLogPastDose()" '
+       +  'style="background:none;border:1px solid var(--border);border-radius:8px;color:var(--muted2);font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;font-family:inherit">Log a dose already taken</button>';
+  html += '</div></div></div>';
 
   // ── 4. BLOODWORK (collapsible list) ──────────────────────────────────────────
   var _latestBw = (_tcBwEntries && _tcBwEntries.length) ? _tcBwEntries[0] : null;

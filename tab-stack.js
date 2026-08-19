@@ -1915,19 +1915,13 @@ function _refreshTRTGuide(id,freqVal,freqUnit,dose){var el=document.getElementBy
 var _wizTrtClassic = false;
 function wizToggleTrtClassic(){ _wizTrtClassic = !_wizTrtClassic; wizRender(); }
 
-// Wizard-local copy of the plan. Seeded from the live T-Calc plan so re-opening the
-// wizard shows what is actually scheduled, then from a classic TRT compound if one
-// was configured that way, so neither is silently ignored.
+// Wizard-local copy of the testosterone config. It used to seed from T-Calc's simple
+// plan first, because that was where a schedule lived; Phase 6 removed that planner, so
+// the protocol's own compound is now the only thing to seed from — which is also the
+// thing the wizard is editing.
 function _wizEnsureTrtPlan(){
   if(_wiz.trtPlan) return _wiz.trtPlan;
   var seed = {compId:'', doseMg:'', cadenceN:0, cadenceUnit:'week', cadenceDays:0, startDate:''};
-  if(typeof _tcSimplePlan==='function'){
-    var sp=_tcSimplePlan();
-    if(sp.compId)      seed.compId=sp.compId;
-    if(sp.doseMg)      seed.doseMg=sp.doseMg;
-    if(sp.cadenceDays){seed.cadenceDays=sp.cadenceDays;seed.cadenceN=sp.cadenceN;seed.cadenceUnit=sp.cadenceUnit;}
-    if(sp.startDate)   seed.startDate=sp.startDate;
-  }
   var c=((_wiz.trt&&_wiz.trt.compounds)||[])[0];
   if(c){
     if(!seed.compId) seed.compId=c.id||'';
@@ -2864,6 +2858,20 @@ function _effectiveDoseAt(p,cycleStart,targetDate){
   return cur?{dose:cur.d,unit:cur.u}:null;
 }
 
+// STEP IN CALENDAR DAYS, NEVER IN MILLISECONDS.
+// Adding 86400000 ms is 24 hours, and a DST day is 23 or 25. Crossing one, the loop
+// variable creeps to 23:00 the previous day and a date is emitted twice or skipped
+// entirely — a missing or duplicated injection, from a clock change.
+//
+// T-Calc's planner carried a guard against exactly this (2026-08-07); when Phase 6
+// deleted that planner, the guard would have gone with it while the hazard moved to
+// this generator, which is now the only thing expanding a schedule into dates.
+function _nextDay(d){
+  var n=new Date(d);
+  n.setDate(n.getDate()+1);
+  return n;
+}
+
 function _genInjBatches(stack,cycleId,fromDate){
   if(!stack||!stack.cycle_start)return[];
   var cycleStart=parseLocalDate(stack.cycle_start);
@@ -2882,7 +2890,7 @@ function _genInjBatches(stack,cycleId,fromDate){
     var pStart=p.start_date?parseLocalDate(p.start_date):cycleStart;
     var pEnd=p.end_date?parseLocalDate(p.end_date):null;
     var compEntries=[];
-    for(var d=new Date(genStart);d<=cycleEnd;d=new Date(d.getTime()+86400000)){
+    for(var d=new Date(genStart);d<=cycleEnd;d=_nextDay(d)){
       if(!days.includes(d.getDay()))continue;
       if(d<pStart)continue;
       if(pEnd&&d>pEnd)continue;
@@ -2947,7 +2955,7 @@ function _genInjBatches(stack,cycleId,fromDate){
       var cStart=c.start_date?new Date(Math.max(parseLocalDate(c.start_date).getTime(),genStart.getTime())):new Date(genStart);
       var cEnd=c.end_date?new Date(Math.min(parseLocalDate(c.end_date).getTime(),cycleEnd.getTime())):new Date(cycleEnd);
       var compEntries=[];
-      for(var d=new Date(cStart);d<=cEnd;d=new Date(d.getTime()+86400000)){
+      for(var d=new Date(cStart);d<=cEnd;d=_nextDay(d)){
         var daysSince=Math.floor((d-cycleStart)/86400000);
         var hit=false;
         if(c.id!=='nebido'&&c.days&&c.days.length){hit=c.days.includes(d.getDay());}
@@ -2978,7 +2986,7 @@ function _genInjBatches(stack,cycleId,fromDate){
       var isAmPm=c.amPm||(eCat&&eCat.amPm);
       var baseUnit=c.unit?(c.unit.split('/')[0]):'';
       var compEntries=[];
-      for(var d=new Date(genStart);d<=cycleEnd;d=new Date(d.getTime()+86400000)){
+      for(var d=new Date(genStart);d<=cycleEnd;d=_nextDay(d)){
         if(!_enhHitsDay(c,d,cycleStart))continue;
         var dk=dateKey(d);
         if(isAmPm){

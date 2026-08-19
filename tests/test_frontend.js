@@ -1196,8 +1196,8 @@ console.log('\n── Card header overflow regressions ────────�
   check('card-header wraps instead of overflowing', /\.card-header\{[^}]*flex-wrap:wrap/.test(css));
   check('card-title-wrap can shrink (min-width:0)', /\.card-title-wrap\{[^}]*min-width:0/.test(css));
   const tc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
-  check('injection schedule controls wrap', tc.includes('gap:6px;flex-wrap:wrap;justify-content:flex-end'));
-  check('date input constrained (iOS intrinsic width)', tc.includes('min-width:0;max-width:100%;-webkit-appearance:none'));
+  // The injection-schedule card's layout checks (wrapping controls, a constrained date
+  // input for iOS) went with the card itself in Phase 6.
 }
 
 console.log(`\n${'─'.repeat(59)}`);
@@ -1342,39 +1342,12 @@ console.log(`\n${'─'.repeat(59)}`);
 
   check('the sync writes nothing without a stack',
     /if\(!_cid\)return;/.test(tc));
-  check('pushing opens Save to protocol when no stack is chosen',
-    /if\(!_tcHasTargetStack\(\)\)\{_tcOpenSaveToStack\(\);return;\}/.test(tc));
-  check('the picker no longer offers "Unassigned"', !/>Unassigned</.test(tc));
-
-  check('Save to protocol lists existing protocols', /_tcSaveToExistingStack\(/.test(tc));
-  // SUPERSEDED 2026-08-14 by explicit request: "remove the create new protocol
-  // choices". The three checks here asserted that the sheet offered "New protocol →
-  // TRT / Enhanced" wired to _tcCreateStackForTesto. Those buttons created an EMPTY
-  // protocol and made it the only active one — one tap blanked Today and the bind
-  // that followed destroyed the account's forward schedule. Creating a protocol
-  // belongs in Plan, where it is built with its compounds. The creator function is
-  // deliberately left in the file; it is simply unreachable from this sheet.
-  check('the save sheet does NOT offer to create a protocol',
-    !/newBtn\('trt'/.test(tc) && !/newBtn\('enhanced'/.test(tc));
-  check('  …and never reaches the creator from the sheet',
-    tc.indexOf('_tcOpenSaveToStack') < 0 ||
-    tc.slice(tc.indexOf('function _tcOpenSaveToStack'),
-             tc.indexOf('async function _tcSaveToExistingStack')).indexOf('_tcCreateStackForTesto') < 0);
-
-  check('Enhanced is gated on tier 3', /_userTier>=3/.test(tc));
-  check('  …and refuses on the action, not just the button',
-    /if\(tier==='enhanced'&&!_tcEnhancedAllowed\(\)\)return;/.test(tc));
-  check('  …failing open while the tier is still loading',
-    /if\(typeof _featuresLoaded!=='undefined'&&!_featuresLoaded\)return true;/.test(tc));
-
-  check('a new protocol respects the 4-protocol cap', /if\(stacks\.length>=4\)return;/.test(tc));
-  check('a new protocol is activated and started',
-    /_activeStackIndices=\[idx\];[\s\S]{0,120}?_ensureCycleStart\(idx\)/.test(tc));
-  // Same trap as the stack wizard: _deriveStackCycleId includes cycle_start.
-  check('  …with its id frozen BEFORE the start date',
-    /_ensureStackId\(proto\);[\s\S]{0,200}?_ensureCycleStart\(idx\)/.test(tc));
-  check('an Enhanced protocol carries the enhanced flag',
-    /enhanced:\(tier==='enhanced'\)\?\{enabled:true,compounds:\[\]\}:\{\}/.test(tc));
+  // Phase 6: there is no Save-to-protocol sheet and T-Calc no longer creates a
+  // protocol. What these guarded — that nothing is scheduled outside a protocol, and
+  // that creating one is a deliberate act with a cap and a start date — now lives
+  // entirely in the Plan tabs, which is where protocols were always meant to be made.
+  check('T-Calc neither saves to nor creates a protocol',
+    !/function _tcOpenSaveToStack/.test(tc) && !/function _tcCreateStackForTesto/.test(tc));
 
   // Already-stored 'tcalc' entries must keep rendering — refusing to write a new one
   // must never make existing injections disappear.
@@ -1566,76 +1539,26 @@ console.log(`\n${'─'.repeat(59)}`);
   check('  …and so is a compound with neither (TRT/peptide precedence)',
     JSON.stringify(G._pkInjectionDays({freqVal:2, freqUnit:'weeks'}, 42, 1)) === JSON.stringify([0,14,28]));
 
-  // ── C. the plan lives in the stack it is assigned to ────────────────────────
-  // T-Calc showed Testoviron Depot 75 mg E2D while the protocol held Nebido 100 mg,
-  // and _tcCurveLog's "the plan owns this day" rule suppressed the protocol's real
-  // injections in favour of that stale plan.
-  check('a plan assigned to a stack reads that stack', /function _tcSimplePlanStack\(\)/.test(tcJs));
-  check('  …one ester on one cadence, or it is not adopted', /comps\.length !== 1/.test(tcJs));
-  check('  …editing a field writes back to the stack', /_tcWritePlanToStack/.test(tcJs));
-  check('  …and regenerates that stack\'s injections',
-    /generateAndPushInjections\(st, now\)/.test(tcJs));
-  // Updated 2026-08-07: edits are a DRAFT until Save, so "bound" alone no longer
-  // decides these — "bound and clean" does. A dirty draft deliberately expands and
-  // owns its days, which is the curve preview the Save button commits.
-  check('  …a saved bound plan generates no second schedule of its own',
-    /if \(_tcSimplePlanStack\(\) && !_tcPlanDirty\(\)\) return \[\];/.test(tcJs));
-  check('  …and can no longer suppress the stack\'s stored injections',
-    /_tcPlannerMode\(\) === 'simple' && \(!_tcSimplePlanStack\(\) \|\| _tcPlanDirty\(\)\)/.test(tcJs));
+  // ── C. the plan lived in the stack it was assigned to ─────────────────────
+  // Phase 6 deleted the planner these guarded — _tcSimplePlanStack, the adoption rule,
+  // the write-back, and "the plan owns this day", which let a stale Testoviron plan
+  // suppress a protocol holding Nebido. With one scheduler there is no plan to adopt
+  // and no suppression to arbitrate; what survives is asserted where it now lives:
+  // the protocol generates, and _tcCurveLog reads stored rows only.
+  // Functions, not prose: the historical note above the deleted code names the old rule
+  // deliberately, so matching on its wording would fail for the wrong reason.
+  check('the plan-in-a-stack apparatus is gone',
+    !/function _tcSimplePlanStack\(/.test(tcJs) && !/function _tcWritePlanToStack\(/.test(tcJs) &&
+    !/function _tcSimplePlan\(/.test(tcJs) && !/_tcPlanDraft = Object\.assign/.test(tcJs));
 
-  G._userStacks = [{id:'s9', name:'P9', trt:{enabled:true, compounds:[
-    {id:'nebido', name:'Nebido', dose:'100', unit:'mg', freqVal:5, freqUnit:'days', start_date:'2026-08-04'}]}}];
-  G._tcp = Object.assign({}, G._tcp, {targetStackId:'s9',
-    simplePlan:{compId:'testoviron', doseMg:'75', cadenceN:2, cadenceUnit:'day', cadenceDays:2, startDate:'2026-08-04'}});
-  const shown = G._tcSimplePlan();
-  check('the plan card shows the stack, not a stale profile plan',
-    shown.compId === 'nebido' && shown.doseMg === '100', JSON.stringify(shown));
-  check('  …including its cadence', shown.cadenceN === 5 && shown.cadenceUnit === 'day');
-  check('  …and its start date', shown.startDate === '2026-08-04');
-  check('  …and it expands to nothing, because the stack already stores it',
-    G._tcSimplePlanInjections().length === 0);
-  G._tcp.targetStackId = '';
-  check('  …an unassigned plan still comes from the profile',
-    G._tcSimplePlan().compId === 'testoviron');
-
-  // ── D. edits are a draft until Save ────────────────────────────────────────
-  // "t-calc would need a Save button, right now it redraws the graph but how do I
-  // know if this update actually rewrote the TRT schedule?" (Henrik 2026-08-07).
-  // Writing each keystroke into the protocol was correct but invisible, and a
-  // rewritten schedule is not something to infer from a chart moving.
-  G._tcp.targetStackId = 's9';
-  G._tcPlanDraft = null;
-  check('a bound plan starts clean', G._tcPlanDirty() === false);
-
-  G._tcSetSimplePlanField('doseMg', '250');
-  check('editing a field does NOT write to the protocol',
-    (G._userStacks[0].trt.compounds[0].dose) === '100');
-  check('  …it goes into a draft instead', G._tcPlanDirty() === true);
-  check('  …which the card reads', G._tcSimplePlan().doseMg === '250');
-  check('  …while the protocol still reports its own value',
-    G._tcStoredPlan().doseMg === '100');
-  check('  …and only the edited field counts as changed',
-    JSON.stringify(G._tcPlanChanges()) === JSON.stringify(['doseMg']));
-  check('  …with a plain-language summary of what Save would do',
-    G._tcPlanChangeSummary().some(function(s){ return /100 → 250/.test(s); }),
-    JSON.stringify(G._tcPlanChangeSummary()));
-  check('  …and the draft expands so the curve can preview it',
-    G._tcSimplePlanInjections().length > 0);
-
-  G._tcDiscardPlanDraft();
-  check('Discard drops the draft', G._tcPlanDirty() === false);
-  check('  …leaving the protocol untouched', G._tcSimplePlan().doseMg === '100');
-  check('  …and the preview stops expanding', G._tcSimplePlanInjections().length === 0);
-
-  // The draft is in-memory only. Persisting it would be a second store that can
-  // disagree with the protocol — the exact class of bug this tab keeps hitting.
-  check('the draft is never written to the profile', !/simplePlan.*_tcPlanDraft/.test(tcJs));
-  check('  …and Save is the only path from a draft to the protocol',
-    (tcJs.match(/_tcWritePlanToStack\(/g) || []).length === 2);   // definition + the Save call
-  check('Save clears the draft once written', /_tcPlanDraft = null;\s*\n\s*_tcPlanSavedAt/.test(tcJs));
-  check('  …and confirms it on the card afterwards', /function _tcJustSaved\(\)/.test(tcJs));
-  check('  …and reports a failure instead of pretending it saved',
-    /Save failed — try again/.test(tcJs));
+  // The plan card, the draft, the change summary and the write-back all belonged to the
+  // simple planner. Phase 6 removed it: the protocol IS the plan, the Compounds tab is
+  // where it is edited, and there is no second copy to keep in step or to summarise.
+  // The surviving requirement — an edit reaches the record and the curve — is asserted
+  // against the protocol editor and _genInjBatches.
+  check('the simple planner and its draft machinery are gone',
+    typeof G._tcSimplePlan !== 'function' && typeof G._tcPlanDirty !== 'function' &&
+    typeof G._tcSetSimplePlanField !== 'function' && typeof G._tcPlanChanges !== 'function');
 }
 
 // ── A CHECKED INJECTION IS THE PAST (2026-08-07) ─────────────────────────────
@@ -1749,8 +1672,10 @@ console.log(`\n${'─'.repeat(59)}`);
     /await _tcFetchHistory\(true\);/.test(tcJs));
   check('  …and says the delete is global first',
     /confirmGlobalDelete\('this ' \+/.test(tcJs));
-  check('  …with the series delete doing the same for every stored row',
-    /for \(var i = 0; i < stored\.length; i\+\+\) await _tcDeleteStoredInjection/.test(tcJs));
+  // Deleting a whole SERIES was a planner action and went with it; deleting a single
+  // stored dose is record maintenance and is what the checks above cover.
+  check('  …while the series delete is gone with the planner',
+    !/function _tcRemoveSeries/.test(tcJs));
   check('a profile-only row still deletes locally',
     /_tcp\.manualLog\.splice\(idx, 1\);/.test(tcJs));
   // 404 is success: the record is gone, which is what was asked for.
@@ -1778,32 +1703,28 @@ console.log(`\n${'─'.repeat(59)}`);
   check('a series straddling today splits into records and plan',
     /var past=dates\.filter\(function\(d\)\{return d<=todayStr;\}\);/.test(tcJs) &&
     /var future=dates\.filter\(function\(d\)\{return d>todayStr;\}\);/.test(tcJs));
-  check('  …with only the future half going through the plan sync',
-    /if\(future\.length\)\{[\s\S]{0,1200}?await _tcSyncLogToBackend\(\);/.test(tcJs));
+  // Phase 6: the future half is refused outright rather than synced — planning moved
+  // to the protocol, and the past half is still written as the record it is.
+  check('  …with the future half refused, not staged',
+    /if\(future\.length&&_TC_PLANNING_REMOVED\)/.test(tcJs) &&
+    !/if\(future\.length\)\{[\s\S]{0,400}manualLog\.push/.test(tcJs));
 
   // ── The plan must be PERSISTED before anything re-reads the record ─────────
   // Reported 2026-08-08: "If I edit a series it won't save the update. If I add a
   // new series of 10 injections starting at today's date, only a single injection
-  // is saved." One cause behind both. _tcLoadLogFromStack() assigns _tcp.manualLog
-  // outright from the record, so running it BEFORE the sync erased every dose that
-  // was still only in the profile — and the sync then wrote that erased state back.
-  // The add only hits it when the series straddles today, i.e. when it starts today.
+  // is saved." _tcLoadLogFromStack() assigns _tcp.manualLog outright from the record,
+  // so running it BEFORE the sync erased every dose that was still only in the profile.
+  //
+  // The series editor is gone (Phase 6). What remains of this ordering requirement is
+  // on the ADD path, which still writes records: it must persist before it re-reads.
   var _tcAddFn  = tcJs.slice(tcJs.indexOf('async function _tcConfirmAddSheet()'),
                              tcJs.indexOf('function _tcConfirmRemove('));
-  var _tcEditFn = tcJs.slice(tcJs.indexOf('async function _tcSaveEditSeries()'),
-                             tcJs.indexOf('function _tcConfirmRemoveSeries('));
-  check('adding a series persists the plan before the record is re-read',
-    _tcAddFn.indexOf('await _tcSyncLogToBackend();') > -1 &&
-    _tcAddFn.indexOf('await _tcSyncLogToBackend();') < _tcAddFn.indexOf('_tcLoadLogFromStack();'));
-  check('  …and never syncs after the rebuild, which wrote the erased state back',
-    !/if\(future\.length\)_tcSyncLogToBackend\(\);/.test(tcJs));
-  check('editing a series persists before buildTCalc rebuilds manualLog',
-    _tcEditFn.indexOf('await _tcSyncLogToBackend();') > -1 &&
-    _tcEditFn.indexOf('await _tcSyncLogToBackend();') < _tcEditFn.indexOf('buildTCalc();'));
-  check('  …and is async, so the sync is actually awaited',
-    /async function _tcSaveEditSeries\(\)/.test(tcJs));
-  check('  …then re-reads the history rather than trusting the local edit',
-    /await _tcSyncLogToBackend\(\);\n  await _tcFetchHistory\(true\);/.test(tcJs));
+  check('a logged dose is written before the record is re-read',
+    _tcAddFn.indexOf('await _tcFetchHistory(true);') > -1 &&
+    _tcAddFn.indexOf('_tcCreateLoggedInjections') < _tcAddFn.indexOf('await _tcFetchHistory(true);'));
+  check('  …and the series editor that shared the hazard is gone',
+    !/function _tcSaveEditSeries/.test(tcJs));
+
   // The plan sync clears before it re-posts. That delete had no logged filter, so it
   // removed logged records dated today or later and the re-post recreated them as
   // unlogged plans — a record silently downgraded to a schedule.
@@ -1824,10 +1745,11 @@ console.log(`\n${'─'.repeat(59)}`);
   // the draft was erased on the very next render and never survived to be saved —
   // which is why a 10-dose series starting today kept only the one logged dose for
   // today (a record) and lost the nine future ones (a draft).
-  check('a locally planned dose is marked as an unsaved draft',
-    /seriesId:runId,draft:true/.test(tcJs) && /seriesId:sid,draft:true/.test(tcJs));
-  check('  …and the planner is NOT gated on having a protocol first',
-    !/Pick a protocol first/.test(tcJs));
+  // Phase 6: nothing stages a draft, because nothing plans here. The failure this
+  // guarded — a nine-dose future series silently erased on the next render — cannot
+  // occur when the future half is refused rather than staged.
+  check('no dose is staged as an unsaved draft any more',
+    !/draft:true/.test(tcJs));
 
   hist([]);
   G._injectionsCache = {};
@@ -1879,10 +1801,9 @@ console.log(`\n${'─'.repeat(59)}`);
     /seriesId: e\.series_id \|\| undefined/.test(tcJs));
   check('  …as does a planned row rebuilt from the stack',
     /seriesId:e\.series_id\|\|undefined/.test(tcJs));
-  check('one id spans the whole run, so a straddling series is still one card',
+  check('one id spans the whole run, so a logged run is still one card',
     /var runId=dates\.length>1\?Date\.now\(\)\.toString\(36\):undefined;/.test(tcJs) &&
-    /_tcCreateLoggedInjections\(compId,doseMg,past,runId\)/.test(tcJs) &&
-    /seriesId:runId/.test(tcJs));
+    /_tcCreateLoggedInjections\(compId,doseMg,past,runId\)/.test(tcJs));
   check('  …and a single dose gets no series id at all',
     !/var runId=dates\.length>0/.test(tcJs));
 
@@ -2287,8 +2208,11 @@ console.log('\n── T-calc: skipped doses are reported, not absorbed ───
   check('the card never INFERS missed doses from the cadence',
     !/ missed<\/span>/.test(_skSrc) && !/\.missing\s*=/.test(_skSrc),
     'the span-vs-cadence guess is back');
-  check('  …only stored doses that were genuinely not ticked are reported',
-    / not ticked<\/span>/.test(_skSrc) && /_seriesMeta\[sid\]\.unticked/.test(_skSrc));
+  // The series card carried that count and went with the schedule card (Phase 6). The
+  // rule it enforced — never INFER a missed dose from a cadence gap, only report a
+  // stored dose that was genuinely not ticked — is kept above, against the source.
+  check('  …and the series card that carried the count is gone',
+    !/_seriesMeta\[sid\]\.unticked/.test(_skSrc));
 }
 
 
@@ -2303,38 +2227,22 @@ console.log('\n── T-calc: skipped doses are reported, not absorbed ───
 // records. Two unticked doses (10 + 12 Aug) vanished on every save, and because the
 // editor also derived its cadence from entries[1]-entries[0] the surviving 8 Aug -> 14
 // Aug gap re-labelled an EOD run "every 6 days" — which the next save then applied.
-console.log('\n── T-calc: an edited series keeps its past ────────────────');
+console.log('\n── The series editor is gone; its rules moved ─────────────');
 {
   const _esSrc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
-  const _esFn = _esSrc.slice(_esSrc.indexOf('async function _tcSaveEditSeries'),
-                             _esSrc.indexOf('function _tcConfirmRemoveSeries'));
-  check('the past half of an edited series is not pushed as a draft',
-    /if\(ds < _editTodayK\) return;/.test(_esFn),
-    'every dose is still drafted, so the past half is dropped again');
-  check('  …it is written as a PLAN row instead',
-    /_tcCreatePlannedInjections\(compId,doseMg,_toCreate,sid\)/.test(_esFn));
-  check('  …never as a record — re-typing a cadence is not a claim you injected',
-    /logged: false/.test(_esSrc) && !/_tcCreateLoggedInjections/.test(_esFn));
-  check('  …and doses already ticked are left alone',
-    /_loggedOn\[compId\+'\|'\+d\]/.test(_esFn));
-  check('  …while doses the edit removed are retired from the record',
-    /_tcDeleteStoredInjection\(_stale\[_si\]\.injId\)/.test(_esFn));
-
-  // The editor and the card must agree on cadence, or opening the sheet and pressing
-  // SAVE silently rewrites the schedule to the wrong interval.
-  const _esOpen = _esSrc.slice(_esSrc.indexOf('function _tcOpenEditSeriesSheet'),
-                               _esSrc.indexOf('function _tcCloseEditSeriesSheet'));
-  check('the edit sheet pre-fills the MODAL gap, not the first gap',
-    !/interval = Math\.max\(1, Math\.round\(\(d1-d0\)\/86400000\)\)/.test(_esOpen) &&
-    /_eBest/.test(_esOpen));
-
-  // The curve rule is untouched: a past dose that was never ticked is still excluded.
-  check('unticked past doses are carried in the PLAN',
-    /rows\.push\(Object\.assign\(\{\},e,\{unticked:true\}\)\)/.test(_esSrc));
-  check('  …and still excluded from the CURVE',
-    /if \(e\.unticked\) return;/.test(_esSrc));
-  check('  …with the card saying how many are not ticked',
-    / not ticked<\/span>/.test(_esSrc));
+  // What this block guarded: an edited series dropping its past-dated doses (a vial two
+  // doses short), re-typing a cadence being written as a RECORD rather than a plan,
+  // ticked doses being overwritten, and removed doses being left behind in the record.
+  // The editor is gone, so the first three cannot happen; the fourth — never claiming a
+  // dose was injected unless the user says so — is asserted where record entry lives.
+  check('the series editor is gone', !/function _tcSaveEditSeries/.test(_esSrc));
+  check('  …and nothing writes a plan row behind the user',
+    !/function _tcCreatePlannedInjections/.test(_esSrc));
+  // Record entry still exists and still means what it says: logged:true, only for dates
+  // the user picked, never inferred.
+  check('logging a dose you took is still explicit',
+    /async function _tcCreateLoggedInjections/.test(_esSrc) &&
+    /active: true, logged: true, source: 'manual'/.test(_esSrc));
 }
 
 // The exclusion is behavioural, not just textual: an unticked row in the plan must not
@@ -3334,9 +3242,12 @@ console.log('\n── T-Calc: saving a plan writes its injections ────�
   // generator's job, and is asserted against _genInjBatches above and in the
   // "one scheduler" block. What matters here is that the old path stays silent, so the
   // two cannot both write.
-  await G._tcWritePlanToStack(st, {compId:'nebido', doseMg:'250', cadenceN:2, cadenceUnit:'day',
-                                   cadenceDays:2, startDate:_bk(50)});
-  check('T-Calc\'s plan write is disabled — the protocol schedules instead',
+  // Phase 6 deleted _tcWritePlanToStack outright. Phase 5 had only disabled it, and the
+  // check here was that it wrote nothing; the stronger statement is that there is no
+  // such function to call.
+  check('T-Calc\'s plan write is gone, not merely disabled',
+    typeof G._tcWritePlanToStack !== 'function' && typeof G._tcPostPlanInjections !== 'function');
+  check('  …and nothing in T-Calc wrote an injection getting here',
     POSTED.length === 0 && DELETED.length === 0,
     `posted ${POSTED.length}, deleted ${DELETED.length}`);
 
@@ -3434,19 +3345,23 @@ console.log('\n── Cycle header + enhanced testosterone identity ────
 // like the edit had been ignored. _tcConfirmAddSheet had always done this; the edit path
 // never did. Order matters — the cache must be refreshed BEFORE _tcLoadLogFromStack,
 // which reads it to rebuild manualLog.
-console.log('\n── T-Calc: an edit re-reads the cache ─────────────────────');
+console.log('\n── An edit re-reads the cache: the protocol path now ─────');
 {
+  // 2026-08-16: _tcSaveEditSeries synced the record and refetched the history but never
+  // refreshed _injectionsCache, which the curve also draws on — so a Nebido run cut to
+  // 16 Aug still ran to October, looking like the edit had been ignored.
+  //
+  // That editor is gone. The same hazard now belongs to the protocol path: whatever
+  // writes injections must refresh the cache before anything reads it back.
   const _esSrc = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
-  const _i = _esSrc.indexOf('async function _tcSaveEditSeries()');
-  const _body = _esSrc.slice(_i, _i + 6000);
-  check('the edit path exists', _i > 0);
-  check('editing a series refreshes the injection cache, not just the history',
-    /refreshInjectionsCache/.test(_body));
-  check('  …in the order sync → history → cache → rebuild',
-    /_tcSyncLogToBackend\(\)[\s\S]*?_tcFetchHistory\(true\)[\s\S]*?refreshInjectionsCache[\s\S]*?_tcLoadLogFromStack\(\)/.test(_body));
-  // The delete path shares the hazard and already got this right — keep it that way.
-  const _d = _esSrc.indexOf('async function _tcRemoveSeries(');
-  check('  …and deleting a series does the same', /refreshInjectionsCache/.test(_esSrc.slice(_d, _d + 3000)));
+  const _stSrc = require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+  check('the series editor that skipped the refresh is gone',
+    !/function _tcSaveEditSeries/.test(_esSrc));
+  check('saving a protocol refreshes the injection cache after writing',
+    /await generateAndPushInjections\(/.test(_stSrc) &&
+    /refreshInjectionsCache\(\)/.test(_stSrc));
+  check('  …and record entry still re-reads both the history and the cache',
+    /await _tcFetchHistory\(true\);[\s\S]{0,200}refreshInjectionsCache\(\)/.test(_esSrc));
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
@@ -5389,14 +5304,17 @@ console.log('\n── Wizard TRT step ──────────────
     check('  …and the footer still lets the user continue', /wizNext\(\)/.test(f2.innerHTML));
     G._tcAllCompIds=_svIds;
 
-    // The plan seeds from the live T-Calc plan so re-opening shows what is scheduled
+    // Phase 6: the step used to seed from T-Calc's simple plan, because that was where
+    // a schedule lived. That planner is gone, so a stored simplePlan must NOT leak back
+    // into the wizard — the protocol's own compound is the only seed.
     if(typeof G._wizEnsureTrtPlan==='function'){
       var _svTcp=G._tcp;
       G._tcp=Object.assign({},_svTcp||{},{simplePlan:{compId:'cypionate',doseMg:'150',cadenceDays:7,startDate:'2026-07-01'}});
-      G._wiz.trtPlan=null;
+      G._wiz.trtPlan=null; G._wiz.trt={enabled:false,compounds:[]};
       var seeded=G._wizEnsureTrtPlan();
-      check('the step seeds from the existing T-Calc plan',
-        seeded.compId==='cypionate' && String(seeded.doseMg)==='150' && Number(seeded.cadenceDays)===7);
+      check('a retired T-Calc plan no longer seeds the wizard step',
+        !seeded.compId && !seeded.doseMg,
+        JSON.stringify(seeded));
 
       // …and from a classic TRT compound when there is no T-Calc plan yet
       G._tcp=Object.assign({},_svTcp||{},{simplePlan:{}});
@@ -5435,222 +5353,40 @@ console.log('\n── Wizard TRT step ──────────────
 // below it, greyed out unless its switch is on. Exactly one drives the curve.
 console.log('\n── T-Calc simple planner ──────────────────────────────────');
 {
-  if(typeof G._tcPlannerMode==='function' && typeof G._tcSimplePlanInjections==='function'){
-    var _svTcp = G._tcp;
-    var _mk = function(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
-    var _today = _mk(new Date());
-    var _set = function(o){ G._tcp = Object.assign({manualLog:[], simplePlan:{}, plannerMode:''}, o); };
+  // ── The planner modes are gone (Phase 6) ──────────────────────────────────
+  // This block tested the simple/advanced switch: which of the two planners drove the
+  // curve, and that the greyed-out one did not contribute. Phase 6 deleted both, so the
+  // question no longer exists — and what replaced it is stricter, because there is now
+  // exactly one source of future doses rather than a rule about which of three wins.
+  check('the planner modes are gone, not merely disabled',
+    typeof G._tcPlannerMode !== 'function' && typeof G._tcSimplePlanInjections !== 'function');
 
-    // Mode derivation must never change what an existing user already had
-    _set({manualLog:[{compId:'enanthate',doseMg:'125',date:'2026-07-01'}]});
-    check('a profile with a manual log defaults to ADVANCED (nothing changes for them)',
-      G._tcPlannerMode() === 'advanced');
-    _set({manualLog:[]});
-    check('a fresh profile defaults to SIMPLE', G._tcPlannerMode() === 'simple');
-    _set({manualLog:[{compId:'x',doseMg:'1',date:'2026-07-01'}], plannerMode:'simple'});
-    check('an explicit choice overrides the derivation', G._tcPlannerMode() === 'simple');
-
-    // Generation: 4 inputs → a schedule
-    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:3.5,startDate:_today}});
-    var inj = G._tcSimplePlanInjections();
-    check('a complete plan generates injections', inj.length > 0);
-    check('  …every one carries the chosen ester and dose',
-      inj.every(function(e){ return e.compId==='enanthate' && parseFloat(e.doseMg)===125 && e.source==='simple'; }));
-    check('  …the first is on the chosen start date', inj[0].date === _today);
-    check('  …spaced by the chosen cadence', (function(){
-      var d0=new Date(inj[0].date), d1=new Date(inj[1].date);
-      return Math.round((d1-d0)/86400000) === 4 || Math.round((d1-d0)/86400000) === 3; // 3.5 d
-    })());
-    check('  …bounded, so a daily cadence cannot run away', inj.length <= 800);
-
-    // Incomplete plans produce nothing rather than a half-curve
-    [['compId',''],['doseMg',''],['cadenceDays',0],['startDate','']].forEach(function(f){
-      var plan = {compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today};
-      plan[f[0]] = f[1];
-      _set({plannerMode:'simple', simplePlan:plan});
-      check('an incomplete plan (no '+f[0]+') generates nothing', G._tcSimplePlanInjections().length === 0);
-    });
-    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'-5',cadenceDays:7,startDate:_today}});
-    check('a negative dose generates nothing', G._tcSimplePlanInjections().length === 0);
-
-    // Which planner drives the curve
-    if(typeof G._tcCurveLog==='function'){
-      var _svCache = G._injectionsCache; G._injectionsCache = {};
-      _set({plannerMode:'simple',
-            simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today},
-            manualLog:[{compId:'cypionate',doseMg:'200',date:'2026-01-01'}]});
-      var curve = G._tcCurveLog();
-      check('in SIMPLE mode the curve comes from the plan',
-        curve.length > 0 && curve.every(function(e){ return e.source === 'simple'; }));
-      check('  …and the greyed-out manual log does NOT contribute',
-        !curve.some(function(e){ return e.compId === 'cypionate'; }));
-
-      _set({plannerMode:'advanced',
-            simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today},
-            manualLog:[{compId:'cypionate',doseMg:'200',date:'2026-01-01'}]});
-      var curve2 = G._tcCurveLog();
-      check('in ADVANCED mode the curve comes from the manual log',
-        curve2.length === 1 && curve2[0].compId === 'cypionate');
-      check('  …and the greyed-out simple plan does NOT contribute',
-        !curve2.some(function(e){ return e.source === 'simple'; }));
-
-      // Switching modes must not destroy either side's data
-      _set({plannerMode:'advanced',
-            simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:7,startDate:_today},
-            manualLog:[{compId:'cypionate',doseMg:'200',date:'2026-01-01'}]});
-      G._tcCurveLog();
-      check('switching planners keeps BOTH sets of data intact',
-        G._tcp.simplePlan.compId === 'enanthate' && G._tcp.manualLog.length === 1);
-      G._injectionsCache = _svCache;
-    }
-
-    // ── The plan owns the curve from its start date ────────────────────────────
-    // Reported 2026-08-01: "changing testo dose in the planner doesn't update the
-    // rendered curve". _tcCurveLog merged the plan with the stack's own TRT protocol
-    // and de-duplicated only on an exact (compound, date) hit — so a plan for a
-    // different ester, or on a different cadence, collided with nothing and was ADDED
-    // on top of the protocol. The curve was dominated by the protocol underneath and
-    // barely moved when the plan's dose changed.
-    if(typeof G._tcCurveLog==='function'){
-      var _svCache2 = G._injectionsCache, _svHist2 = G._tcHistory, _svHState2 = G._tcHistoryState;
-      var _mkInj = function(date,mg,comp){ return {tier:'trt',active:true,cycle_id:'stack_x',
-        unit:'mg',dose:String(mg),compound_id:comp||'cypionate',date:date}; };
-      // Rewritten 2026-08-07. The past is CHECKED injections and nothing else, so the
-      // pre-plan dosing that used to sit in _injectionsCache as unticked past-dated
-      // rows now lives in the logged history. Unticked rows are the plan, and a plan
-      // is always in the future.
-      G._tcHistory = [{compId:'cypionate',doseMg:'250',date:'2026-07-20',source:'logged'},
-                      {compId:'cypionate',doseMg:'250',date:'2026-07-27',source:'logged'}];
-      G._tcHistoryState = 'ready';
-      G._injectionsCache = {'2026-09-03':[_mkInj('2026-09-03',250)],
-                            '2026-09-10':[_mkInj('2026-09-10',250)]};
-      _set({plannerMode:'simple',
-            simplePlan:{compId:'enanthate',doseMg:'10',cadenceN:2,cadenceUnit:'day',cadenceDays:2,startDate:'2026-08-01'}});
-      var _cl = G._tcCurveLog();
-      var _hist = _cl.filter(function(e){ return e.source==='logged'; });
-      check('checked injections before the plan starts are kept as history',
-        _hist.length===2 && _hist.every(function(e){ return e.date < '2026-08-01'; }),
-        JSON.stringify(_hist.map(function(e){return e.date;})));
-      check('  …and protocol dosing from the plan start on is dropped, not added on top',
-        !_cl.some(function(e){ return e.source==='protocol' && e.date>='2026-08-01'; }),
-        JSON.stringify(_cl.filter(function(e){return e.source==='protocol';}).map(function(e){return e.date;})));
-      check('  …so the plan is what drives the curve forward',
-        _cl.filter(function(e){ return e.source==='simple' && e.date>='2026-08-01'; }).length>0);
-
-      // The actual complaint: changing the dose must change the curve's total
-      var _totalAt = function(mg){
-        _set({plannerMode:'simple',
-              simplePlan:{compId:'enanthate',doseMg:String(mg),cadenceN:2,cadenceUnit:'day',cadenceDays:2,startDate:'2026-08-01'}});
-        return G._tcCurveLog().filter(function(e){ return e.date>='2026-08-01'; })
-                              .reduce(function(a,e){ return a+parseFloat(e.doseMg); },0);
-      };
-      var _t10=_totalAt(10), _t20=_totalAt(20);
-      check('doubling the plan dose doubles the dose the curve sees',
-        _t20>0 && Math.abs(_t20-2*_t10)<1e-6, _t10+' -> '+_t20);
-
-      // An unfinished plan must not silently delete the protocol curve
-      _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'',cadenceN:0,cadenceUnit:'week',cadenceDays:0,startDate:''}});
-      check('an unfinished plan leaves the protocol curve intact',
-        G._tcCurveLog().filter(function(e){ return e.source==='protocol'; }).length===2);
-      check('  …and never drops the checked history, whatever the planner is doing',
-        G._tcCurveLog().filter(function(e){ return e.source==='logged'; }).length===2);
-
-      // In advanced mode the plan is greyed out and owns nothing
-      _set({plannerMode:'advanced', manualLog:[],
-            simplePlan:{compId:'enanthate',doseMg:'10',cadenceN:2,cadenceUnit:'day',cadenceDays:2,startDate:'2026-08-01'}});
-      check('in ADVANCED mode the greyed-out plan does not claim any days',
-        G._tcCurveLog().filter(function(e){ return e.source==='protocol'; }).length===2);
-
-      G._injectionsCache = _svCache2; G._tcHistory = _svHist2; G._tcHistoryState = _svHState2;
-    }
-
-  // ── Cadence: a number plus a unit, not a preset list ────────────────────────
-  // Reported 2026-08-01: "can't choose every 2nd day or third etc". The dropdown
-  // offered a fixed set (Daily, EOD, 3x/week, weekly, every 2/3/6/8/10/12 weeks), so
-  // every 3 days, every 5 weeks and so on were unreachable. Cadence is now "every
-  // N unit" with N in 1..20 and unit in day/week/month.
-  if(typeof G._tcCadenceToDays==='function'){
-    check('a month is a fixed 30-day step, not a calendar month',
-      G._TC_CADENCE_UNITS.day===1 && G._TC_CADENCE_UNITS.week===7 && G._TC_CADENCE_UNITS.month===30,
-      JSON.stringify(G._TC_CADENCE_UNITS));
-    check('every 3 days is 3 days', G._tcCadenceToDays(3,'day')===3);
-    check('every 2 weeks is 14 days', G._tcCadenceToDays(2,'week')===14);
-    check('every 3 months is 90 days', G._tcCadenceToDays(3,'month')===90);
-    check('a string from a <select> is accepted', G._tcCadenceToDays('5','week')===35);
-    check('no number yields no interval', G._tcCadenceToDays(0,'week')===0);
-    check('an unknown unit yields no interval', G._tcCadenceToDays(2,'fortnight')===0);
-
-    // Reading a saved day count back into the two fields
-    check('14 days reads back as every 2 weeks',
-      JSON.stringify(G._tcCadenceFromDays(14))==='{"n":2,"unit":"week"}', JSON.stringify(G._tcCadenceFromDays(14)));
-    check('90 days reads back as every 3 months',
-      JSON.stringify(G._tcCadenceFromDays(90))==='{"n":3,"unit":"month"}', JSON.stringify(G._tcCadenceFromDays(90)));
-    check('3 days reads back as every 3 days',
-      JSON.stringify(G._tcCadenceFromDays(3))==='{"n":3,"unit":"day"}', JSON.stringify(G._tcCadenceFromDays(3)));
-    check('7 days prefers weeks over days',
-      JSON.stringify(G._tcCadenceFromDays(7))==='{"n":1,"unit":"week"}', JSON.stringify(G._tcCadenceFromDays(7)));
-    check('an interval too long for 20 of any unit still reads as days',
-      G._tcCadenceFromDays(999).unit==='day');
-    check('no interval reads back as blank', G._tcCadenceFromDays(0).n===0);
-    check('the unit label pluralises with the number',
-      G._tcCadenceUnitLabel('day',1)==='day' && G._tcCadenceUnitLabel('day',3)==='days' &&
-      G._tcCadenceUnitLabel('week',2)==='weeks');
-
-    // Setting either field recomputes the one stored interval
-    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'125',cadenceN:0,cadenceUnit:'week',cadenceDays:0,startDate:_today}});
-    G._tcSetSimplePlanCadence('cadenceN','3');
-    check('picking a number recomputes the interval', G._tcp.simplePlan.cadenceDays===21,
-      String(G._tcp.simplePlan.cadenceDays));
-    G._tcSetSimplePlanCadence('cadenceUnit','day');
-    check('switching the unit recomputes it again, keeping the number',
-      G._tcp.simplePlan.cadenceDays===3 && G._tcp.simplePlan.cadenceN===3,
-      G._tcp.simplePlan.cadenceN+' x '+G._tcp.simplePlan.cadenceUnit+' = '+G._tcp.simplePlan.cadenceDays);
-    G._tcSetSimplePlanCadence('cadenceN','99');
-    check('a number beyond the maximum is clamped, never stored raw',
-      G._tcp.simplePlan.cadenceN===G._TC_CADENCE_MAX_N, String(G._tcp.simplePlan.cadenceN));
-    G._tcSetSimplePlanCadence('cadenceUnit','bogus');
-    check('an unrecognised unit falls back to weeks rather than zeroing the plan',
-      G._tcp.simplePlan.cadenceUnit==='week' && G._tcp.simplePlan.cadenceDays>0);
-
-    // Every-3-days actually generates a 3-day schedule — the reported gap
-    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'50',cadenceN:3,cadenceUnit:'day',cadenceDays:3,startDate:_today}});
-    var _inj3 = G._tcSimplePlanInjections();
-    check('every 3 days generates injections 3 days apart', _inj3.length>2 &&
-      Math.round((new Date(_inj3[1].date)-new Date(_inj3[0].date))/86400000)===3,
-      _inj3.length?_inj3.slice(0,3).map(function(e){return e.date;}).join(' '):'none');
-
-    // A plan saved before this control keeps its exact interval until it is edited
-    _set({plannerMode:'simple', simplePlan:{compId:'enanthate',doseMg:'125',cadenceDays:3.5,startDate:_today}});
-    check('a legacy fractional cadence is preserved, not rounded away',
-      G._tcSimplePlan().cadenceDays===3.5, String(G._tcSimplePlan().cadenceDays));
-    check('  …and is still shown in the two fields as best it can be',
-      G._tcSimplePlan().cadenceN>0 && !!G._tcSimplePlan().cadenceUnit);
-    check('  …and still generates its 3.5-day schedule',
-      G._tcSimplePlanInjections().length>0);
-    G._tcSetSimplePlanCadence('cadenceN','4');
-    check('  …until the user picks a number, which replaces it',
-      G._tcp.simplePlan.cadenceDays===4, String(G._tcp.simplePlan.cadenceDays));
-  } else {
-    check('_tcCadenceToDays available', false);
-  }
-
-    G._tcp = _svTcp;
-  }else{
-    check('_tcPlannerMode / _tcSimplePlanInjections available', false);
-  }
-
-  // The advanced planner is kept and dimmed, never deleted
+  // ── The planner is GONE (Phase 6, 2026-08-20) ─────────────────────────────
+  // Henrik: "If I only can add injections in the protocol builder why is the injection
+  // scheduler still in t-calc?" Phase 5 disabled these write paths but left the UI
+  // standing, so the buttons were still there and only said "moved to Plan ▸ Compounds"
+  // once pressed. These checks used to assert the planner was kept and dimmed; they now
+  // assert it is not there at all.
   var _tcSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
-  check('the advanced manual log UI is still present', /INJECTION SCHEDULE/.test(_tcSrc));
-  check('the advanced section is dimmed rather than hidden when off',
-    /_advLive \? '' : 'opacity:0\.4;pointer-events:none/.test(_tcSrc));
-  check('the simple planner dims the same way when advanced is on',
-    /var dim  = live \? '' : 'opacity:0\.4;pointer-events:none/.test(_tcSrc));
-  check('the planner choice is persisted to the backend profile',
-    /_tcp\.plannerMode = mode;\s*\n\s*_tcSaveProfile\(\)/.test(_tcSrc));
-  check('every simple-plan field change is persisted', /_tcp\.simplePlan\[field\] = value;\s*\n\s*_tcSaveProfile\(\)/.test(_tcSrc));
-  check('the simple planner never writes into the manual log',
-    !/_tcSimplePlanInjections[\s\S]{0,600}manualLog\.push/.test(_tcSrc));
+  check('the injection schedule card is gone', !/INJECTION SCHEDULE/.test(_tcSrc));
+  check('  …along with the simple planner and its switch',
+    !/function _tcSimplePlannerHtml/.test(_tcSrc) && !/function _tcPlannerSwitchHtml/.test(_tcSrc));
+  check('  …and the protocol picker and push-to-schedule',
+    !/function _tcStackPickerHtml/.test(_tcSrc) && !/function _tcPushLogToSchedule/.test(_tcSrc));
+  check('  …and the plan write paths behind them',
+    !/function _tcWritePlanToStack/.test(_tcSrc) && !/function _tcSavePlanToStack/.test(_tcSrc) &&
+    !/function _tcPostPlanInjections/.test(_tcSrc));
+  check('T-Calc points at Plan ▸ Compounds instead', /Plan ▸ Compounds/.test(_tcSrc));
+  // Record entry is not planning: logging a dose already taken is how a mid-cycle user
+  // gets their history in, and it has no other home yet (§8 of the rewrite plan).
+  check('  …while logging a dose already taken survives',
+    /function _tcOpenLogPastDose/.test(_tcSrc) && /LOG A DOSE TAKEN/.test(_tcSrc));
+  check('  …with the date capped at today, so it cannot plan through the back door',
+    /max="'\+_esc\(dateKey\(NOW\)\)\+'"/.test(_tcSrc));
+  // The curve reads stored rows only now — no planner can drive it invisibly.
+  check('the curve takes its future from the protocol alone',
+    /_add\(_tcProtocolInjections\(\)\);/.test(_tcSrc) &&
+    !/function _tcSimplePlanInjections/.test(_tcSrc));
 
   // Regression (2026-07-30): the ester dropdown rendered with only its placeholder.
   // _tcAllCompIds() was referenced by three call sites but never actually defined —
@@ -5814,29 +5550,41 @@ console.log('\n── T-Calc ← planned TRT protocol ────────�
       return e.compId==='enanthate' && parseFloat(e.doseMg)===125 && e.date==='2026-09-01' && e.source==='protocol';
     })());
 
-    // Manual wins where both describe the same compound on the same day
-    _setup({'2026-09-01':[P({compound_id:'enanthate',date:'2026-09-01',dose:'125'})]},
-           [{compId:'enanthate',doseMg:'150',date:'2026-09-01'}]);
+    // THE RECORD WINS OVER THE PLAN, on the same compound and day. Phase 6 removed the
+    // planner, so the record is the logged history rather than manualLog — the rule
+    // itself is unchanged and is what stops a dose being counted twice.
+    _setup({'2026-09-01':[P({compound_id:'enanthate',date:'2026-09-01',dose:'125'})]}, []);
+    G._tcHistory = [{compId:'enanthate', doseMg:'150', date:'2026-09-01', source:'manual'}];
+    G._tcHistoryState = 'ready';
     var merged = G._tcCurveLog();
-    check('same compound + day is NOT double-counted', merged.length === 1);
-    check('the manually logged dose wins over the plan',
-      parseFloat(merged[0].doseMg) === 150 && merged[0].source === 'manual');
+    check('same compound + day is NOT double-counted', merged.length === 1,
+      JSON.stringify(merged.map(function(e){return e.compId+'@'+e.date+'='+e.doseMg;})));
+    check('the logged dose wins over the planned one',
+      parseFloat(merged[0].doseMg) === 150 && merged[0].source !== 'protocol',
+      merged[0].doseMg + ' / ' + merged[0].source);
 
     // Different day → both kept
-    _setup({'2026-09-08':[P({compound_id:'enanthate',date:'2026-09-08',dose:'125'})]},
-           [{compId:'enanthate',doseMg:'150',date:'2026-09-01'}]);
-    check('a plan on a different day is added alongside the log', G._tcCurveLog().length === 2);
+    _setup({'2026-09-08':[P({compound_id:'enanthate',date:'2026-09-08',dose:'125'})]}, []);
+    G._tcHistory = [{compId:'enanthate', doseMg:'150', date:'2026-09-01', source:'manual'}];
+    G._tcHistoryState = 'ready';
+    check('a planned dose on another day is kept alongside the record',
+      G._tcCurveLog().length === 2);
     check('the merged log is sorted by date', (function(){
-      var l=G._tcCurveLog(); return l[0].date <= l[1].date;
+      var l=G._tcCurveLog(); return l.length === 2 && l[0].date <= l[1].date;
     })());
+    G._tcHistory = []; G._tcHistoryState = 'ready';
 
     // THE DOUBLE-COUNT TRAP: T-Calc pushes its own log into /injections under
     // cycle_id 'tcalc' / 'tcalc:<stackId>'. Reading those back would count every
     // T-Calc injection twice.
     _setup({'2026-09-01':[P({compound_id:'enanthate',date:'2026-09-01',dose:'125',cycle_id:'tcalc'})]},
            [{compId:'enanthate',doseMg:'125',date:'2026-09-01'}]);
+    // Rows T-Calc pushed under its old 'tcalc' namespace stay excluded. The curve used
+    // to still show the dose because manualLog supplied it; with the planner gone, an
+    // excluded row simply is not on the curve — which is the stronger statement.
     check('T-Calc\'s own pushed entries are not read back (no self-double-count)',
-      G._tcCurveLog().length === 1 && G._tcProtocolInjections().length === 0);
+      G._tcProtocolInjections().length === 0 && G._tcCurveLog().length === 0,
+      'curve ' + G._tcCurveLog().length + ', protocol ' + G._tcProtocolInjections().length);
     _setup({'2026-09-02':[P({compound_id:'enanthate',date:'2026-09-02',dose:'125',cycle_id:'tcalc:stack9'})]}, []);
     check('the tcalc:<stackId> namespace is excluded too', G._tcProtocolInjections().length === 0);
 
@@ -7098,53 +6846,38 @@ console.log('\n── T-calc: the live planner drives the curve ──');
 //
 // NOTE: CI runs in UTC, where no DST transition occurs, so a purely functional test cannot
 // reproduce it here. The source guard below is what actually protects this.
-console.log('\n── T-calc: DST-proof schedule generation ──');
+console.log('\n── DST-proof schedule generation ──');
 {
-  var _dsSrc = require('fs').readFileSync(require('path').join(dir,'tab-tcalc.js'),'utf8');
-  // Slice to the END of the function, not a fixed character count — a 2200-char
-  // window silently clipped the guard the moment the function gained a comment,
-  // failing a test whose subject had not changed (2026-08-07).
-  var _dsAt  = _dsSrc.indexOf('function _tcSimplePlanInjections');
-  var _dsFn  = _dsSrc.slice(_dsAt, _dsSrc.indexOf('\nfunction ', _dsAt + 1));
-  check('schedule steps in calendar days (DST-proof)',
-    /start\.getDate\(\)\s*\+\s*Math\.round\(i \* cadence\)/.test(_dsFn),
-    'calendar-day stepping is gone');
-  check('schedule does NOT step in milliseconds from the start instant',
-    !/start\.getTime\(\)\s*\+\s*i\s*\*\s*stepMs/.test(_dsFn),
+  // The hazard did not go away with T-Calc's planner — it MOVED. _genInjBatches is now
+  // the only thing that expands a schedule into dates, and it stepped by 86400000 ms.
+  // A DST day is 23 or 25 hours, so crossing one the loop variable creeps to 23:00 the
+  // previous day and a date is emitted twice or skipped: a duplicated or missing
+  // injection, from a clock change.
+  //
+  // CI runs in UTC, where no transition occurs, so a purely functional test cannot
+  // reproduce it here — the source guard is what protects it, as it was for the planner.
+  var _dsSrc = require('fs').readFileSync(require('path').join(dir,'tab-stack.js'),'utf8');
+  check('the generator steps in calendar days', /function _nextDay\(d\)\{[\s\S]{0,120}setDate\(n\.getDate\(\)\+1\)/.test(_dsSrc));
+  check('  …and never in milliseconds from the start instant',
+    !/d=new Date\(d\.getTime\(\)\+86400000\)/.test(_dsSrc),
     'ms stepping is back — this is the DST bug');
-  if (typeof G._tcSimplePlanInjections === 'function') {
-    var _dsSave = G._tcp;
-    function _dsGaps(cadence){
-      G._tcp = Object.assign({}, G._tcp, { manualLog: [], plannerMode: 'simple',
-        simplePlan: {compId:'testoviron', doseMg:'100', cadenceN:0, cadenceUnit:'days',
-                     cadenceDays:cadence, startDate:'2026-08-02'} });
-      var inj = G._tcSimplePlanInjections(), seen = {};
-      for (var i = 1; i < inj.length; i++){
-        var g = Math.round((new Date(inj[i].date+'T12:00:00') - new Date(inj[i-1].date+'T12:00:00'))/86400000);
-        seen[g] = 1;
-      }
-      return { n: inj.length, gaps: Object.keys(seen).map(Number).sort(function(a,b){return a-b;}) };
+
+  // Behavioural, in whatever zone CI runs: a daily compound across a month yields one
+  // dose per calendar day, none repeated and none missing.
+  var _dsStack = {id:'dst', cycle_start:'2026-03-01', cycle_length:8,
+    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
+         freqVal:1, freqUnit:'days'}]}};
+  var _dsDates = G._genInjBatches(_dsStack, 'dst', null)
+                  .reduce(function(a,b){ return a.concat((b.entries||[]).map(function(e){return e.date;})); }, []);
+  check('  …one dose per day, with no date repeated',
+    _dsDates.length === new Set(_dsDates).size, 'dupes in ' + _dsDates.length + ' dates');
+  check('  …and no calendar day skipped across the whole cycle', (function(){
+    for (var i = 1; i < _dsDates.length; i++){
+      var gap = Math.round((new Date(_dsDates[i]+'T12:00:00') - new Date(_dsDates[i-1]+'T12:00:00'))/86400000);
+      if (gap !== 1) return false;
     }
-    var _ds5 = _dsGaps(5);
-    check('every-5-days yields only 5-day gaps', _ds5.n > 50 && _ds5.gaps.length === 1 && _ds5.gaps[0] === 5,
-      'gaps ' + _ds5.gaps.join(','));
-    var _ds2 = _dsGaps(2);
-    check('EOD never puts two doses on consecutive days', _ds2.gaps.indexOf(1) < 0,
-      'gaps ' + _ds2.gaps.join(','));
-    // Fractional cadence must stay fractional on AVERAGE without drifting.
-    var _ds3 = _dsGaps(7/3);
-    check('3x/week alternates 2 and 3 day gaps only',
-      _ds3.gaps.length <= 2 && _ds3.gaps.every(function(g){ return g === 2 || g === 3; }),
-      'gaps ' + _ds3.gaps.join(','));
-    G._tcp = Object.assign({}, G._tcp, { simplePlan: {compId:'testoviron', doseMg:'100',
-      cadenceN:0, cadenceUnit:'days', cadenceDays:7/3, startDate:'2026-08-02'} });
-    var _dsI = G._tcSimplePlanInjections();
-    var _dsSpan = (new Date(_dsI[_dsI.length-1].date+'T12:00:00') - new Date(_dsI[0].date+'T12:00:00'))/86400000;
-    check('3x/week does not drift over a year',
-      Math.abs(_dsSpan/(_dsI.length-1) - 7/3) < 0.02,
-      'mean interval ' + (_dsSpan/(_dsI.length-1)).toFixed(4));
-    G._tcp = _dsSave;
-  }
+    return _dsDates.length > 40;
+  })(), _dsDates.length + ' dates from ' + _dsDates[0] + ' to ' + _dsDates[_dsDates.length-1]);
 }
 
 // ── A DATED draw calibrates even with no free T ──
@@ -9355,7 +9088,8 @@ if (typeof G._tcTargetCycleId === 'function') {
 {
   const tc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
   check('T-Calc sync writes the target cycle id', tc.includes('var _cid=_tcTargetCycleId();') && tc.includes('cycle_id:_cid'));
-  check('T-Calc copy-to-stack picker present',    tc.includes('_tcStackPickerHtml()') && tc.includes('onchange="_tcSetTargetStack(this.value)"'));
+  // The copy-to-stack picker was part of the schedule card and went with it (Phase 6).
+  check('the copy-to-stack picker is gone', !tc.includes('_tcStackPickerHtml'));
   const idx = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
   check('badge detects testo from stack injections', idx.includes('_stackHasScheduledTrt(st.id)'));
 }
@@ -11055,103 +10789,26 @@ console.log('\n── injection deletes: scoped, and never a record ────
   // Structural backstop across all three files. A plan-clear that forgets
   // unlogged_only downgrades a record to a schedule; one that forgets compound_id
   // reaches a protocol's peptides and HGH. This holds for deletes added later.
-  // ── The save sheet: one dropdown, one button, no create-a-protocol ─────────
-  // "this is a fucked up dialog. remove the create new protocol choices, only
-  // input is a drop down with existing protocols, active protocol prechosen, and
-  // a big colored Save button." The New protocol buttons made an EMPTY protocol
-  // the active one — a destructive option inside a dialog whose job is "file
-  // these doses somewhere".
-  {
-    const _shSave = { us: G._userStacks, tp: G._tcp, ia: G._isActiveStack, doc: G.document };
-    let built = '';
-    G.document = Object.assign({}, G.document, {
-      createElement: () => ({ style:{cssText:''}, set innerHTML(v){ built = v; }, get innerHTML(){ return built; } }),
-      body: { appendChild(){}, removeChild(){} },
-      getElementById: () => null
-    });
-    G._userStacks = [{id:'my_stack_nostart',name:'My Stack'},{id:'protocol_2_nostart',name:'Protocol 2'}];
-    G._isActiveStack = (i) => i === 1;                 // Protocol 2 is active
-    G._tcp = { manualLog: [] };                        // nothing bound yet
-    if (typeof G._tcOpenSaveToStack === 'function') { try { G._tcOpenSaveToStack(); } catch(e) { built = 'THREW: '+e.message; } }
-    check('the save sheet offers a dropdown', /<select id="tc-save-stack-sel"/.test(built), built.slice(0,160));
-    check('  …with the ACTIVE protocol preselected',
-      /<option value="protocol_2_nostart" selected>/.test(built),
-      (built.match(/<option[^>]*>/g)||[]).join(' '));
-    check('  …listing every protocol', /My Stack/.test(built) && /Protocol 2/.test(built));
-    check('  …and one Save button', />Save<\/button>/.test(built));
-    check('  …with NO create-a-protocol buttons',
-      !/_tcCreateStackForTesto/.test(built) && !/New protocol/.test(built), built.slice(0,200));
 
-    // A bound protocol wins over the active one — that is the current destination.
-    G._tcp = { manualLog: [], targetStackId:'my_stack_nostart' };
-    built=''; try { G._tcOpenSaveToStack(); } catch(e) {}
-    check('  …a bound protocol is preselected over the active one',
-      /<option value="my_stack_nostart" selected>/.test(built));
-
-    // No protocols at all: point at Plan rather than offering to create an empty one.
-    G._userStacks = []; G._tcp = { manualLog: [] };
-    built=''; try { G._tcOpenSaveToStack(); } catch(e) {}
-    check('  …with no protocols it points at Plan, not a create button',
-      /Build one in <b>Plan<\/b>/.test(built) && !/_tcCreateStackForTesto/.test(built));
-
-    G._userStacks=_shSave.us; G._tcp=_shSave.tp; G._isActiveStack=_shSave.ia; G.document=_shSave.doc;
-  }
-
-  // ── Save no longer writes: scheduling moved to Plan ▸ Compounds ────────────
-  // These checks used to guard the in-flight UI of T-Calc's "save to protocol" — the
-  // spinner and the disabled Cancel that stopped the sheet closing before the write
-  // landed. Phase 5 disabled every T-Calc write path, because a second scheduler
-  // beside the protocol generator is the duplication this rewrite exists to end. The
-  // flow is deleted in Phase 6; until then it must REFUSE clearly rather than write.
-  {
-    const _svSave = { alert: G.alert, sts: G._tcSetTargetStack };
-    let _said = '';
-    G.alert = (m) => { _said = m; };
-    let _wrote = false;
-    G._tcSetTargetStack = async () => { _wrote = true; };
-
-    // Re-arm before each call: this block runs after the synchronous suite and other
-    // in-flight tests share the stubbed alert.
-    const _armAlert = () => { _said = ''; G.alert = (m) => { _said = m; }; };
-
-    (async () => {
-      _armAlert();
-      await G._tcSaveToExistingStack('protocol_2_nostart');
-      check('T-Calc "save to protocol" no longer writes', _wrote === false);
-      check('  …and says where scheduling lives now', /Plan ▸ Compounds/.test(_said), _said.slice(0,80));
-
-      _armAlert();
-      await G._tcPushLogToSchedule();
-      check('"push to schedule" is refused too', /Plan ▸ Compounds/.test(_said), _said.slice(0,80));
-
-      // Capture every message: the migration block shares the stubbed alert here.
-      const _msgs = [];
-      G.alert = (m) => { _msgs.push(String(m)); };
-      await G._tcSaveEditSeries();
-      check('  …and so is editing a series',
-        _msgs.some(m => /Plan ▸ Compounds/.test(m)), _msgs.join(' || ').slice(0,120));
-
-      G.alert = _svSave.alert; G._tcSetTargetStack = _svSave.sts;
-    })();
-  }
-
-  // Ordering: the close must come AFTER both awaits, and a failure must not close.
-  {
-    const _tcSrc3 = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
-    const a = _tcSrc3.indexOf('async function _tcSaveToExistingStack');
-    const b = _tcSrc3.indexOf('function _tcSaveSheetBusy');
-    // Both markers must exist, or the slice degenerates and the ordering check below
-    // passes on a source that has neither — a vacuous green.
-    check('the busy-state helper exists to slice against', a >= 0 && b > a);
-    const fn = (a >= 0 && b > a) ? _tcSrc3.slice(a, b) : '';
-    check('the sheet closes only after the write and the refresh',
-      fn.indexOf('await _tcSetTargetStack') >= 0 &&
-      fn.indexOf('await _tcAfterSavedToStack') >= 0 &&
-      fn.indexOf('await _tcSetTargetStack') < fn.lastIndexOf('_tcCloseSaveToStack') &&
-      fn.indexOf('await _tcAfterSavedToStack') < fn.lastIndexOf('_tcCloseSaveToStack'));
-    check('  …and a failed save keeps it open instead of closing silently',
-      /_tcSaveSheetError\(/.test(fn) && /catch\(e\)\{/.test(fn));
-  }
+// ── The save-to-protocol sheet is gone (Phase 6) ────────────────────────────
+// It filed a planner's doses into a protocol: a dropdown of protocols, the active one
+// preselected, one Save button, and — until 2026-08-14 — a "New protocol" option that
+// created an empty stack, made it active and moved a protocol's injections to it with
+// nothing on screen saying so.
+//
+// With the planner gone there are no doses to file: the protocol generates its own.
+// The whole sheet and its after-save refresh went with it.
+{
+  const _ssSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
+  check('the save-to-protocol sheet is gone',
+    !/tc-save-stack-sel/.test(_ssSrc) && !/function _tcOpenSaveToStack/.test(_ssSrc));
+  check('  …with its after-save refresh',
+    !/function _tcAfterSavedToStack/.test(_ssSrc) && !/function _tcSaveSheetBusy/.test(_ssSrc));
+  // The protocol creator that dialog once carried must not survive it: creating an
+  // empty protocol and activating it is not something T-Calc does at all now.
+  check('  …and the protocol creator it used to offer',
+    !/function _tcCreateStackForTesto/.test(_ssSrc));
+}
 
   // ── The forward plan must not be counted twice after saving ────────────────
   // 2026-08-15, before/after in the same build: after saving 7 doses the curve read
@@ -11161,9 +10818,14 @@ console.log('\n── injection deletes: scoped, and never a record ────
   // as the stored protocol rows they had just become.
   {
     const _dupSave = { tp: G._tcp, ic: G._injectionsCache, h: G._tcHistory, hs: G._tcHistoryState };
-    const days = ['2026-08-16','2026-08-18','2026-08-20'];
+    // Relative to today: these were fixed dates when written on 2026-08-15 and have
+    // since aged into the past, where the curve legitimately drops them. The point of
+    // the check is the double count, not the calendar.
+    const _dk = function(off){ var t = new Date(); t.setDate(t.getDate()+off);
+      return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+    const days = [_dk(2), _dk(4), _dk(6)];
     // Post-save state: the same doses in BOTH places, as the app had them.
-    G._tcHistory = [{compId:'nebido', doseMg:'100', date:'2026-08-06'}];
+    G._tcHistory = [{compId:'nebido', doseMg:'100', date:_dk(-14)}];
     G._tcHistoryState = 'ready';
     G._injectionsCache = {};
     days.forEach(function(d){
@@ -11175,7 +10837,7 @@ console.log('\n── injection deletes: scoped, and never a record ────
 
     if (typeof G._tcCurveLog === 'function') {
       const log = G._tcCurveLog();
-      const fut = log.filter(function(e){ return e.date >= '2026-08-16'; });
+      const fut = log.filter(function(e){ return e.date >= days[0]; });
       check('a saved dose is not counted twice on the curve',
         fut.length === days.length,
         'got ' + fut.length + ' forward doses from ' + days.length + ' injections: ' +
@@ -11185,22 +10847,25 @@ console.log('\n── injection deletes: scoped, and never a record ────
       // stored the RAW compound_id while history and protocol rows store the
       // canonical one, so test_u and nebido were two keys for one injection.
       G._tcp = { targetStackId:'protocol_2_nostart',
-                 manualLog: [{compId:'test_u', doseMg:'100', date:'2026-08-16', draft:true}] };
-      const log2 = G._tcCurveLog().filter(function(e){ return e.date === '2026-08-16'; });
+                 manualLog: [{compId:'test_u', doseMg:'100', date:days[0], draft:true}] };
+      const log2 = G._tcCurveLog().filter(function(e){ return e.date === days[0]; });
       check('  …nor under a second spelling of the same ester',
         log2.length === 1, 'got ' + log2.map(function(e){ return e.compId; }).join(','));
     }
     G._tcp=_dupSave.tp; G._injectionsCache=_dupSave.ic; G._tcHistory=_dupSave.h; G._tcHistoryState=_dupSave.hs;
   }
 
-  // Saving must do what a cold start does: re-read the record, then rebuild.
+  // Saving must do what a cold start does: re-read the record, then rebuild. The
+  // after-save hook belonged to the save-to-protocol sheet and went with it (Phase 6);
+  // the requirement moved to the one write path T-Calc still has — record entry.
   {
     const _srcA = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
-    const a = _srcA.indexOf('async function _tcAfterSavedToStack');
-    const fn = a >= 0 ? _srcA.slice(a, a + 1400) : '';
-    check('the after-save hook exists', a >= 0);
-    check('  …forces a fresh history read', /_tcFetchHistory\(true\)/.test(fn));
-    check('  …and rebuilds manualLog from the record', /_tcLoadLogFromStack\(\)/.test(fn));
+    check('the after-save hook is gone with the sheet it served',
+      !/function _tcAfterSavedToStack/.test(_srcA));
+    const addFn = _srcA.slice(_srcA.indexOf('async function _tcConfirmAddSheet()'),
+                              _srcA.indexOf('function _tcConfirmRemove('));
+    check('logging a dose forces a fresh history read', /_tcFetchHistory\(true\)/.test(addFn));
+    check('  …and rebuilds manualLog from the record', /_tcLoadLogFromStack\(\)/.test(addFn));
     check('manualLog stores the CANONICAL compound id',
       /compId:_tcCanonCompId\(e\.compound_id\)/.test(_srcA));
   }
@@ -11227,80 +10892,25 @@ console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // with the true aggregate.
 process.exitCode = failed > 0 ? 1 : 0;
 
-// ── A DRAFT THAT IS NOT BOUND IS NOT SCHEDULED — THE UI MUST SAY SO ──────────
-// 2026-08-14: "no injections show up from today in Today view even if T-calc graph
-// looks fine." The record settled it — 7 draft doses (14–26 Aug) in the profile and
-// `targetStackId` absent, so _tcSyncLogToBackend returned at `if(!_cid)return;` and
-// wrote nothing. The add sheet closed as if it had worked and the curve redrew from
-// the drafts, so nothing anywhere indicated the doses were not scheduled.
-console.log('\n── T-Calc: unsaved drafts are announced ───────────────────');
+// ── A draft that is not bound: no longer possible (Phase 6) ─────────────────
+// This block tested the banner that announced unsaved planner drafts. 2026-08-14: "no
+// injections show up from today in Today view even if T-calc graph looks fine" — seven
+// draft doses sat in the profile with no protocol bound, so the sync wrote nothing while
+// the curve drew from them.
+//
+// Phase 6 removed the planner, so nothing creates a draft and there is no unbound state
+// to announce: a dose is scheduled by the protocol or it does not exist. What the block
+// was really protecting — that the curve never shows doses the record does not hold —
+// is now structural, and is asserted against how the curve is built.
+console.log('\n── Drafts cannot exist: the planner is gone ───────────────');
 {
-  const save = { tp: G._tcp, us: G._userStacks };
-  const drafts = ['2026-08-14','2026-08-16','2026-08-18','2026-08-20','2026-08-22','2026-08-24','2026-08-26']
-    .map(d => ({ compId:'nebido', doseMg:'100', date:d, draft:true }));
-
-  check('_tcUnsavedDraftBanner exists', typeof G._tcUnsavedDraftBanner === 'function');
-  // Call through a shim, not directly: on a source without the fix the bare call
-  // throws and aborts the whole run at the first assertion, hiding the rest. Every
-  // check below must be able to report its own failure.
-  const banner = () => (typeof G._tcUnsavedDraftBanner === 'function') ? G._tcUnsavedDraftBanner() : '';
-
-  // Unbound + drafts → the banner appears, counts them, and offers the real action.
-  G._tcp = { manualLog: drafts };            // no targetStackId at all — the real shape
-  G._userStacks = [{ id:'protocol_2_nostart', name:'Protocol 2' }];
-  const _saveIsActive = G._isActiveStack;
-  G._isActiveStack = function(i){ return i === 0; };
-  const unbound = banner();
-  check('an unbound plan with drafts is announced', /Not scheduled yet/.test(unbound));
-  check('  …counting them', /7 planned doses/.test(unbound));
-  check('  …naming the span, not just a number', /14 Aug/.test(unbound) && /26 Aug/.test(unbound));
-  check('  …saying Today will not show them', /do not appear in Today/.test(unbound));
-  check('  …and offering the save action', /_tcOpenSaveToStack\(\)/.test(unbound));
-  // "Save to protocol" alone reads as if the app already knows where. It does not,
-  // and there is deliberately no default — picking one for the user is what put a
-  // protocol's injections into a new empty stack (2026-08-14).
-  check('  …saying there is NO destination yet', /no destination yet/.test(unbound));
-  check('  …that the user picks it next', /You pick it in the next step/.test(unbound));
-  check('  …naming the protocols on offer, active marked',
-    /Protocol 2 \(active\)/.test(unbound), unbound.replace(/<[^>]*>/g,'').slice(0,200));
-  check('  …and the button says a choice follows', /Choose a protocol/.test(unbound));
-
-  // Bound → it must NAME the protocol. "Save to protocol" never said which one, and
-  // the only place the target was shown was the simple planner's card header, which
-  // is off whenever the manual planner is in use (Henrik, 2026-08-14: "how do I know
-  // which protocol ... anyone would assume is the active protocol").
-  G._tcp = { targetStackId:'protocol_2_nostart', manualLog: drafts };
-  const bound = banner();
-  check('a bound plan names the destination protocol', /Protocol 2/.test(bound));
-  check('  …saying doses are saved into it', /saved into/.test(bound));
-  check('  …and offers a way to change it', /_tcOpenSaveToStack\(\)/.test(bound));
-  check('  …without the unsaved warning', !/Not scheduled yet/.test(bound));
-
-  // Bound to a stack that no longer exists → _tcTargetCycleId is '' (unbound), so the
-  // warning path runs rather than naming a protocol that is gone.
-  G._tcp = { targetStackId:'gone', manualLog: drafts };
-  check('  …a target that no longer exists falls back to the warning',
-    /Not scheduled yet/.test(banner()));
-
-  // targetStackId naming a stack that no longer exists is NOT bound — _tcTargetCycleId
-  // returns '' for it, so the sync silently no-ops and the banner must fire.
-  G._tcp = { targetStackId:'deleted_stack', manualLog: drafts };
-  check('  …but a dangling stack id still counts as unbound',
-    /Not scheduled yet/.test(banner()));
-
-  // No drafts → nothing to warn about, bound or not.
-  G._tcp = { manualLog: [{compId:'nebido',doseMg:'100',date:'2026-08-14'}] };
-  check('a log with no drafts shows no banner', typeof G._tcUnsavedDraftBanner === 'function' && banner() === '');
-  G._tcp = { manualLog: [] };
-  check('an empty log shows no banner', typeof G._tcUnsavedDraftBanner === 'function' && banner() === '');
-
-  // It must be rendered, not merely defined.
-  const _tcSrc = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
-  check('buildTCalc renders it above the curve',
-    /html \+= _tcUnsavedDraftBanner\(\);[\s\S]{0,200}PLASMA CURVE/.test(_tcSrc));
-
-  G._isActiveStack = _saveIsActive;
-  G._tcp = save.tp; G._userStacks = save.us;
+  const _dfSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
+  check('nothing stages an unsaved draft any more',
+    !/function _tcUnsavedDraftBanner/.test(_dfSrc) && !/draft:true/.test(_dfSrc));
+  check('  …and the save-to-protocol route is gone with it',
+    !/function _tcOpenSaveToStack/.test(_dfSrc) && !/function _tcSaveToExistingStack/.test(_dfSrc));
+  check('the curve is built from the record and the protocol only',
+    /_add\(_tcLoggedHistory\(\)\);/.test(_dfSrc) && /_add\(_tcProtocolInjections\(\)\);/.test(_dfSrc));
 }
 
 // ── T-History: the "as of" readout follows the series end ────────────────────
@@ -11352,24 +10962,6 @@ console.log('\n── T-History: as-of cursor follows new points ─────
   // body itself further down (search: "buildTHist never captures/persists"). A
   // whole-file grep for those names matches the comment that says they are absent,
   // which is why the duplicate attempted here was both redundant and wrong.
-}
-
-// The save sheet must label what each choice does. An unmarked "New protocol" button
-// beside the existing ones created an empty stack, made it active and moved a
-// protocol's injections to it — with nothing on screen saying so (2026-08-14).
-{
-  const _tcSrc2 = require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
-  check('the save sheet marks the active protocol in words', /· active/.test(_tcSrc2));
-  // The other three checks here described the New-protocol section and its warning
-  // text. That section is gone by request (2026-08-14) — a dialog for filing doses
-  // no longer carries an option that empties Today. What replaced them is asserted
-  // by rendering the sheet: dropdown, active preselected, single Save, no creator.
-  // Match the MARKUP, not the words: /New protocol/ also hits the comment that
-  // explains why the section was removed. That is the same trap as the earlier
-  // whole-file grep for _thComputeFreeT, which matched the comment saying it is
-  // deliberately absent.
-  check('  …and the destination is a single dropdown, not a list of buttons',
-    /<select id="tc-save-stack-sel"/.test(_tcSrc2) && !/>New protocol<\/div>/.test(_tcSrc2));
 }
 
 // ── Today: a finished cycle says so ──────────────────────────────────────────
