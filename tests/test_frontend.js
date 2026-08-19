@@ -53,7 +53,7 @@ const patchedScript = rawScript
 const noop = () => {};
 const mockCtx = {scale:noop,beginPath:noop,moveTo:noop,lineTo:noop,arc:noop,fill:noop,stroke:noop,fillText:noop,closePath:noop,createLinearGradient:()=>({addColorStop:noop}),save:noop,restore:noop,fillRect:noop,setLineDash:noop,strokeRect:noop,translate:noop,rotate:noop,measureText:()=>({width:0})};
 const mockEl = () => {
-  const el = {style:{},classList:{add:noop,remove:noop,contains:()=>false},appendChild:noop,removeChild:noop,insertBefore:noop,addEventListener:noop,children:[],querySelectorAll:()=>[],querySelector:()=>mockEl(),offsetWidth:300,getContext:()=>mockCtx};
+  const el = {style:{},classList:{add:noop,remove:noop,contains:()=>false},appendChild:noop,removeChild:noop,insertBefore:noop,addEventListener:noop,children:[],querySelectorAll:()=>[],querySelector:()=>mockEl(),offsetWidth:300,offsetLeft:0,scrollLeft:0,clientWidth:300,dataset:{},getContext:()=>mockCtx};
   Object.defineProperty(el,'innerHTML',  {get:()=>'',set:noop});
   Object.defineProperty(el,'textContent',{get:()=>'',set:noop});
   Object.defineProperty(el,'value',      {get:()=>'0',set:noop});
@@ -11351,4 +11351,55 @@ console.log('\n── Today: finished cycle empty state ────────
   G.document = _ceSave.doc; G._userStacks = _ceSave.us; G._activeStackIndices = _ceSave.ai;
   G._stacksLoaded = _ceSave.sl; G._injectionsCache = _ceSave.c; G._injCacheReady = _ceSave.cr;
   G._syncPending = _ceSave.sp; G._injHidden = _ceSave.hid;
+}
+
+// ── Week strip: a year of history ─────────────────────────────────────────────
+// Henrik, 2026-08-17: "Make Today views day selector scrollable backwards in time
+// for a year." The strip ran NOW-7 .. NOW+6, so nothing older than last week could
+// be opened from Today at all.
+console.log('\n── Week strip: a year back ────────────────────────────────');
+{
+  const _wsSave = {doc:G.document, cache:G._injectionsCache, plog:G.window._peptideLog};
+  let _layout = false;                       // false = element has no layout yet
+  const _strip = {dataset:{}, scrollLeft:0, clientWidth:350, children:[],
+                  set innerHTML(v){ if(v==='') this.children=[]; }, get innerHTML(){ return ''; },
+                  appendChild(el){ el.offsetLeft = _layout ? (this.children.length+1)*50 : 0;
+                                   this.children.push(el); }};
+  G.document = Object.assign({}, _wsSave.doc, {
+    getElementById:(id)=> id==='week-strip' ? _strip : _wsSave.doc.getElementById(id),
+    createElement:()=>({style:{}, className:'', innerHTML:'', onclick:null,
+                        offsetLeft:0, offsetWidth:44}),
+  });
+  G._injectionsCache = {};
+  G.window._peptideLog = [];
+
+  G.buildWeekStrip();
+  check('the strip reaches a year back',            G.WEEK_STRIP_BACK === 365);
+  check('  …and the forward window is unchanged',   G.WEEK_STRIP_FWD === 6);
+  check('  …so it renders back + today + forward',
+    _strip.children.length === 372, `got ${_strip.children.length}`);
+  check('  …with exactly one tile marked today',
+    _strip.children.filter(e=>/(^|\s)today(\s|$)/.test(e.className)).length === 1);
+
+  // A build before the tab is laid out cannot centre anything, and must not claim it
+  // did — init() builds once immediately and again 100ms later.
+  check('a pre-layout build does not claim the strip is positioned',
+    _strip.dataset.wsCentered !== '1');
+
+  _layout = true;
+  G.buildWeekStrip();
+  const _centred = _strip.scrollLeft;
+  check('once laid out it centres on today',        _centred > 0);
+  check('  …and records that it did',               _strip.dataset.wsCentered === '1');
+
+  // The strip is rebuilt on every tick. Re-centring there would yank the user back
+  // from wherever they had scrolled, which makes a year of history unusable.
+  _strip.scrollLeft = 42;
+  G.buildWeekStrip();
+  check('a rebuild holds the scroll position instead of jumping to today',
+    _strip.scrollLeft === 42, `got ${_strip.scrollLeft}`);
+  check('  …and still renders the whole year',      _strip.children.length === 372);
+
+  G.document = _wsSave.doc; G._injectionsCache = _wsSave.cache;
+  G.window._peptideLog = _wsSave.plog;
 }
