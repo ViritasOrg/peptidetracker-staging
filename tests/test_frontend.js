@@ -5017,24 +5017,44 @@ console.log('\n── _stackTabBar ───────────────
 {
   const G=sandbox;
 
-  // T1: all three tabs present; Enhanced is locked (opacity 0.45)
+  // Phase 4 merged TRT and Enhanced into ONE Compounds tab. The tier-3 gate did not
+  // disappear with them — it moved onto the groups inside the tab, so testosterone
+  // stays available to everyone (as the TRT tab was) and the rest stays gated (as
+  // Enhanced was). These checks follow the gate to where it now lives.
   G._userTier=1;
   var tb1=G._stackTabBar('peptides','setStackViewTab');
   check('_stackTabBar T1: renders Peptides tab', tb1.includes('Peptides'));
-  check('_stackTabBar T1: renders TRT tab', tb1.includes('TRT'));
-  check('_stackTabBar T1: renders Enhanced tab', tb1.includes('Enhanced'));
-  check('_stackTabBar T1: Enhanced tab locked (opacity:0.45)', tb1.includes('0.45'));
+  check('_stackTabBar: one Compounds tab, not TRT + Enhanced',
+    tb1.includes('Compounds') && !tb1.includes('>TRT<') && !tb1.includes('>Enhanced<'));
+  check('_stackTabBar: no tab is locked any more', !tb1.includes('0.45'));
 
-  // T3: Enhanced is not locked
+  // The gate: a tier-1 user still gets testosterone, and gets the CTA instead of the
+  // enhancement classes.
+  // The catalogue comes from the backend and carries `group`; the sandbox default has
+  // only `cls`, so give this block the shape the app actually receives.
+  const _catSave = G.ENHANCEMENT_COMPOUNDS;
+  G.ENHANCEMENT_COMPOUNDS=[
+    {id:'test_e',name:'Testosterone Enanthate',group:'Base',cls:'base',defaultDose:300,unit:'mg/week',defaultDays:[1,4],dot:'#e05050'},
+    {id:'primo', name:'Primobolan',            group:'DHT-Derived',cls:'dht',  defaultDose:500,unit:'mg/week',defaultDays:[1,4],dot:'#3cffa0'},
+    {id:'deca',  name:'Deca',                  group:'19-Nor',     cls:'19nor',defaultDose:300,unit:'mg/week',defaultDays:[1,4],dot:'#888'},
+  ];
+  G._editBuf={trt:{enabled:false,compounds:[]},enhanced:{enabled:false,compounds:[]}};
+  var cmpT1=G._renderEditCompounds({trt:{},enhanced:{}});
+  check('Compounds T1: testosterone is available',   cmpT1.includes('Testosterone'));
+  check('  …and the enhancement classes are gated',  !cmpT1.includes('19-Nor'));
   G._userTier=3;
-  var tb3=G._stackTabBar('peptides','setStackViewTab');
-  check('_stackTabBar T3: Enhanced tab present', tb3.includes('Enhanced'));
-  check('_stackTabBar T3: Enhanced tab not locked (no opacity:0.45)', !tb3.includes('0.45'));
+  var cmpT3=G._renderEditCompounds({trt:{},enhanced:{}});
+  check('Compounds T3: the other classes appear',    cmpT3.includes('19-Nor'));
+  check('  …testosterone first, then by class',
+    cmpT3.indexOf('Testosterone') < cmpT3.indexOf('19-Nor'));
+  check('  …with no second testosterone group under its other spelling',
+    cmpT3.indexOf('DHT-Derived') > 0 && !/Base<\/div>/.test(cmpT3));
+
+  G.ENHANCEMENT_COMPOUNDS=_catSave;
 
   // Active tab gets accent background; others transparent
-  G._userTier=3;
-  var tbEnhActive=G._stackTabBar('enhanced','setEditInnerTab');
-  check('_stackTabBar T3: active Enhanced tab gets accent bg', tbEnhActive.includes('var(--accent)'));
+  var tbEnhActive=G._stackTabBar('compounds','setEditInnerTab');
+  check('_stackTabBar T3: active Compounds tab gets accent bg', tbEnhActive.includes('var(--accent)'));
 
   // Setter propagated to onclick handlers
   check('_stackTabBar view: onclick uses setStackViewTab', tb1.includes('setStackViewTab'));
@@ -5079,7 +5099,8 @@ console.log('\n── View & Edit tab render functions ────────�
   // _renderEditTRT: null/empty → toggle is off, no compound cards visible
   var etH1=G._renderEditTRT(null);
   check('_renderEditTRT null: returns string', typeof etH1==='string');
-  check('_renderEditTRT null: shows TRT Protocol heading', etH1.includes('TRT Protocol'));
+  // The tier is no longer called TRT — it is the testosterone group of one Compounds tab.
+  check('_renderEditTRT null: shows the Testosterone heading', etH1.includes('Testosterone'));
   check('_renderEditTRT null: toggle is OFF (not "toggle-sw on")', etH1.includes('toggle-sw')&&!etH1.includes('toggle-sw on'));
 
   // _renderEditTRT: enabled with compound → toggle on, dose controls
@@ -5159,7 +5180,9 @@ console.log('\n── Source-code structural assertions ────────
   check('source: function _stackTabBar( defined', tsJs.includes('function _stackTabBar('));
 
   // Tier gates confirmed in source
-  check('source: edit Enhanced branch gates on tier >=3', tsJs.includes('(_userTier||1)>=3?_renderEditEnhanced'));
+  // The gate moved inside the merged tab (Phase 4) — same tier, new home.
+  check('source: edit Enhanced classes gate on tier >=3',
+    tsJs.includes("if((_userTier||1)>=3){\n    html+=_renderEditEnhanced("));
   check('source: view Enhanced branch gates on tier >=3', tsJs.includes('(_userTier||1)>=3?_renderEnhancedViewTab'));
 
   // _buildEnhancementCycleSection still exists (used by Cycles tab via stackSetCyclePhase etc.)
@@ -11638,4 +11661,72 @@ console.log('\n── One writer for injections ──────────�
 
     G.fetch = _wSave.fetch; G.authHeaders = _wSave.auth;
   })();
+}
+
+// ── Phase 4: one Compounds tier ───────────────────────────────────────────────
+// Henrik, 2026-08-16: "We will fold enhanced and TRT into one unified tab, all is part
+// of a Protocol." And 2026-08-19: "Group by class testosterone on top", "any pre
+// existing protocol needs to be merged into the new format".
+console.log('\n── Compounds tier: folding an old protocol ────────────────');
+{
+  const G2 = sandbox;
+  const _fSave = {stacks:G2._userStacks, buf:G2._editBuf, idx:G2._editIdx, doc:G2.document};
+  G2.document = Object.assign({}, _fSave.doc, {getElementById:()=>null});
+
+  const _open = (stack) => {
+    G2._userStacks = [stack];
+    G2.showStackEditor(0);
+    return G2._editBuf;
+  };
+
+  // The exact shape that caused the 2026-08-16 mess: testosterone configured in the
+  // Enhanced tier under its own spelling, while T-Calc wrote the TRT one.
+  let buf = _open({id:'p2', name:'Protocol 2', peptides:[], trt:{},
+                   enhanced:{enabled:true, compounds:[
+                     {id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'350', unit:'mg/week'},
+                     {id:'hgh',    name:'HGH (Somatropin)', dose:'3', unit:'IU/day'}]}});
+  check('an Enhanced testosterone folds into the one tier',
+    (buf.trt.compounds || []).length === 1);
+  check('  …under the canonical id, not the tier it came from',
+    buf.trt.compounds[0].id === 'nebido', buf.trt.compounds[0].id);
+  check('  …keeping its dose and unit',
+    buf.trt.compounds[0].dose === '350' && buf.trt.compounds[0].unit === 'mg/week');
+  check('  …and leaves the tier enabled so it is not silently dormant',
+    buf.trt.enabled === true);
+  check('non-testosterone compounds stay exactly where they were',
+    buf.enhanced.compounds.length === 1 && buf.enhanced.compounds[0].id === 'hgh');
+
+  // A protocol holding the SAME molecule in both blocks is the double-stream case.
+  // The TRT entry is the one T-Calc has been scheduling from, so it wins; the point is
+  // that exactly one survives.
+  buf = _open({id:'p3', peptides:[],
+               trt:{enabled:true, compounds:[{id:'nebido', dose:'100', unit:'mg'}]},
+               enhanced:{enabled:true, compounds:[{id:'test_u', dose:'350', unit:'mg/week'}]}});
+  check('the same molecule in both blocks collapses to one entry',
+    buf.trt.compounds.length === 1 && buf.trt.compounds[0].dose === '100');
+  check('  …and the duplicate is gone from the other block',
+    buf.enhanced.compounds.length === 0);
+
+  // Nothing is written until Save — the fold happens in the edit buffer.
+  check('the stored protocol is untouched until the user saves',
+    G2._userStacks[0].enhanced.compounds.length === 1 &&
+    G2._userStacks[0].enhanced.compounds[0].id === 'test_u');
+
+  // A protocol with nothing to fold must come through unchanged.
+  buf = _open({id:'p4', peptides:[], trt:{enabled:true, compounds:[{id:'nebido', dose:'100'}]},
+               enhanced:{enabled:true, compounds:[{id:'deca', dose:'300'}]}});
+  check('a protocol with nothing to fold is left alone',
+    buf.trt.compounds.length === 1 && buf.enhanced.compounds.length === 1 &&
+    buf.enhanced.compounds[0].id === 'deca');
+
+  check('folding an empty protocol is a no-op, not a crash',
+    G2._editFoldTestosterone({}) === 0 && G2._editFoldTestosterone(null) === 0);
+
+  // Old tab ids must land somewhere real rather than on a tab that no longer exists.
+  check('a stored "trt" tab id lands on Compounds',      G2._compTabId('trt') === 'compounds');
+  check('  …and so does "enhanced"',                     G2._compTabId('enhanced') === 'compounds');
+  check('  …while peptides is left alone',               G2._compTabId('peptides') === 'peptides');
+
+  G2._userStacks = _fSave.stacks; G2._editBuf = _fSave.buf; G2._editIdx = _fSave.idx;
+  G2.document = _fSave.doc;
 }
