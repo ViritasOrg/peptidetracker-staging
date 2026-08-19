@@ -11863,3 +11863,48 @@ console.log('\n── Protocol migration ─────────────
     G3.buildToday = _mSave.bt; G3.confirm = _mSave.confirm; G3.alert = _mSave.alert;
   })();
 }
+
+// ── A rate unit is not the amount in the syringe — in EITHER block ────────────
+// Found by reading the record after Henrik ran Merge tiers (2026-08-19). The
+// migration moved his testosterone from the Enhanced block to the merged tier
+// carrying "350 mg/week", and the TRT branch of _genInjBatches never converted a rate
+// to a per-injection amount — it had never needed to, because TRT compounds were
+// always configured as plain mg. The result would have been "Nebido 350 mg/week" on
+// every second day in Today: the exact rendering the 2026-08-07 fix removed, and a
+// 3.5x overstatement of the dose sitting next to a real 100 mg shot.
+console.log('\n── Rate units convert in both blocks ──────────────────────');
+{
+  const G4 = sandbox;
+  // Henrik's protocol exactly as stored after the migration.
+  const st = {id:'protocol_2_nostart', name:'Protocol 2', cycle_start:'2026-05-18', cycle_length:20,
+              trt:{enabled:true, compounds:[{id:'nebido', name:'Testosterone Undecanoate (Nebido)',
+                   dose:'350', unit:'mg/week', cadence:'interval', freqVal:2, freqUnit:'days',
+                   days:[1,3], dot:'#b84a4a'}]}};
+  const rows = G4._genInjBatches(st, 'protocol_2_nostart', null)
+                 .reduce((a,b) => a.concat(b.entries||[]), []);
+  check('a migrated mg/week compound still generates', rows.length > 0);
+  check('  …as an AMOUNT per injection, not the weekly rate',
+    rows.every(e => String(e.dose) === '100'),
+    'first: ' + JSON.stringify(rows.slice(0,2).map(e => e.dose + ' ' + e.unit)));
+  check('  …with the rate unit stripped, as the record stores amounts',
+    rows.every(e => String(e.unit).indexOf('/') === -1),
+    'units: ' + [...new Set(rows.map(e => e.unit))].join(','));
+
+  // A plain per-injection TRT entry must pass through untouched — the conversion is
+  // for rate units only, and 100 mg every 2 days means 100 mg in the syringe.
+  const plain = G4._genInjBatches({id:'p', cycle_start:'2026-08-01', cycle_length:4,
+    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
+         freqVal:2, freqUnit:'days'}]}}, 'p', null)
+    .reduce((a,b) => a.concat(b.entries||[]), []);
+  check('a plain mg dose is unchanged',
+    plain.length > 0 && plain.every(e => String(e.dose) === '100' && e.unit === 'mg'));
+
+  // And the weekday-cadence form: 350 mg/week over two days a week is 175 each.
+  const wk = G4._genInjBatches({id:'w', cycle_start:'2026-08-01', cycle_length:4,
+    trt:{enabled:true, compounds:[{id:'enanthate', name:'Testosterone Enanthate',
+         dose:'350', unit:'mg/week', days:[1,4]}]}}, 'w', null)
+    .reduce((a,b) => a.concat(b.entries||[]), []);
+  check('a weekly rate split across two days is halved',
+    wk.length > 0 && wk.every(e => String(e.dose) === '175' && e.unit === 'mg'),
+    'first: ' + JSON.stringify(wk.slice(0,2).map(e => e.dose + ' ' + e.unit)));
+}
