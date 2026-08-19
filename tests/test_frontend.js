@@ -11730,3 +11730,85 @@ console.log('\n── Compounds tier: folding an old protocol ──────
   G2._userStacks = _fSave.stacks; G2._editBuf = _fSave.buf; G2._editIdx = _fSave.idx;
   G2.document = _fSave.doc;
 }
+
+// ── Migrating stored protocols to the merged tier ─────────────────────────────
+// Henrik, 2026-08-19: "any pre existing protocol needs to be merged into the new
+// format" → "Ok just migrate". The stored protocol is rewritten, rather than each one
+// having to be opened and saved.
+console.log('\n── Protocol migration ─────────────────────────────────────');
+{
+  const G3 = sandbox;
+  const _mSave = {save:G3.saveStacksToBackend, bs:G3.buildStackStore,
+                  bt:G3.buildToday, confirm:G3.confirm, alert:G3.alert};
+  let _saved = 0, _asked = '', _told = '';
+  G3.saveStacksToBackend = async () => { _saved++; };
+  G3.buildStackStore = () => {}; G3.buildToday = () => {};
+  G3.alert = (m) => { _told = m; };
+
+  // The migration takes the list it operates on, so these tests never touch
+  // _userStacks — the suite's other async blocks share that global.
+  // Exactly the shape staging holds today: one protocol, testosterone in the Enhanced
+  // block under its own spelling, HGH beside it.
+  const _live = () => ([{id:'protocol_2_nostart', name:'Protocol 2', peptides:[{id:'glow'}],
+                         trt:{}, enhanced:{enabled:true, compounds:[
+                           {id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'350', unit:'mg/week'},
+                           {id:'hgh', name:'HGH (Somatropin)', dose:'2', unit:'IU/day'}]}}]);
+
+  let _stacks = _live();
+  let _rep = G3._migrateProtocolsReport(_stacks);
+  check('the report names what would move', _rep.length === 1);
+  check('  …from the old spelling to the canonical one',
+    _rep[0].from === 'test_u' && _rep[0].to === 'nebido');
+  check('  …carrying the dose so the confirm can show it',
+    _rep[0].dose === '350' && _rep[0].unit === 'mg/week');
+  check('  …and naming the protocol it belongs to', _rep[0].stack === 'Protocol 2');
+  check('a report changes nothing on its own',
+    _stacks[0].enhanced.compounds.length === 2 &&
+    (_stacks[0].trt.compounds || []).length === 0);
+
+  (async () => {
+    // Declining the confirm must leave everything alone — including the backend.
+    G3.confirm = () => false;
+    await G3.migrateProtocolsToCompounds(_stacks);
+    check('declining the confirm writes nothing',
+      _saved === 0 && _stacks[0].enhanced.compounds.length === 2);
+
+    G3.confirm = (m) => { _asked = m; return true; };
+    // Deltas, not totals: this block runs after the synchronous suite and other
+    // in-flight tests share the stubbed saveStacksToBackend.
+    let _before = _saved;
+    await G3.migrateProtocolsToCompounds(_stacks);
+    check('the confirm says protocols stay separate',
+      /Protocols stay separate/.test(_asked));
+    check('  …and that no injection is touched',
+      /no injection is added, changed or deleted/.test(_asked));
+    check('migrating moves testosterone into the one tier',
+      _stacks[0].trt.compounds.length === 1 && _stacks[0].trt.compounds[0].id === 'nebido');
+    check('  …keeping its dose', _stacks[0].trt.compounds[0].dose === '350');
+    check('  …leaving everything else where it was',
+      _stacks[0].enhanced.compounds.length === 1 &&
+      _stacks[0].enhanced.compounds[0].id === 'hgh');
+    check('  …keeping the protocol itself intact',
+      _stacks.length === 1 && _stacks[0].peptides.length === 1);
+    check('  …and persisting it', _saved > _before);
+
+    // Running it twice must be a no-op, not a second round of moves.
+    _told = '';
+    const _snapshot = JSON.stringify(_stacks);
+    await G3.migrateProtocolsToCompounds(_stacks);
+    check('running it again reports nothing to do', /Nothing to migrate/.test(_told));
+    // Idempotence is the real requirement — asserting on a save COUNT is unreliable
+    // here, because other in-flight blocks share the stubbed saveStacksToBackend.
+    check('  …and changes nothing the second time', JSON.stringify(_stacks) === _snapshot);
+
+    // Two protocols stay two protocols — the tier merge is not a protocol merge.
+    const _two = _live().concat(_live().map(x => JSON.parse(JSON.stringify(
+      Object.assign({}, x, {id:'other', name:'Other'})))));
+    await G3.migrateProtocolsToCompounds(_two);
+    check('two protocols are migrated, not collapsed into one',
+      _two.length === 2 && _two.every(x => x.trt.compounds.length === 1));
+
+    G3.saveStacksToBackend = _mSave.save; G3.buildStackStore = _mSave.bs;
+    G3.buildToday = _mSave.bt; G3.confirm = _mSave.confirm; G3.alert = _mSave.alert;
+  })();
+}
