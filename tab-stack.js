@@ -610,12 +610,19 @@ function _metaWithHalfLife(entry,fallback){
 function _halfLifeOf(entry){
   if(!entry)return '';
   var id=entry.id;
-  // THE PK CATALOGUE FIRST, WHERE IT KNOWS THE COMPOUND. The two catalogues disagree
-  // about the same molecule — the enhanced list says enanthate is "~7 days" and Nebido
-  // "~34 days terminal", the PK list says "~4.5 days" and "~56 days plateau-equivalent"
-  // — because they were written for different purposes. The PK figure is the one the
-  // plasma curve integrates, so it is the one that goes on the card: a card that
-  // contradicts the graph beside it is worse than no card.
+  // THE MERGED CATALOGUE FIRST. /compounds/catalog joins each compound to its PK entry,
+  // so `pk.halfLife` is the figure the plasma curve integrates — no client-side
+  // reconciliation, which is the whole point of having merged them in the backend.
+  if(entry.pk&&entry.pk.halfLife)return String(entry.pk.halfLife);
+  if(typeof _COMPOUND_CATALOG!=='undefined'&&_COMPOUND_CATALOG&&_COMPOUND_CATALOG.length){
+    var m=_COMPOUND_CATALOG.find(function(e){return e.id===id||e.id===_canonCompoundId(id);});
+    if(m&&m.pk&&m.pk.halfLife)return String(m.pk.halfLife);
+    if(m&&m.cadence&&m.cadence.halfLife&&!entry.halfLife)return String(m.cadence.halfLife);
+  }
+  // Below: the pre-merge sources. They stay as the fallback for a backend that predates
+  // /compounds/catalog, and for the bundled offline constants. The two DO disagree about
+  // the same molecule — enanthate is "~7 days" in the enhanced list and "~4.5 days" in
+  // the PK list — so the PK figure still wins here, for the same reason.
   if(typeof _tcExtraCatalog!=='undefined'&&_tcExtraCatalog){
     var x=_tcExtraCatalog.find(function(e){return e.id===id||e.id===_canonCompoundId(id);});
     if(x&&x.halfLife)return String(x.halfLife);
