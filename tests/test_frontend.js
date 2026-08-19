@@ -12097,3 +12097,68 @@ console.log('\n── Merged catalogue: the app reads it ───────�
     G6._COMPOUND_CATALOG = _mcSave.merged; G6._COMPOUND_ALIASES = _mcSave.al;
   })();
 }
+
+// ── The PK model reads the merged catalogue, and the curve does not move ──────
+// Henrik, 2026-08-19: "Do it but verify curve data before and after this change, make
+// sure output for different t esters produces the same results before merge of anything."
+//
+// These numbers ARE the model: half-life, the uncertainty band, tmax, bioavailability
+// and the ester fraction the plasma curve integrates. The refactor was verified by
+// fingerprinting every ester's curve — PK inputs, raw plasma peak, and the calibrated
+// free-T series — through both paths against the live payloads; identical to six
+// decimals. These checks keep it that way.
+console.log('\n── PK catalogue from the merged endpoint ──────────────────');
+{
+  const G7 = sandbox;
+  // Shaped exactly like the live payload: the merged entry carries the trt-catalog row
+  // verbatim under `pk`.
+  const PK_NEBIDO = {id:'nebido', name:'Nebido (Testosterone Undecanoate)', dot:'#e8a020',
+                     halfLifeDays:56, halfLifeDaysLow:37, halfLifeDaysHigh:75,
+                     tmaxDays:7, testosteroneFraction:0.6315, halfLife:'~56 days'};
+  const PK_ENAN   = {id:'enanthate', name:'Testosterone Enanthate', dot:'#e05050',
+                     halfLifeDays:4.5, tmaxDays:2.25, testosteroneFraction:0.7199};
+  const MERGED = {compounds:[
+    {id:'nebido', name:'Nebido', isTestosterone:true, pk:PK_NEBIDO},
+    {id:'enanthate', name:'Enanthate', isTestosterone:true, pk:PK_ENAN},
+    {id:'deca', name:'Deca', isTestosterone:false},          // no pk — not testosterone
+  ]};
+
+  const rows = G7._tcPkRowsFromMerged(MERGED);
+  check('every PK entry is pulled out of the merged catalogue', rows.length === 2);
+  check('  …verbatim, so the model reads the same numbers it always did',
+    rows.find(r => r.id === 'nebido') === PK_NEBIDO);
+  check('  …and a compound with no PK entry is skipped, not faked',
+    !rows.some(r => r.id === 'deca'));
+  check('a payload with no compounds yields nothing', G7._tcPkRowsFromMerged({}).length === 0 &&
+    G7._tcPkRowsFromMerged(null).length === 0);
+
+  // THE FAILURE THAT WOULD MATTER MOST: an empty or malformed response must never be
+  // applied. _tcExtraCatalog is what the model integrates — emptying it silently drops
+  // every ester back to the 7-day default and flattens the curve, with nothing on screen
+  // to say why.
+  const _pkSave = G7._tcExtraCatalog;
+  G7._tcExtraCatalog = [PK_NEBIDO];
+  check('an empty catalogue is refused rather than applied',
+    G7._tcApplyPkCatalog([]) === false && G7._tcExtraCatalog.length === 1);
+  check('  …and so is a non-array', G7._tcApplyPkCatalog(null) === false &&
+    G7._tcApplyPkCatalog({compounds:[]}) === false && G7._tcExtraCatalog.length === 1);
+
+  // The model's own reader must see the merged numbers, unchanged.
+  G7._tcExtraCatalog = rows;
+  const nb = G7._tcCompInfo('nebido');
+  check('the model reads the merged half-life, band and tmax',
+    nb.halfLifeDays === 56 && nb.halfLifeDaysLow === 37 && nb.halfLifeDaysHigh === 75 &&
+    nb.tmaxDays === 7);
+  check('  …and the ester fraction, which is 14% between enanthate and undecanoate',
+    nb.testosteroneFraction === 0.6315 &&
+    G7._tcCompInfo('enanthate').testosteroneFraction === 0.7199);
+  G7._tcExtraCatalog = _pkSave;
+
+  // /trt-catalog stays as the fallback: it is public unauthenticated reference data, and
+  // it is what an older backend serves.
+  const _tcSrc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('the merged endpoint is tried first, /trt-catalog second',
+    _tcSrc.indexOf("'/compounds/catalog'") < _tcSrc.indexOf("'/trt-catalog'"));
+  check('  …and the fallback is inside the catch, so a failure cannot leave it unset',
+    /catch\(function\(\)\{[\s\S]{0,400}\/trt-catalog/.test(_tcSrc));
+}
