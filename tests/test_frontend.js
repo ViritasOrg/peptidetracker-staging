@@ -11376,8 +11376,10 @@ console.log('\n── Week strip: a year back ───────────�
   G.buildWeekStrip();
   check('the strip reaches a year back',            G.WEEK_STRIP_BACK === 365);
   check('  …and the forward window is unchanged',   G.WEEK_STRIP_FWD === 6);
-  check('  …so it renders back + today + forward',
-    _strip.children.length === 372, `got ${_strip.children.length}`);
+  check('  …so it renders back + today + forward, plus the calendar card',
+    _strip.children.length === 373, `got ${_strip.children.length}`);
+  check('  …with the calendar card at the far-left end of the strip',
+    /week-cal/.test(_strip.children[0].className));
   check('  …with exactly one tile marked today',
     _strip.children.filter(e=>/(^|\s)today(\s|$)/.test(e.className)).length === 1);
 
@@ -11398,8 +11400,96 @@ console.log('\n── Week strip: a year back ───────────�
   G.buildWeekStrip();
   check('a rebuild holds the scroll position instead of jumping to today',
     _strip.scrollLeft === 42, `got ${_strip.scrollLeft}`);
-  check('  …and still renders the whole year',      _strip.children.length === 372);
+  check('  …and still renders the whole year',      _strip.children.length === 373);
 
   G.document = _wsSave.doc; G._injectionsCache = _wsSave.cache;
   G.window._peptideLog = _wsSave.plog;
+}
+
+// ── Month calendar ───────────────────────────────────────────────────────────
+// Henrik, 2026-08-19: "add a card last (to the left in the carousel) that opens a
+// new view with a traditional month/day table view. To access historic injections"
+console.log('\n── Month calendar ─────────────────────────────────────────');
+{
+  const _cSave = {doc:G.document, cache:G._injectionsCache, plog:G.window._peptideLog,
+                  vd:G._viewDate, sdi:G.showDayInline, st:G.switchTab};
+  const _mk = () => {
+    const el = {children:[], className:'', textContent:'', onclick:null, parentNode:null,
+                style:{cssText:''}, offsetLeft:0, offsetWidth:44, dataset:{},
+                appendChild(c){ c.parentNode = el; el.children.push(c); return c; },
+                removeChild(c){ el.children = el.children.filter(x=>x!==c); return c; }};
+    Object.defineProperty(el,'innerHTML',{get:()=>'', set(v){ if(v==='') el.children=[]; }});
+    return el;
+  };
+  const _body = _mk();
+  G.document = Object.assign({}, _cSave.doc, {createElement:()=>_mk(), body:_body,
+                                              getElementById:()=>null});
+  G._injectionsCache = {}; G.window._peptideLog = []; G._viewDate = null;
+  let _opened = null;
+  G.showDayInline = (d) => { _opened = d; };
+  G.switchTab = () => {};
+
+  G.showMonthCalendar();
+  const _ov = _body.children[_body.children.length-1];
+  const _sheet = _ov.children[0];
+  const _grid = _sheet.children[1];
+  check('the card opens a month view', !!_ov && !!_grid);
+
+  // CLAUDE.md: weeks start on Monday, everywhere.
+  check('the weekday header is Monday-first',
+    _grid.children.slice(0,7).map(c=>c.textContent).join('') === 'MTWTFSS',
+    _grid.children.slice(0,7).map(c=>c.textContent).join(''));
+
+  const _now = new Date();
+  const _dim = new Date(_now.getFullYear(), _now.getMonth()+1, 0).getDate();
+  const _lead = [1,2,3,4,5,6,0].indexOf(new Date(_now.getFullYear(), _now.getMonth(), 1).getDay());
+  const _cells = _grid.children.slice(7);
+  check('  …the month starts on the right weekday',
+    _cells.filter(c=>c.className==='cal-pad').length === _lead, `lead ${_lead}`);
+  check('  …and every day of the month has a cell',
+    _cells.filter(c=>/cal-day/.test(c.className)).length === _dim, `expected ${_dim}`);
+  check('  …with today marked',
+    _cells.filter(c=>/cal-today/.test(c.className)).length === 1);
+
+  // The calendar navigates; showDayInline is still the only thing that renders or
+  // ticks a day's doses, so there is no second copy of that logic.
+  const _firstDay = _cells.filter(c=>/cal-day/.test(c.className))[0];
+  _firstDay.onclick();
+  // _opened is a Date from the sandbox realm, so instanceof against this file's Date
+  // is false — duck-type it instead.
+  check('tapping a day opens it in Today',
+    !!_opened && typeof _opened.getDate === 'function' &&
+    _opened.getDate() === 1 && _opened.getMonth() === _now.getMonth());
+  check('  …and closes the calendar', _body.children.indexOf(_ov) === -1);
+
+  // Stepping back a month is how you reach anything older than the strip.
+  G.showMonthCalendar();
+  const _ov2 = _body.children[_body.children.length-1];
+  const _sheet2 = _ov2.children[0];
+  const _title = () => _sheet2.children[0].children[1].textContent;
+  const _thisMonth = _title();
+  _sheet2.children[0].children[0].onclick();          // ‹
+  check('‹ steps to the previous month', _title() !== _thisMonth);
+  _sheet2.children[0].children[2].onclick();          // ›
+  check('  …and › comes back', _title() === _thisMonth);
+
+  // Dots follow the same rules as the strip: logged wins, scheduled-not-ticked is dim.
+  const _dk = (o) => { const t = new Date(); t.setDate(t.getDate()+o);
+                       return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+  const _yst = new Date(); _yst.setDate(_yst.getDate()-1);
+  G._injectionsCache = {[_dk(-1)]:[{dot:'#aaa', active:true, logged:true},
+                                   {dot:'#bbb', active:true, logged:false}]};
+  let _info = G._calDots(_yst);
+  check('a past day shows its logged doses only', _info.dots.join(',') === '#aaa' && _info.logged === true);
+  G._injectionsCache = {[_dk(-1)]:[{dot:'#bbb', active:true, logged:false}]};
+  _info = G._calDots(_yst);
+  check('  …and a missed scheduled dose shows dim', _info.dim === true && _info.dots.join(',') === '#bbb');
+
+  const _tmr = new Date(); _tmr.setDate(_tmr.getDate()+1);
+  G._injectionsCache = {[_dk(1)]:[{dot:'#ccc', active:true, logged:false}]};
+  _info = G._calDots(_tmr);
+  check('a future day shows what is scheduled', _info.dots.join(',') === '#ccc' && _info.dim === false);
+
+  G.document = _cSave.doc; G._injectionsCache = _cSave.cache; G.window._peptideLog = _cSave.plog;
+  G._viewDate = _cSave.vd; G.showDayInline = _cSave.sdi; G.switchTab = _cSave.st;
 }
