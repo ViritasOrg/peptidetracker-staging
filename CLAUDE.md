@@ -170,10 +170,22 @@ any scheduling code.
 - **A row that stops generating with no explanation is the bug, not the fix.** If
   suppression is ever reintroduced anywhere, it must be visible in the UI.
 
-**Migration status:** the rewrite takes days and lands in phases (see
-`docs/unified-plan-rewrite.md` §6). Until the phase that deletes it, T-Calc's planner
-code still exists on disk. Do not extend it, do not fix its scheduling bugs by adding
-features to it, and do not write new callers of it.
+**Migration status (2026-08-19): Phases 0–5 have landed.** `_genInjBatches` emits
+testosterone again, the tiers are merged into one Compounds tab, and every T-Calc write
+path is disabled behind `_TC_PLANNING_REMOVED`. The planner UI is still on disk and comes
+out in Phase 6. Do not extend it, do not fix its scheduling bugs by adding features to
+it, and do not write new callers of it.
+
+**One stream per molecule is now enforced in the generator itself.** `_genInjBatches`
+dedupes by canonical id across the TRT and Enhanced blocks, so an unmigrated protocol
+holding `trt/nebido` beside `enhanced/test_u` schedules it once and records the other in
+`_injSuppressed` with `reason:'duplicate'`. Never remove that dedupe on the grounds that
+the migration makes it redundant — it is what makes the generator safe for a protocol
+nobody has migrated yet.
+
+**Record entry is not planning.** T-Calc's Add sheet still writes past-dated doses the
+user says they took; only its future/plan half is refused. Logging a dose you already
+took is the mid-cycle onboarding path and has no other home yet.
 
 ## ⚠️ THE STACK IS THE CONTAINER — NO INJECTIONS OUTSIDE ONE ⚠️
 Henrik, 2026-08-06: *"T-calc should be used in the stack wizard, and testosterone

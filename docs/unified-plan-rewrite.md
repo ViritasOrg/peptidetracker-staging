@@ -1,7 +1,8 @@
 # Unified Plan rewrite — one scheduler, three tabs
 
-Status: **in progress** — Phases 0, 1 and 3 landed 2026-08-19; Phase 2 largely
-already in place. Next is Phase 4, the merged Compounds tab. See §6.
+Status: **in progress** — Phases 0–5 landed 2026-08-19 (Phase 2 was largely already
+in place). Next is Phase 6: deleting T‑Calc's planner UI, which is currently
+disabled rather than removed. See §6.
 Author: drafted 2026-08-16 with Henrik
 Scope: multi-day. Ships in phases, each independently mergeable and revertible.
 
@@ -149,6 +150,31 @@ Rules, non‑negotiable:
 | Exposure card, evidence citations | "Save to protocol", "Push to schedule" |
 | Bloodwork calibration + SHBG model | `_tcp.manualLog` as an editable list |
 | `Update saved history` → T‑History | every write path listed in §3.4 |
+
+**Phase 5 shipped 2026‑08‑19 as follows.** The suppression is gone from
+`_genInjBatches`, and every T‑Calc write path returns early behind one flag,
+`_TC_PLANNING_REMOVED`, rather than being deleted piecemeal — the curve, the history and
+the whole read side keep working while the planner UI comes out in Phase 6, and a guard
+in one function is a guard one test can verify.
+
+Three things came out of that pairing that the plan had not spelled out:
+
+1. **The generator dedupes by canonical id across the two blocks.** An unmigrated
+   protocol can hold the same molecule as `trt/nebido` and `enhanced/test_u`; with the
+   suppression gone, generating both would recreate the doubling this rewrite exists to
+   end. The second one is skipped and recorded in `_injSuppressed` with
+   `reason:'duplicate'` — visibly, because a row that stops generating with no
+   explanation is the bug, not the fix. One stream per molecule no longer depends on the
+   user having run the migration.
+2. **Record entry survives inside the Add sheet.** That sheet does two jobs through one
+   button: past dates are doses the user says they took, future dates are a plan. Only
+   the plan half is refused. Removing both would have deleted the only way to log a past
+   dose while §8's question about where that lives is still open.
+3. **The two explaining banners were rewritten, not deleted.** "Scheduled in T‑Calc"
+   would now be a lie, and Today's "testosterone not scheduled" alert pointed at a tab
+   that no longer schedules. The first is replaced by a note that fires only for an
+   unmigrated id; the second keeps the alert — the situation it catches is real — and
+   points at Plan ▸ Compounds.
 
 ### 3.4 What gets deleted
 
@@ -311,7 +337,7 @@ Each phase is a mergeable PR that leaves the app working.
 | 2 | Read‑both/write‑one | every id comparison canonicalised; dry‑run report | low |
 | 3 | Scheduler extraction | **DONE 2026‑08‑19** — `inj-writer.js` owns every write; all ten call sites go through it | **high** |
 | 4 | Plan: Compounds tab | TRT + Enhanced editors merged into one | medium |
-| 5 | Un‑suppress the generator | `_genInjBatches` emits testosterone again; CLAUDE.md rule replaced | **high** |
+| 5 | Un‑suppress the generator | **DONE 2026‑08‑19** — `_genInjBatches` emits testosterone; T‑Calc's writes disabled | **high** |
 | 6 | T‑Calc read‑only | every write path in §3.4 deleted; curve reads stored rows only | medium |
 | 7 | Migration | backfill tiers and ids, after dry‑run approval | **high** |
 | 8 | Cleanup | `_TC_TESTO_ALIAS` runtime use and the curve's dedup removed | low |

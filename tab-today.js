@@ -24,6 +24,16 @@ function buildToday(){if(typeof buildTodayRings==='function')buildTodayRings();i
 // Reported 2026-08-15: "even though Enhanced has Nebido scheduled there is no injections
 // in Today for testosterone." Nothing was broken; the protocol had no T-Calc plan bound,
 // so no testosterone existed to render. Say that here, where it was looked for.
+// TESTOSTERONE NOT SCHEDULED — kept, with the reason rewritten (Phase 5).
+// This alert existed because a protocol could hold testosterone that generated nothing:
+// the tiers suppressed it and only T-Calc could schedule it. That suppression is gone,
+// so the old wording ("scheduled only in T-Calc") would now send the user to a tab that
+// no longer schedules anything.
+//
+// The alert itself stays, because the situation it catches still exists — an ester
+// configured with no doses on the calendar, which on 2026-08-15 cost a full day of
+// hunting. What changed is the cause: now it means the protocol has not generated yet,
+// or its cycle has no start date, and the fix is in Plan ▸ Compounds.
 (function(){
   if(!alertWrap)return;
   var _st=_userStacks&&_activeStackIndices&&_activeStackIndices.length?_userStacks[_activeStackIndices[0]]:null;
@@ -34,13 +44,12 @@ function buildToday(){if(typeof buildTodayRings==='function')buildTodayRings();i
   var _sid=(typeof _stackCycleId==='function')?_stackCycleId(_st):(_st.id||'');
   if(_stackHasScheduledTrt(_sid))return;                 // it IS scheduled — say nothing
   var _nm=(_tc.c&&(_tc.c.name||_tc.c.id))||'Testosterone';
-  var _tier=_tc.tier==='trt'?'TRT':'Enhanced';
-  alertWrap.innerHTML='<div onclick="var b=document.getElementById(\'tab-btn-tcalc\');if(b)b.click();" style="cursor:pointer;background:rgba(102,136,204,0.08);border:1px solid #6688cc44;border-left:3px solid #6688cc;border-radius:8px;padding:10px 12px;margin-bottom:10px">'
+  alertWrap.innerHTML='<div onclick="var b=document.getElementById(\'tab-btn-stack\');if(b)b.click();" style="cursor:pointer;background:rgba(102,136,204,0.08);border:1px solid #6688cc44;border-left:3px solid #6688cc;border-radius:10px;padding:10px 12px;margin-bottom:10px;">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:3px">'
       +'<div style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#6688cc">Testosterone not scheduled</div>'
-      +'<div style="font-size:11px;color:#6688cc;flex-shrink:0">Open T-Calc →</div>'
+      +'<div style="font-size:11px;color:#6688cc;flex-shrink:0">Open Plan →</div>'
     +'</div>'
-    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5">“'+_esc(_nm)+'” is configured in this protocol’s '+_tier+' tier, but testosterone is scheduled only in T-Calc and no plan is saved to “'+_esc(_st.name||'this protocol')+'”. That is why no testosterone dose appears here. Tap to set the ester, dose and cadence, then save it to this protocol.</div>'
+    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5">“'+_esc(_nm)+'” is configured in this protocol but has no doses on the calendar. Open it in Plan ▸ Compounds and save to generate them — a protocol with no start date cannot place a schedule on a calendar.</div>'
   +'</div>';
 })();
 var dk=dateKey(NOW);var doses=_dedupInjectionSlots((_injectionsCache[dk]||[]).filter(function(e){return e.active;}));if(!doses.length){var _hasActive=_userStacks&&_userStacks.length&&_activeStackIndices&&_activeStackIndices.length&&_userStacks[_activeStackIndices[0]];if(!_hasActive){var _hasT=(typeof _protocolTemplates!=='undefined'&&_protocolTemplates&&_protocolTemplates.length);var _primary=_hasT?'<button onclick="openTemplatePicker()" style="background:var(--accent);color:#000;border:none;border-radius:20px;padding:10px 20px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Start from a template</button>':'<button onclick="createNewStack()" style="background:var(--accent);color:#000;border:none;border-radius:20px;padding:10px 20px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Build your first protocol</button>';var _secondary=_hasT?'<div><button onclick="createNewStack()" style="background:none;border:none;color:var(--muted2);font-size:12px;cursor:pointer;font-family:inherit;margin-top:10px;text-decoration:underline">Build your own instead</button></div>':'';list.innerHTML='<div class="empty"><div class="empty-icon">💉</div><div style="font-weight:600;color:var(--text);margin-bottom:4px">No protocol yet</div><div style="font-size:13px;color:var(--muted2);margin-bottom:16px;line-height:1.5">Set up your first protocol to see your daily doses here.</div>'+_primary+_secondary+'</div>';}else{var _hid=(typeof _injHidden!=='undefined')?_injHidden:null;
