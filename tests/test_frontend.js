@@ -11731,14 +11731,19 @@ console.log('\n── Compounds tier: folding an old protocol ──────
   // Enhanced tier under its own spelling, while T-Calc wrote the TRT one.
   let buf = _open({id:'p2', name:'Protocol 2', peptides:[], trt:{},
                    enhanced:{enabled:true, compounds:[
-                     {id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'350', unit:'mg/week'},
+                     {id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'350',
+                      unit:'mg/week', cadence:'interval', freqVal:2, freqUnit:'days'},
                      {id:'hgh',    name:'HGH (Somatropin)', dose:'3', unit:'IU/day'}]}});
   check('an Enhanced testosterone folds into the one tier',
     (buf.trt.compounds || []).length === 1);
   check('  …under the canonical id, not the tier it came from',
     buf.trt.compounds[0].id === 'nebido', buf.trt.compounds[0].id);
-  check('  …keeping its dose and unit',
-    buf.trt.compounds[0].dose === '350' && buf.trt.compounds[0].unit === 'mg/week');
+  // A rate becomes an amount on the way in: this block stores what goes in the syringe.
+  // 350 mg/week on an every-2-days cadence is 100 mg. Carrying "mg/week" across is what
+  // produced a dose the editor could not display, and a 28.6 mg injection (2026-08-19).
+  check('  …converting the rate into the amount in the syringe',
+    buf.trt.compounds[0].dose === '100' && buf.trt.compounds[0].unit === 'mg',
+    buf.trt.compounds[0].dose + ' ' + buf.trt.compounds[0].unit);
   check('  …and leaves the tier enabled so it is not silently dormant',
     buf.trt.enabled === true);
   check('non-testosterone compounds stay exactly where they were',
@@ -11799,7 +11804,8 @@ console.log('\n── Protocol migration ─────────────
   // block under its own spelling, HGH beside it.
   const _live = () => ([{id:'protocol_2_nostart', name:'Protocol 2', peptides:[{id:'glow'}],
                          trt:{}, enhanced:{enabled:true, compounds:[
-                           {id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'350', unit:'mg/week'},
+                           {id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'350',
+                            unit:'mg/week', cadence:'interval', freqVal:2, freqUnit:'days'},
                            {id:'hgh', name:'HGH (Somatropin)', dose:'2', unit:'IU/day'}]}}]);
 
   let _stacks = _live();
@@ -11832,7 +11838,9 @@ console.log('\n── Protocol migration ─────────────
       /no injection is added, changed or deleted/.test(_asked));
     check('migrating moves testosterone into the one tier',
       _stacks[0].trt.compounds.length === 1 && _stacks[0].trt.compounds[0].id === 'nebido');
-    check('  …keeping its dose', _stacks[0].trt.compounds[0].dose === '350');
+    check('  …converting the weekly rate to the per-injection amount',
+      _stacks[0].trt.compounds[0].dose === '100' && _stacks[0].trt.compounds[0].unit === 'mg',
+      _stacks[0].trt.compounds[0].dose + ' ' + _stacks[0].trt.compounds[0].unit);
     check('  …leaving everything else where it was',
       _stacks[0].enhanced.compounds.length === 1 &&
       _stacks[0].enhanced.compounds[0].id === 'hgh');
@@ -11907,4 +11915,47 @@ console.log('\n── Rate units convert in both blocks ────────
   check('a weekly rate split across two days is halved',
     wk.length > 0 && wk.every(e => String(e.dose) === '175' && e.unit === 'mg'),
     'first: ' + JSON.stringify(wk.slice(0,2).map(e => e.dose + ' ' + e.unit)));
+}
+
+// ── A dose unit is never displayed as something it is not ────────────────────
+// Henrik, 2026-08-19: "Choosing 100mg every 2 day generates a 28mg dose instead of the
+// planned 100mg. The compound planner still treats it as weekly dose."
+//
+// The entry stored unit "mg/week" — carried in from the Enhanced block by the tier
+// migration — while this dropdown offered only mg/ml/IU/%. A <select> whose options do
+// not contain its value renders the FIRST option, so the screen said "100 mg" and
+// storage said "100 mg/week". The generator then divided, correctly, by a rate the user
+// had never been shown: 100 / 7 * 2 = 28.6 mg.
+console.log('\n── Dose units are shown as stored ─────────────────────────');
+{
+  const G5 = sandbox;
+  const _uSave = {tier:G5._userTier, buf:G5._editBuf};
+  G5._userTier = 3;
+  G5._editBuf = {trt:{enabled:true, compounds:[]}, enhanced:{enabled:false, compounds:[]}};
+
+  const html = G5._renderEditTRT({enabled:true, compounds:[
+    {id:'nebido', name:'Nebido', dose:'100', unit:'mg/week', cadence:'interval',
+     freqVal:2, freqUnit:'days'}]});
+  // The <select> for this compound must carry the stored unit as its selected option.
+  check('a stored rate unit is offered, not silently replaced',
+    /<option selected>mg\/week<\/option>/.test(html),
+    (html.match(/<option[^>]*>[^<]*<\/option>/g) || []).slice(0,8).join(''));
+  check('  …and mg is NOT the one shown as selected',
+    !/<option selected>mg<\/option>/.test(html));
+
+  const plain = G5._renderEditTRT({enabled:true, compounds:[
+    {id:'nebido', name:'Nebido', dose:'100', unit:'mg', freqVal:2, freqUnit:'days'}]});
+  check('a plain mg entry still shows mg', /<option selected>mg<\/option>/.test(plain));
+
+  // Any unit that somehow reaches this screen must be visible, including one the list
+  // does not know — the failure was a value with nowhere to render, not this value.
+  const odd = G5._renderEditTRT({enabled:true, compounds:[
+    {id:'nebido', name:'Nebido', dose:'1', unit:'ampoule/fortnight'}]});
+  check('an unknown unit is appended rather than hidden',
+    /<option selected>ampoule\/fortnight<\/option>/.test(odd));
+
+  check('the list covers the rate units the other tier can produce',
+    ['mg/week','mg/day','mg/EOD'].every(u => G5.TRT_UNITS.indexOf(u) >= 0));
+
+  G5._userTier = _uSave.tier; G5._editBuf = _uSave.buf;
 }
