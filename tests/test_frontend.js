@@ -11478,3 +11478,45 @@ console.log('\n── Month calendar ──────────────�
   G.document = _cSave.doc; G._injectionsCache = _cSave.cache; G.window._peptideLog = _cSave.plog;
   G._viewDate = _cSave.vd; G.showDayInline = _cSave.sdi; G.switchTab = _cSave.st;
 }
+
+// ── No fixed banners over the navbar ─────────────────────────────────────────
+// Henrik, 2026-08-19: "Remove the bottom of screen banners, they block navigation
+// menu in apps. Also stuff like this should already live in Settings."
+// .navbar is position:fixed;bottom:0;z-index:100 — anything else pinned to bottom:0
+// sits on top of it and the app's own navigation stops being reachable.
+console.log('\n── No fixed banners over the navbar ───────────────────────');
+{
+  const _bSrc = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  const _bToday = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+  const _allJs = rawScript + _bToday;
+  check('nothing pins itself to the bottom of the screen',
+    !/position:fixed;bottom:0/.test(_allJs));
+  check('  …the local-data sync bar is gone',      !/sync-bar/.test(_allJs));
+  check('  …and the update banner with it',        !/New version <strong/.test(_allJs));
+
+  // Removing a banner must not remove the action it carried.
+  check('syncing local dose logs moved into Settings',
+    /id="peptide-sync-btn" onclick="pushAllPeptideToBackend\(\)"/.test(_bSrc));
+  check('  …inside the Data section',
+    _bSrc.indexOf('id="s-sec-data"') < _bSrc.indexOf('id="peptide-sync-btn"') &&
+    _bSrc.indexOf('id="peptide-sync-btn"') < _bSrc.indexOf('id="s-sec-app"'));
+  check('  …and the button resets instead of removing a bar it no longer sits in',
+    /btn.textContent='Sync';btn.disabled=false;/.test(rawScript) &&
+    !/closest\('\.sync-bar'\)/.test(rawScript));
+
+  // A version found on load lands on the Settings row, same as pressing Check.
+  const _uSave = {doc:G.document};
+  let _btn = {textContent:'Check', disabled:false, style:{}, onclick:null};
+  G.document = Object.assign({}, _uSave.doc,
+    {getElementById:(id)=> id==='s-update-btn' ? _btn : _uSave.doc.getElementById(id)});
+  G._markUpdateAvailable('9.99');
+  check('a detected update marks the Settings version row',
+    _btn.textContent === 'Update to v9.99' && _btn.disabled === false &&
+    typeof _btn.onclick === 'function');
+  _btn = null;
+  G.document = Object.assign({}, _uSave.doc, {getElementById:()=>null});
+  let _threw = false;
+  try { G._markUpdateAvailable('9.99'); } catch(e){ _threw = true; }
+  check('  …and does nothing when that row is not on screen', !_threw);
+  G.document = _uSave.doc;
+}
