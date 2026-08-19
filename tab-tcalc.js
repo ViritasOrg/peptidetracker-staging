@@ -1076,12 +1076,8 @@ async function _tcPostPlanInjections(st, cyc, c, plan, fromDate){
                   ester: meta.ester, half_life_days: meta.half_life_days, route: null});
   }
   if (!entries.length) return 0;
-  try{
-    var r = await fetch(AGENT_URL + '/injections/batch', {method:'POST', headers:h,
-      body: JSON.stringify({cycle_id: cyc, compound_id: c.id,
-                            from_date: dateKey(f0), entries: entries})});
-    if (!r.ok){ _logHttp('tcPlanInj', r.status, '/injections/batch'); return 0; }
-  }catch(e){ _logErr('tcPlanInj', e); return 0; }
+  var r = await injWriteBatch(cyc, c.id, dateKey(f0), entries, 'tcPlanInj');
+  if (!r || !r.ok) return 0;
   return entries.length;
 }
 
@@ -1120,7 +1116,7 @@ async function _tcWritePlanToStack(st, plan){
     // not leave the Testoviron shots standing beside the new ones.
     var ids = (oldId && oldId !== c.id) ? [oldId, c.id] : [c.id];
     for (var i = 0; i < ids.length; i++){
-      try { await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(cyc)+'&compound_id='+encodeURIComponent(ids[i])+'&from_date='+td+'&unlogged_only=true', {method:'DELETE', headers:h}); } catch(_e){}
+      await injClearFuture(cyc, ids[i], td, {tag:'tcPlanPrune'});
     }
   }
   // The generator covers every OTHER tier of this stack. It cannot cover testosterone —
@@ -2137,12 +2133,8 @@ async function _tcCreateLoggedInjections(compId, doseMg, dates, seriesId){
                 time_of_day: null, active: true, logged: true, source: 'manual',
                 series_id: seriesId || null,
                 ester: meta.ester, half_life_days: meta.half_life_days, route: null};
-    try{
-      var r = await fetch(AGENT_URL + '/injections',
-                          {method:'POST', headers: authHeaders({'Content-Type':'application/json'}),
-                           body: JSON.stringify(body)});
-      if (r.ok) ok++; else _logHttp('tcAddInj', r.status, '/injections');
-    }catch(e){ _logErr('tcAddInj', e); }
+    var r = await injWriteOne(body, 'tcAddInj');
+    if (r && r.ok) ok++;
   }
   return ok;
 }
@@ -2167,12 +2159,8 @@ async function _tcCreatePlannedInjections(compId, doseMg, dates, seriesId){
                 time_of_day: null, active: true, logged: false, source: 'tcalc',
                 series_id: seriesId || null,
                 ester: meta.ester, half_life_days: meta.half_life_days, route: null};
-    try{
-      var r = await fetch(AGENT_URL + '/injections',
-                          {method:'POST', headers: authHeaders({'Content-Type':'application/json'}),
-                           body: JSON.stringify(body)});
-      if (r.ok) ok++; else _logHttp('tcAddPlanInj', r.status, '/injections');
-    }catch(e){ _logErr('tcAddPlanInj', e); }
+    var r = await injWriteOne(body, 'tcAddPlanInj');
+    if (r && r.ok) ok++;
   }
   return ok;
 }
@@ -4174,9 +4162,7 @@ async function _tcClearStackConfigTrt(stack){
   if(h&&_cyc){
     var _n=new Date();_n.setHours(0,0,0,0);
     var _td=_n.getFullYear()+'-'+String(_n.getMonth()+1).padStart(2,'0')+'-'+String(_n.getDate()).padStart(2,'0');
-    for(var _i=0;_i<_cids.length;_i++){
-      try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cyc)+'&compound_id='+encodeURIComponent(_cids[_i])+'&from_date='+_td+'&unlogged_only=true',{method:'DELETE',headers:h});}catch(_e){}
-    }
+    await injClearFutureMany(_cyc, _cids, _td, {tag:'tcClearHome'});
   }
 }
 // Assign (copy) the T-Calc testosterone to a stack — active OR inactive. Clears the
@@ -4224,11 +4210,7 @@ async function _tcSetTargetStack(stackId){
       var _n=new Date();_n.setHours(0,0,0,0);
       var _td=_n.getFullYear()+'-'+String(_n.getMonth()+1).padStart(2,'0')+'-'+String(_n.getDate()).padStart(2,'0');
       var _tids=(typeof _tcAllCompIds==='function')?_tcAllCompIds():[];
-      for(var _ti=0;_ti<_tids.length;_ti++){
-        try{await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(oldCid)
-          +'&compound_id='+encodeURIComponent(_tids[_ti])
-          +'&from_date='+_td+'&unlogged_only=true',{method:'DELETE',headers:h});}catch(_e){}
-      }
+      await injClearFutureMany(oldCid, _tids, _td, {tag:'tcMoveStack'});
     }
   }
   await _tcSyncLogToBackend();
@@ -4303,12 +4285,7 @@ async function _tcSyncLogToBackend() {
     // spellings are covered, and awaiting each in turn made every save ten sequential
     // round-trips — slow on a phone, and it pushed the write far enough down the
     // microtask queue to change when callers observe it.
-    await Promise.all(_tid2.map(function(_id){
-      return fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(_cid)
-        +'&compound_id='+encodeURIComponent(_id)
-        +'&from_date='+todayStr+'&unlogged_only=true',{method:'DELETE',headers:h})
-        .catch(function(){});   // one failed prune must not abort the rest, nor the write
-    }));
+    await injClearFutureMany(_cid, _tid2, todayStr, {tag:'tcSyncPrune'});
   }catch(_e){}
 
   var compIds=Object.keys(byComp);
@@ -4329,13 +4306,7 @@ async function _tcSyncLogToBackend() {
         source:'tcalc'
       };
     });
-    try{
-      await fetch(AGENT_URL+'/injections/batch',{
-        method:'POST',
-        headers:Object.assign({'Content-Type':'application/json'},h),
-        body:JSON.stringify({cycle_id:_cid,compound_id:cid,from_date:todayStr,entries:entries})
-      });
-    }catch(_e){}
+    await injWriteBatch(_cid, cid, todayStr, entries, 'tcSyncWrite');
   }
 
   if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
