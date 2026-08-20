@@ -4133,9 +4133,16 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
   // nobody replaces it with a glob again.
   console.log('\n── Promotion syncs what index.html loads ──────────────────');
   {
-    const wf = path.join(path.dirname(path.resolve(htmlPath)),
-                         '.github', 'workflows', 'promote-to-prod.yml');
-    if (!fs.existsSync(wf)) {
+    // STAGING-ONLY. promote-to-prod.yml is prod-owned and deliberately NOT synced —
+    // prod keeps its own copy, which legitimately lacks staging's derivation. Asserting
+    // it there is what failed prod PR #325 on 2026-08-20 with 3 of my own tests, the
+    // third time this class of mistake has blocked a promotion. Same guard as the gate
+    // tests below; see _isProdCheckout.
+    const _pmDir = path.dirname(path.resolve(htmlPath));
+    const wf = path.join(_pmDir, '.github', 'workflows', 'promote-to-prod.yml');
+    if (_isProdCheckout(_pmDir)) {
+      console.log('  – skipped on ' + _repoName(_pmDir) + ' (staging-only workflow)');
+    } else if (!fs.existsSync(wf)) {
       check('promote-to-prod.yml is present', false, wf);
     } else {
       const y = fs.readFileSync(wf, 'utf8');
@@ -4152,7 +4159,10 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       check('  …and refusing to promote a prod tree that cannot load',
         /prod would be missing modules index\.html loads/.test(y));
 
-      // The concrete file that was dropped, named so its loss is unmistakable.
+    }
+    // OUTSIDE the guard on purpose: index.html IS promoted, so this one is just as true
+    // on prod — and prod is exactly where its absence broke the build.
+    {
       const html = fs.readFileSync(path.resolve(htmlPath), 'utf8');
       check('index.html still loads inj-writer.js, the module that was missed',
         /src="inj-writer\.js/.test(html));
@@ -7862,6 +7872,35 @@ console.log('\n\u2500\u2500 T-calc: a dated draw calibrates \u2500\u2500');
 // findings get triaged in the Security tab; they are not a reason to refuse to ship.
 // Test failures still block — that part must never be relaxed.
 console.log('\n\u2500\u2500 Promotion: CI gate scope \u2500\u2500');
+// ── WHICH REPO IS THIS CHECKOUT? ────────────────────────────────────────────
+// tests/ is copied wholesale into prod by the promotion, so any test asserting
+// STAGING-ONLY infrastructure — the promote workflow, dev tooling — runs there too and
+// fails against files that legitimately differ or do not exist.
+//
+// This has now cost three promotions. It pinned prod at v1.271 in Aug 2026, it was
+// misreported as "5 pre-existing failures" on 2026-08-15, and on 2026-08-20 three new
+// promote-manifest tests failed prod PR #325 the same way. One helper, so the next
+// workflow test cannot repeat it.
+//
+// On CI, GITHUB_REPOSITORY names the repo. Locally it is unset and the origin remote
+// answers instead. An UNIDENTIFIABLE checkout runs the tests in full — indeterminate
+// stays loud, so a real regression in staging can never hide behind a missing remote.
+function _repoName(dir) {
+  var r = process.env.GITHUB_REPOSITORY || '';
+  if (!r) {
+    try {
+      var cfg = require('fs').readFileSync(require('path').join(dir, '.git/config'), 'utf8');
+      var m = cfg.match(/\[remote "origin"\][^[]*?url\s*=\s*(\S+)/);
+      if (m) r = m[1].replace(/\.git$/, '');
+    } catch (e) { /* no .git — a tarball or vendored copy; stay indeterminate */ }
+  }
+  return r;
+}
+function _isProdCheckout(dir) {
+  var r = _repoName(dir);
+  return !!r && !/-(staging|stage)$/.test(r);
+}
+
 {
   // These assert THIS repo's promote-to-prod.yml — a staging-repo workflow. The
   // promotion copies index.html, tab-*.js, ci.yml and tests/ into prod, but not the
@@ -7880,17 +7919,10 @@ console.log('\n\u2500\u2500 Promotion: CI gate scope \u2500\u2500');
   // nothing actually broken. Not hypothetical — that is exactly how prod came to be
   // reported as having "5 pre-existing failures" while its CI was green (2026-08-15).
   // The origin remote names the repo the working tree came from, so ask that instead.
-  var _pgRepo = process.env.GITHUB_REPOSITORY || '';
-  if (!_pgRepo) {
-    try {
-      var _pgCfg = require('fs').readFileSync(require('path').join(dir, '.git/config'), 'utf8');
-      var _pgM = _pgCfg.match(/\[remote "origin"\][^[]*?url\s*=\s*(\S+)/);
-      if (_pgM) _pgRepo = _pgM[1].replace(/\.git$/, '');
-    } catch (e) { /* no .git — a tarball or vendored copy; stay indeterminate */ }
-  }
-  // Indeterminate stays LOUD: an unidentifiable checkout runs them rather than skipping,
-  // so a real regression in staging's gate can never hide behind a missing remote.
-  var _pgIsProd = _pgRepo && !/-(staging|stage)$/.test(_pgRepo);
+  // Detection lives in _repoName/_isProdCheckout above — one implementation, because
+  // two copies of this rule is how the 2026-08-20 repeat happened.
+  var _pgRepo = _repoName(dir);
+  var _pgIsProd = _isProdCheckout(dir);
   if (_pgIsProd) {
     console.log('  – skipped on ' + _pgRepo + ' (staging-only workflow)');
   } else {
