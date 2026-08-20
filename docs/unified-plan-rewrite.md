@@ -465,11 +465,27 @@ Those encode bugs that cost a day; they must survive the restructure.
    is what finally fixes. Every phase must still leave staging working, but no phase needs
    to be independently promotable.
 
-**Still open:**
+**Still open:** *(nothing — 3 and 4 both closed 2026‑08‑20)*
 
-3. **Where does "log a past dose" live?** `_tcCreateLoggedInjections` is the only
-   surviving record‑entry path from T‑Calc (§3.4). Today, or the Compounds tab?
-   Needed by Phase 6, not before.
+3. ~~**Where does "log a past dose" live?**~~ — **answered 2026‑08‑20: Today.**
+   Henrik: *"Keep the log Past Injection on Today screen!"* It already lives there
+   (`index.html` ▸ "+ Log a past injection" → `openPastInjection()` in `tab-thist.js`),
+   and that is the home. T‑History's identical button is the same function, not a
+   second implementation.
+
+   Two things came out of settling it:
+
+   - **That path was the last injection write outside `inj-writer.js`**, and the test
+     that forbids exactly this missed it on a technicality: the pattern required
+     `method:'POST'` with no space and the line reads `method: 'POST'`. Widening it to
+     `method:\s*'…'` exposed a second escapee, T‑Calc's by‑id `DELETE /injections/<id>`.
+     Both now go through the module — `injWriteOne` and a new `injDeleteOne`. A rule a
+     formatter can step around is not a rule.
+   - **T‑Calc's own Add sheet is NOT redundant, and stays for now.** It can log a *run*
+     of past doses (count + interval) — the mid‑cycle onboarding path — and Today's
+     sheet does one dose at a time. Removing it would delete a capability nobody asked
+     to lose. Porting series entry to Today's sheet would make it genuinely redundant;
+     that is a decision for Henrik, not a cleanup.
 4. ~~**Migration timing**~~ — **closed 2026‑08‑20 (§6.1).** Legacy rows stay readable,
    new writes are canonical, and the backfill is one deletion rather than a bulk pass.
    The dose question is answered too: 6 Aug was 100 mg, already recorded, so the

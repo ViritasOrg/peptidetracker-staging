@@ -66,6 +66,31 @@ async function injWriteOne(row, tag){
   }catch(e){ _injLogErr(tag || 'injWriteOne', e); return null; }
 }
 
+// DELETE /injections/<id> — remove ONE stored row, addressed by its id.
+//
+// Distinct from injClearFuture below, which clears a range: this one names exactly the
+// row it removes, so it needs no cycle/compound/date scoping and cannot over-match.
+// It lived in tab-tcalc.js as _tcDeleteStoredInjection until 2026-08-20, the last
+// injection write outside this module — it escaped the test that forbids that because
+// the pattern required `method:'DELETE'` with no space and it wrote `method: 'DELETE'`.
+//
+// 404 means the row is already gone, which satisfies the caller's intent either way.
+async function injDeleteOne(injId, tag){
+  if(!injId){
+    _injLogErr(tag || 'injDeleteOne', new Error('refused: no injection id'));
+    return false;
+  }
+  try{
+    var r = await fetch(AGENT_URL + '/injections/' + encodeURIComponent(injId),
+                        {method:'DELETE', headers: authHeaders()});
+    if(!r.ok && r.status !== 404){
+      _injLogHttp(tag || 'injDeleteOne', r.status, '/injections/' + injId);
+      return false;
+    }
+    return true;
+  }catch(e){ _injLogErr(tag || 'injDeleteOne', e); return false; }
+}
+
 // DELETE /injections — clear a compound's PLAN from a date forward.
 //
 // unlogged_only defaults to true here, where the old call sites had to remember
