@@ -1,9 +1,10 @@
 # Unified Plan rewrite — one scheduler, three tabs
 
 Status: **in progress** — Phases 0–6 landed 2026‑08‑19/20 (Phase 2 was largely
-already in place). Phase 7's dry run is done (§6.1): staging holds exactly one
-non‑canonical row, and it is blocked on Henrik deciding what its dose meant, not on
-code. Phase 8 (dropping the alias at runtime) follows. See §6.
+already in place). Phase 7 resolved to a single deletion (§6.1) — the one non‑canonical
+row turned out to duplicate a dose already recorded correctly — and is waiting only on
+Henrik running it in the admin Records tab. Phase 8 (dropping the alias at runtime)
+follows once it is gone. See §6.
 Author: drafted 2026-08-16 with Henrik
 Scope: multi-day. Ships in phases, each independently mergeable and revertible.
 
@@ -340,7 +341,7 @@ Each phase is a mergeable PR that leaves the app working.
 | 4 | Plan: Compounds tab | TRT + Enhanced editors merged into one | medium |
 | 5 | Un‑suppress the generator | **DONE 2026‑08‑19** — `_genInjBatches` emits testosterone; T‑Calc's writes disabled | **high** |
 | 6 | T‑Calc read‑only | **DONE 2026‑08‑20** — planner UI and every write path deleted; curve reads stored rows only | medium |
-| 7 | Migration | dry run done (§6.1) — one row to patch, awaiting Henrik's call on its dose | **high** |
+| 7 | Migration | dry run done (§6.1) — one duplicate row to **delete**; action specified, awaiting Henrik running it | medium |
 | 8 | Cleanup | `_TC_TESTO_ALIAS` runtime use and the curve's dedup removed | low |
 
 ### 6.1 Phase 7 dry run — staging, read 2026‑08‑20
@@ -360,19 +361,33 @@ Read straight off `GET /admin-data/records?app=peptide-stage&file=injections.jso
 
 Everything already carries a canonical id — `testoviron` is a catalogue id in its own
 right — **except one row**: the single logged `test_u`/`enhanced` dose of 6 Aug, stored
-as `350 mg/week`. So the whole of Phase 7 in staging is that one row, and it needs two
-independent decisions:
+as `350 mg/week`.
 
-1. **Id and tier** — `test_u` → `nebido`, `enhanced` → `trt`. Mechanical.
-2. **The dose itself** — `mg/week` is a rate, not a per‑injection amount, so the free‑T
-   model reads it as a real 350 mg dose on 6 Aug. Whether that is a 350 mg injection, a
-   weekly rate mis‑stored on a single day, or a stray, is Henrik's call, not a migration
-   rule. **The backfill must not guess it.**
+**Resolved 2026‑08‑20 — it is a duplicate, and the action is DELETE, not patch.**
+Henrik confirmed the injection on 6 Aug was 100 mg. That dose is already in the record,
+correctly, as `nebido`/`trt`/`manual` id `0eeb462c`, part of an unbroken every‑2‑days
+100 mg cadence (2, 4, 6, 8, 10, 12 Aug). The `test_u` row is a second row for the same
+day, left behind by the Enhanced‑tier scheduling this rewrite removes. Migrating it to
+`nebido`/`trt` would have written a **second** 100 mg dose onto 6 Aug — the migration
+would itself have corrupted the record it was meant to normalise.
 
-Because it is one row, no migration endpoint is warranted: the admin Records tab can
-patch it directly. Phase 7 reduces to that patch plus re‑running this query to confirm
-zero non‑canonical ids remain. Answers §8.4 — legacy rows stay readable, new writes are
-canonical, and the backfill is this single correction rather than a bulk pass.
+**Correction to an earlier reading in this document.** The `mg/week` row does *not*
+inflate the free‑T curve. Both curve inputs guard the unit: `_tcFetchHistory` and
+`_tcProtocolInjections` each carry `if (unit !== 'mg') return;`, so a rate‑unit row is
+discarded before it reaches the model. That guard exists precisely for this shape. The
+row is invisible to the curve and always has been; the reason to remove it is that it is
+a duplicate and it blocks Phase 8, not that it distorts anything.
+
+Phase 7 therefore reduces to: delete injection id
+`28455f1d-06af-4337-bd10-dfe4565bcf7f` via the admin Records tab (a logged row, so it
+takes the second confirmation), then re‑run the query above to confirm zero
+non‑canonical ids remain. No migration endpoint is warranted for one row. Answers §8.4 —
+legacy rows stay readable, new writes are canonical, and the backfill is this single
+deletion rather than a bulk pass.
+
+**Rule this leaves behind:** a dry run must check whether the canonical target *already
+exists* before proposing a rewrite. Id‑and‑tier normalisation looks purely mechanical
+right up to the point where it collides with a row that is already correct.
 
 Phases 3 and 5 are where this can go wrong. Both touch the code that writes the user's
 record; both need the full behavioural test set below green before merge.
@@ -419,10 +434,10 @@ Those encode bugs that cost a day; they must survive the restructure.
 3. **Where does "log a past dose" live?** `_tcCreateLoggedInjections` is the only
    surviving record‑entry path from T‑Calc (§3.4). Today, or the Compounds tab?
    Needed by Phase 6, not before.
-4. ~~**Migration timing**~~ — **answered by the dry run (§6.1).** Legacy rows stay
-   readable, new writes are canonical, and the backfill is one row rather than a bulk
-   pass. What is still open is not the timing but the *value*: what the 350 mg/week on
-   that row was meant to be.
+4. ~~**Migration timing**~~ — **closed 2026‑08‑20 (§6.1).** Legacy rows stay readable,
+   new writes are canonical, and the backfill is one deletion rather than a bulk pass.
+   The dose question is answered too: 6 Aug was 100 mg, already recorded, so the
+   `350 mg/week` row is a duplicate to remove.
 
 ---
 
