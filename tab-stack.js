@@ -400,7 +400,16 @@ function _collectEditInputs(){
   var nameEl=document.getElementById('edit-stack-name');
   if(nameEl)_editBuf.name=nameEl.value;
   var csEl=document.getElementById('edit-cycle-start');if(csEl){if(csEl.value)_editBuf.cycle_start=csEl.value;else delete _editBuf.cycle_start;}
-  delete _editBuf.end_date;
+  // READ the end date, do not DELETE it. This line was `delete _editBuf.end_date;` —
+  // correct while the editor had no end-date field and the months dropdown was the only
+  // way to set a length, and a live landmine the moment one existed: _collectEditInputs
+  // runs on every save and on every compound toggle, so the date would have survived
+  // being typed and then vanished on the next interaction.
+  var ceEl=document.getElementById('edit-cycle-end');
+  if(ceEl){
+    if(ceEl.value)_editBuf.end_date=ceEl.value; else delete _editBuf.end_date;
+    _editBuf.cycle_length=_cycleWeeksBetween(_editBuf.cycle_start,_editBuf.end_date);
+  }
   (_editBuf.peptides||[]).forEach(function(p,pi){
     var el;
     TIME_SLOTS.forEach(function(t){
@@ -418,6 +427,74 @@ function _deriveEarliestStartDate(peptides){
   dates.sort();
   return dates[0];
 }
+// ── EDITING A PROTOCOL SETS DATES, NOT A NUMBER OF MONTHS ───────────────────
+// Henrik, 2026-08-20: "Edit Protocol needs to be able to set start and end date. The
+// no of months is to course. It makes sense in the wizard when u create a protocol but
+// not when you edit it."
+//
+// Creating is a choice about LENGTH — "a 12-week run" — and a months dropdown says that
+// well. Editing is a correction to a run already under way, where the thing you know is
+// the date it actually ends. Rounding that to the nearest month is the wrong instrument.
+//
+// end_date becomes authoritative in the editor. cycle_length is kept in step with it
+// rather than replaced, because the week counters, the shopping list and the injection
+// generator all read cycle_length and rewriting every consumer in one change is how
+// regressions become impossible to attribute.
+//
+// Weeks are rounded UP: a 100-day protocol is 15 weeks, not 14, so nothing derived from
+// the length stops short of the end date the user set.
+function _cycleWeeksBetween(startStr, endStr){
+  if(!startStr || !endStr) return 0;
+  var a=parseLocalDate(startStr), b=parseLocalDate(endStr);
+  if(!(b > a)) return 0;
+  return Math.ceil((b - a) / (7 * 86400000));
+}
+// The end date a protocol currently implies, whichever way it was set.
+function _cycleEndDateStr(st){
+  if(!st) return '';
+  if(st.end_date) return st.end_date;
+  if(st.cycle_start && st.cycle_length > 0){
+    var d=parseLocalDate(st.cycle_start);
+    d.setDate(d.getDate() + st.cycle_length * 7);
+    return dateKey(d);
+  }
+  return '';
+}
+function editSetCycleStart(v){
+  _collectEditInputs();
+  if(v) _editBuf.cycle_start=v; else delete _editBuf.cycle_start;
+  // Moving the start past the end would invert the protocol; carry the end with it.
+  if(_editBuf.end_date && _editBuf.cycle_start &&
+     parseLocalDate(_editBuf.end_date) <= parseLocalDate(_editBuf.cycle_start)){
+    delete _editBuf.end_date;
+    _editBuf.cycle_length=0;
+  }else if(_editBuf.end_date){
+    _editBuf.cycle_length=_cycleWeeksBetween(_editBuf.cycle_start,_editBuf.end_date);
+  }
+  renderStackEditor();
+}
+function editSetCycleEnd(v){
+  _collectEditInputs();
+  if(!v){
+    // Cleared = runs until stopped. Both fields say so, so nothing can disagree.
+    delete _editBuf.end_date;
+    _editBuf.cycle_length=0;
+    renderStackEditor();
+    return;
+  }
+  if(_editBuf.cycle_start && parseLocalDate(v) <= parseLocalDate(_editBuf.cycle_start)){
+    // Refused rather than silently corrected: an end on or before the start is a typo,
+    // and quietly moving it would hide which of the two dates the user got wrong.
+    _editBuf._cycleErr='The end date must be after the start date.';
+    renderStackEditor();
+    return;
+  }
+  delete _editBuf._cycleErr;
+  _editBuf.end_date=v;
+  _editBuf.cycle_length=_cycleWeeksBetween(_editBuf.cycle_start,v);
+  renderStackEditor();
+}
+
 function renderStackEditor(){
   var body=document.getElementById('stack-body');if(!body)return;
   var st=_editBuf;var _noEnd=(st.cycle_length===0);var cycle=_noEnd?0:(st.cycle_length||12);
@@ -499,19 +576,39 @@ function renderStackEditor(){
   html+='<button onclick="buildStackStore()" style="background:none;border:none;color:var(--muted2);font-size:24px;cursor:pointer;padding:0;line-height:1;">←</button>';
   html+='<input id="edit-stack-name" type="text" value="'+_esc(st.name||'')+'" oninput="_editBuf.name=this.value" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:15px;font-weight:600;font-family:inherit;outline:none;">';
   html+='</div>';
-  html+='<div class="wiz-section">Cycle Start</div>';
+  html+='<div class="wiz-section">Runs</div>';
   var _dateInputStyle='background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none;width:100%;box-sizing:border-box;';
   var _clearBtnStyle='background:none;border:none;color:var(--muted2);font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap;padding:4px 0;flex-shrink:0;';
-  html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
-  html+='<input type="date" id="edit-cycle-start" value="'+_esc(_effCs)+'" onchange="_collectEditInputs();renderStackEditor();" style="'+_dateInputStyle+'">';
-  if(_effCs)html+='<button onclick="delete _editBuf.cycle_start;delete _editBuf.end_date;renderStackEditor();" style="'+_clearBtnStyle+'">Clear</button>';
+  var _lblStyle='font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted);text-transform:uppercase;margin-bottom:6px;display:block;';
+  var _effEnd=_cycleEndDateStr(st);
+  html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:6px;">';
+  html+='<div><label style="'+_lblStyle+'">From</label>'
+     +  '<input type="date" id="edit-cycle-start" value="'+_esc(_effCs)+'" onchange="editSetCycleStart(this.value)" style="'+_dateInputStyle+'"></div>';
+  html+='<div><label style="'+_lblStyle+'">To</label>'
+     +  '<input type="date" id="edit-cycle-end" value="'+_esc(_effEnd)+'"'+(_effCs?(' min="'+_esc(_effCs)+'"'):'')+' onchange="editSetCycleEnd(this.value)" style="'+_dateInputStyle+'"></div>';
+  html+='</div>';
+  if(st._cycleErr){
+    html+='<div style="font-size:12px;color:#e05050;margin-bottom:6px;">'+_esc(st._cycleErr)+'</div>';
+  }
+  html+='<div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">';
+  if(_effEnd)html+='<button onclick="editSetCycleEnd(\'\')" style="'+_clearBtnStyle+'">No end date</button>';
+  if(_effCs)html+='<button onclick="_collectEditInputs();delete _editBuf.cycle_start;delete _editBuf.end_date;_editBuf.cycle_length=0;renderStackEditor();" style="'+_clearBtnStyle+'">Clear dates</button>';
   html+='</div>';
   if(_effCs&&!_noEnd&&cycle){var _sd=parseLocalDate(_effCs);var _dDone=Math.max(0,Math.floor((NOW-_sd)/86400000));var _wk=Math.min(cycle,Math.floor(_dDone/7)+1);html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">Week '+_wk+' of '+cycle+'</div>';}else if(_effCs&&_noEnd){var _sd=parseLocalDate(_effCs);var _dDone=Math.max(0,Math.floor((NOW-_sd)/86400000));html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">Week '+(Math.floor(_dDone/7)+1)+' · ongoing</div>';}else{html+='<div style="margin-bottom:16px;"></div>';}
-  html+='<div class="wiz-section">Cycle Length</div>';
-  html+='<select onchange="_collectEditInputs();_editBuf.cycle_length=parseInt(this.value);renderStackEditor();" style="'+_CYCLE_SELECT_STYLE+'">';
-  html+='<option value="0"'+(_noEnd?' selected':'')+'>No end date</option>';
-  CYCLE_WEEKS.forEach(function(w){var mo=w/4;html+='<option value="'+w+'"'+(cycle===w?' selected':'')+'>'+(mo===1?'1 month':mo+' months')+'</option>';});
-  html+='</select>';
+  // The months dropdown is gone from the EDITOR — dates are finer and are what you
+  // know when correcting a run already going. It stays in the wizard, where the choice
+  // really is "how long shall this be". The derived length is shown, not chosen, so the
+  // number the rest of the app uses is visible rather than hidden.
+  if(_effCs&&_effEnd){
+    var _wks=_cycleWeeksBetween(_effCs,_effEnd);
+    var _days=Math.max(0,Math.round((parseLocalDate(_effEnd)-parseLocalDate(_effCs))/86400000));
+    html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">'
+       +  _days+' days · '+_wks+' week'+(_wks===1?'':'s')+'</div>';
+  }else if(_effCs){
+    html+='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;">No end date — runs until you stop it.</div>';
+  }else{
+    html+='<div style="margin-bottom:16px;"></div>';
+  }
   html+=_stackTabBar(_editInnerTab,'setEditInnerTab');
   if(_editInnerTab==='compounds'){
     html+=_renderEditCompounds(st);
@@ -753,6 +850,10 @@ function editPickPeptide(id){
 }
 async function saveEditBuf(){
   _collectEditInputs();
+  // _cycleErr is a message on the screen, not part of the protocol. Without this it
+  // would be written to stacks.json and come back on the next load as a permanent
+  // error the user cannot clear.
+  delete _editBuf._cycleErr;
   // If the user changed a dose away from the active ramp value, cancel the ramp
   (_editBuf.peptides||[]).forEach(function(p){
     if(!p.dose_phases||!p.dose_phases.length)return;
@@ -3347,7 +3448,13 @@ function _genInjBatches(stack,cycleId,fromDate){
   if(!stack||!stack.cycle_start)return[];
   var cycleStart=parseLocalDate(stack.cycle_start);
   var cycleEnd;
-  if(stack.cycle_length&&stack.cycle_length>0){cycleEnd=new Date(cycleStart.getTime()+stack.cycle_length*7*86400000);}
+  // end_date WINS when set. The editor writes an exact date and keeps cycle_length in
+  // step with it, but the length is whole weeks — rounded UP — so a protocol ending on
+  // a Wednesday would otherwise generate to the following Sunday. Asking for precise
+  // dates and then scheduling to a rounded week is the failure this whole change
+  // exists to avoid; the exact date is the one the user typed.
+  if(stack.end_date){cycleEnd=parseLocalDate(stack.end_date);}
+  else if(stack.cycle_length&&stack.cycle_length>0){cycleEnd=new Date(cycleStart.getTime()+stack.cycle_length*7*86400000);}
   else{cycleEnd=new Date(NOW.getTime()+365*86400000);}
   var genStart=fromDate?new Date(Math.max(cycleStart.getTime(),fromDate.getTime())):cycleStart;
   var batches=[];
