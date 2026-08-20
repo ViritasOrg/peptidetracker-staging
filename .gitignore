@@ -1,0 +1,5 @@
+
+# Curve-fingerprint fixtures: fetched from the backend at run time.
+# Compound data does not get committed to an app repo (see CLAUDE.md).
+tools/cat.json
+tools/trtcat.json

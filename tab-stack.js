@@ -106,9 +106,28 @@ async function wizSave(){
     if(_userStacks.length===1){_activeStackIndices=[0];if(typeof _ensureCycleStart==='function')_ensureCycleStart(0);}
   }
   _userStacks=_userStacks.slice(0,4);
+  // ── THE WIZARD'S TESTOSTERONE STEP WRITES INTO THE PROTOCOL ───────────────
+  // It used to write into T-Calc's simple planner and then hand the user over to
+  // that tab. Phase 6 deleted the planner, and this hand-off was left behind: the
+  // dose and cadence went into `_tcp.simplePlan`, a field the profile now keeps
+  // only so old saves are not rewritten and which NOTHING reads. So a user who
+  // filled in all four fields — compound, dose, cadence, first injection — got
+  // their schedule silently discarded and was dropped on a tab with no planner on
+  // it. Nothing was scheduled, and nothing said so.
+  //
+  // The protocol is the only scheduler now, so the plan folds into the protocol's
+  // own TRT compound before the save, where generateAndPushInjections() below can
+  // see it. Same shape the classic multi-compound step produces, so there is one
+  // representation of a scheduled compound and not two.
+  //
+  // Only when the classic step did NOT configure testosterone inline: that path
+  // already wrote real compounds, and overwriting them with a half-filled planner
+  // is what `_trtInline` has always guarded against.
+  _wizFoldTrtPlanIntoProto(proto);
   // Single-source guard: if this stack now has its own TRT config AND a T-Calc plan
   // is assigned to it, warn and let the user keep one source (may clear proto.trt).
-  // Fast-path: only engage when this stack is the current T-Calc target.
+  // Fast-path: only engage when this stack is the current T-Calc target. Inert since
+  // the hand-off above stopped assigning a target; left in place rather than removed.
   if(typeof _reconcileStackTestoSource==='function'&&typeof _tcp!=='undefined'&&_tcp&&proto&&_tcp.targetStackId===proto.id)await _reconcileStackTestoSource(proto);
   var res=await saveStacksToBackend();
   updateWEEKLY();
@@ -119,56 +138,18 @@ async function wizSave(){
   buildSchedule();
   buildStackStore();
   closeWizard();
-  // Hand off to T-Calc when this protocol involves testosterone: it is where the
-  // schedule is built, and the stack is assigned as the T-Calc target so the plan and
-  // the protocol stay linked.
+  // WHERE THE USER LANDS after building a protocol.
   //
-  // The handoff used to be skipped when the user had configured testosterone inline in
-  // the classic multi-compound step, because that config generated its own injections.
-  // It does not any more (rule 2026-08-14 — T-Calc is the only scheduler), so skipping
-  // it left the classic path a dead end: settings saved, nothing scheduled, and no
-  // route to the tab that would schedule it. The classic step still owns what the
-  // protocol RECORDS; T-Calc owns when it is injected, and the user lands there either
-  // way. `_trtInline` still guards the plan commit below, so a classic configuration
-  // is never silently overwritten by a half-filled planner.
+  // This used to hand off to T-Calc whenever the protocol carried testosterone,
+  // because T-Calc was where the schedule got built. It is not any more — Plan ▸
+  // Compounds is — and sending someone to a tab that can only draw a curve, right
+  // after they had just described a dose and a cadence, is what made the silent
+  // loss of that schedule invisible. They saw a testosterone tab open and assumed
+  // it had taken the plan.
   //
-  // The trigger is WHAT THE PROTOCOL CARRIES, not which goal chip was ticked. Gating
-  // on `goals.includes('trt')` missed the whole Enhanced path: an enhanced cycle picks
-  // its testosterone BASE in the wizard's own `base` step (every enhanced cycle runs on
-  // one), which lands in stack.enhanced.compounds with goals === ['enhanced']. That
-  // protocol now generates no testosterone — correct — and got no hand-off either, so
-  // the ester was configured and then simply never scheduled anywhere. Henrik asked for
-  // "TRT and Enhanced should use T-calc"; this is the Enhanced half.
-  var _testoIn = _stackTestoComp(_savedStack);
-  var _wantsTrt = (_wiz.goals||[]).indexOf('trt')>=0 || !!_testoIn;
-  var _trtInline = !!(_savedStack && _savedStack.trt && _savedStack.trt.compounds && _savedStack.trt.compounds.length);
-  // An Enhanced cycle has no _wiz.trtPlan to commit — its ester came from the `base`
-  // step. Carry that choice across so the planner opens on the right compound instead
-  // of blank; canonicalised, because the enhanced catalogue keys esters under its own
-  // ids (test_u → nebido). Only the ester, and only when the plan has none: the dose
-  // and cadence are the user's to set in T-Calc, and inventing them here would be
-  // inventing a schedule nobody asked for.
-  if(_testoIn && _testoIn.tier==='enhanced' && typeof _tcp!=='undefined' && _tcp){
-    var _baseId=(typeof _tcCanonCompId==='function')?_tcCanonCompId(_testoIn.c.id):_testoIn.c.id;
-    var _sp=_tcp.simplePlan||{};
-    if(_baseId && !_sp.compId){_sp.compId=_baseId;_tcp.simplePlan=_sp;}
-  }
-  // The wizard's TRT step edits the T-Calc simple plan. Commit it here, so the
-  // schedule the user just built is the one T-Calc draws.
-  if(_wantsTrt && !_trtInline && typeof _wizTrtPlanComplete==='function' && _wizTrtPlanComplete() &&
-     typeof _tcp!=='undefined' && _tcp){
-    var _wp=_wiz.trtPlan;
-    _tcp.simplePlan={compId:_wp.compId,doseMg:String(_wp.doseMg),cadenceN:parseInt(_wp.cadenceN,10)||0,cadenceUnit:_wp.cadenceUnit||'week',cadenceDays:parseDec(_wp.cadenceDays),startDate:_wp.startDate};
-    _tcp.plannerMode='simple';
-  }
-  if(_wantsTrt && typeof _tcp!=='undefined' && _tcp && _savedStack && _savedStack.id &&
-     typeof buildTCalc==='function' && document.getElementById('tab-btn-tcalc')){
-    _tcp.targetStackId=_savedStack.id;
-    if(typeof _tcSaveProfile==='function')_tcSaveProfile();
-    switchTab('tcalc',document.getElementById('tab-btn-tcalc'));
-  } else {
-    switchTab('stacks',document.getElementById('tab-btn-stacks'));
-  }
+  // Everyone now lands on the protocol they just built, where the compound they
+  // configured is visible and editable.
+  switchTab('stacks',document.getElementById('tab-btn-stacks'));
   if(res.synced===false){
     // Data saved locally; backend sync failed — show a brief banner
     var nb=document.createElement('div');
@@ -1919,6 +1900,70 @@ function wizToggleTrtClassic(){ _wizTrtClassic = !_wizTrtClassic; wizRender(); }
 // plan first, because that was where a schedule lived; Phase 6 removed that planner, so
 // the protocol's own compound is now the only thing to seed from — which is also the
 // thing the wizard is editing.
+// ── THE WIZARD'S TESTOSTERONE STEP BECOMES A REAL SCHEDULED COMPOUND ────────
+// _wiz.trtPlan is {compId, doseMg, cadenceN, cadenceUnit, cadenceDays, startDate}
+// — the four things the step asks for. Until Phase 6 it was committed to T-Calc's
+// simple planner; that planner is gone, so it folds into the protocol's own TRT
+// compound instead, in exactly the shape the classic multi-compound step writes.
+// One representation of a scheduled compound, which is the whole point of the
+// rewrite.
+//
+// Called BEFORE saveStacksToBackend() and generateAndPushInjections(), because the
+// generator reads the protocol — fold it afterwards and the first schedule would
+// not appear until the next save.
+//
+// Deliberately does nothing when:
+//   • the plan is incomplete — a half-filled step is not a schedule, and inventing
+//     the missing half would be inventing doses nobody asked for;
+//   • the classic step already configured testosterone inline (`trt.compounds`
+//     non-empty) — those are real compounds the user set up by hand, and a planner
+//     must never overwrite them. This is the `_trtInline` guard that has always
+//     protected that path;
+//   • the protocol already carries this molecule anywhere — an Enhanced cycle picks
+//     its testosterone base in the wizard's own `base` step, and adding it again
+//     here would schedule the same ester twice, the exact doubling this rewrite
+//     exists to end.
+function _wizFoldTrtPlanIntoProto(proto){
+  if(!proto) return false;
+  if(typeof _wizTrtPlanComplete!=='function' || !_wizTrtPlanComplete()) return false;
+  var p=(typeof _wiz!=='undefined'&&_wiz)?_wiz.trtPlan:null;
+  if(!p) return false;
+
+  proto.trt=proto.trt||{};
+  var existing=proto.trt.compounds||[];
+  if(existing.length) return false;                      // classic config wins
+
+  var id=(typeof _canonCompoundId==='function')?_canonCompoundId(p.compId):p.compId;
+  if(!id) return false;
+  // Already present in EITHER block, under either spelling.
+  var dup=(typeof _stackTestoComp==='function')?_stackTestoComp(proto):null;
+  if(dup) return false;
+
+  var days=parseDec(p.cadenceDays);
+  if(!(days>0)) return false;
+  // Name and dot from the catalogue the rest of the TRT block uses, falling back to
+  // the merged catalogue for an ester TRT_CAT does not list.
+  var meta=(typeof TRT_CAT!=='undefined'&&TRT_CAT)
+    ? TRT_CAT.find(function(t){return t.id===id;}) : null;
+  if(!meta && typeof _COMPOUND_CATALOG!=='undefined' && _COMPOUND_CATALOG)
+    meta=_COMPOUND_CATALOG.find(function(e){return e.id===id;});
+  proto.trt.enabled=true;
+  proto.trt.compounds=[{
+    id:id,
+    name:(meta&&meta.name)||id,
+    // A per-injection amount, never a rate: the step asks "dose" alongside a
+    // separate cadence, so the two are already separated and must stay that way.
+    dose:String(p.doseMg),
+    unit:'mg',
+    dot:(meta&&meta.dot)||'#b84a4a',
+    cadence:'interval',
+    freqVal:days,
+    freqUnit:'days',
+    start_date:p.startDate||''
+  }];
+  return true;
+}
+
 function _wizEnsureTrtPlan(){
   if(_wiz.trtPlan) return _wiz.trtPlan;
   var seed = {compId:'', doseMg:'', cadenceN:0, cadenceUnit:'week', cadenceDays:0, startDate:''};
@@ -2029,9 +2074,9 @@ function _wizRenderTrtPlanner(body){
     var wk=parseDec(p.doseMg)*7/parseDec(p.cadenceDays);
     html+='<div style="margin-top:14px;background:rgba(90,209,176,0.08);border:1px solid rgba(90,209,176,0.25);border-radius:10px;padding:11px 13px">'
       +'<div style="font-size:12.5px;color:#5ad1b0;font-weight:600">'+(Math.round(wk*10)/10)+' mg/week</div>'
-      +'<div style="font-size:11px;color:var(--muted2);margin-top:3px;line-height:1.5">Saved to T-Calc when you finish this protocol — the curve opens there.</div></div>';
+      +'<div style="font-size:11px;color:var(--muted2);margin-top:3px;line-height:1.5">Scheduled on this protocol when you finish — you can edit it under Compounds.</div></div>';
   }else{
-    html+='<div style="margin-top:14px;font-size:11.5px;color:var(--muted2);line-height:1.55">Fill in all four to schedule testosterone. You can also leave this empty and add it in T-Calc later.</div>';
+    html+='<div style="margin-top:14px;font-size:11.5px;color:var(--muted2);line-height:1.55">Fill in all four to schedule testosterone. You can also leave this empty and add it under Compounds later.</div>';
   }
 
   html+='<div onclick="wizToggleTrtClassic()" style="text-align:center;font-size:12px;color:var(--muted2);text-decoration:underline;cursor:pointer;padding:14px 8px 4px">Advanced: multi-compound config</div>';
