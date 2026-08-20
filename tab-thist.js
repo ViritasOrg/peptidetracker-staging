@@ -299,7 +299,41 @@ function _thDrawChart(canvasId, series, zoom, focusDay) {
 
 /* ── add-a-past-injection modal ─────────────────────────────────────────── */
 
-var _piDraft = null;   // { tier, compId, dose, unit, date, time }
+// { tier, compId, dose, unit, date, time, isSeries, count, intervalDays, logged }
+//
+// SERIES + "already taken" moved here from T-Calc's Add sheet on 2026-08-20, at
+// Henrik's request: "The Add past injections, should instead be able to add a series
+// of injections as well as have a checkbox if these old injections should already be
+// checked (most common use case for a mid cycle user)."
+//
+// `logged` defaults TRUE because that is the case this sheet exists for: someone who
+// has been running a protocol and is only now entering it. Those doses were taken.
+// Leaving it unticked writes them as past-dated PLANNED rows, which the free-T model
+// deliberately excludes — so the default is also the one that makes the curve right.
+var _piDraft = null;
+
+// Calendar-day stepping, never +86400000 ms. Across a DST boundary the millisecond
+// form drifts an hour and eventually lands a dose on the wrong date.
+function _piAddDays(dateStr, n) {
+  var p = String(dateStr || '').split('-');
+  var d = new Date(+p[0], +p[1] - 1, +p[2]);
+  d.setDate(d.getDate() + n);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
+         String(d.getDate()).padStart(2, '0');
+}
+
+// The dates a draft describes: one, or a run stepping backwards-compatible forward
+// from the first. Returns [] when the draft cannot produce any.
+function _piDates(d) {
+  if (!d || !d.date) return [];
+  if (!d.isSeries) return [d.date];
+  var n = parseInt(d.count, 10) || 0;
+  var iv = parseDec(d.intervalDays) || 0;
+  if (!(n > 0) || !(iv > 0)) return [];
+  var out = [];
+  for (var i = 0; i < n; i++) out.push(_piAddDays(d.date, Math.round(i * iv)));
+  return out;
+}
 
 function _piCat(tier) {
   if (tier === 'peptide')  return (typeof PEPTIDE_CAT !== 'undefined' ? PEPTIDE_CAT : []);
@@ -314,7 +348,9 @@ function _piDefaultUnit(tier) { return tier === 'peptide' ? 'µg' : 'mg'; }
 function openPastInjection(tier) {
   var t = (tier === 'peptide' || tier === 'enhanced') ? tier : 'trt';
   var cat = _piCat(t);
-  _piDraft = { tier: t, compId: (cat[0] && cat[0].id) || '', dose: '', unit: _piDefaultUnit(t), date: _thTodayStr(), time: '' };
+  _piDraft = { tier: t, compId: (cat[0] && cat[0].id) || '', dose: '', unit: _piDefaultUnit(t),
+               date: _thTodayStr(), time: '',
+               isSeries: false, count: 4, intervalDays: 3.5, logged: true };
   var ex = document.getElementById('pi-overlay'); if (ex) ex.remove();
   var wrap = document.createElement('div');
   wrap.innerHTML = _piHtml();
@@ -356,12 +392,56 @@ function _piHtml() {
   h += '<div><label style="'+lSty+'">Dose</label><input type="text" inputmode="decimal" value="'+_esc(String(d.dose||''))+'" placeholder="0" oninput="_piSetField(\'dose\',this.value)" style="'+iSty+'"></div>';
   h += '<div><label style="'+lSty+'">Unit</label><select onchange="_piSetField(\'unit\',this.value)" style="'+iSty+'">'+unitOpts+'</select></div>';
   h += '</div>';
-  h += '<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:10px;margin-bottom:20px">';
-  h += '<div><label style="'+lSty+'">Date</label><input type="date" value="'+_esc(d.date||'')+'" max="'+_thTodayStr()+'" onchange="_piSetField(\'date\',this.value)" style="'+iSty+'"></div>';
+  h += '<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:10px;margin-bottom:16px">';
+  h += '<div><label style="'+lSty+'">'+(d.isSeries?'First injection':'Date')+'</label><input type="date" value="'+_esc(d.date||'')+'" max="'+_thTodayStr()+'" onchange="_piSetField(\'date\',this.value)" style="'+iSty+'"></div>';
   h += '<div><label style="'+lSty+'">Time</label><div style="display:flex;gap:5px">'+timeBtns+'</div></div>';
   h += '</div>';
+
+  // ── One dose, or the run a mid-cycle user actually has to enter ────────────
+  var oneSel = !d.isSeries;
+  h += '<label style="'+lSty+'">How many</label><div style="display:flex;gap:6px;margin-bottom:'+(d.isSeries?'12px':'16px')+'">' +
+       '<button onclick="_piSetSeries(false)" style="flex:1;background:'+(oneSel?'var(--accent)':'none')+';color:'+(oneSel?'#000':'var(--muted2)')+';border:1px solid '+(oneSel?'var(--accent)':'var(--border)')+';border-radius:8px;padding:9px 4px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">One dose</button>' +
+       '<button onclick="_piSetSeries(true)" style="flex:1;background:'+(!oneSel?'var(--accent)':'none')+';color:'+(!oneSel?'#000':'var(--muted2)')+';border:1px solid '+(!oneSel?'var(--accent)':'var(--border)')+';border-radius:8px;padding:9px 4px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">A series</button>' +
+       '</div>';
+  if (d.isSeries) {
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">';
+    h += '<div><label style="'+lSty+'">Injections</label><input type="number" inputmode="numeric" min="1" max="'+_PI_MAX_SERIES+'" value="'+_esc(String(d.count||''))+'" oninput="_piSetField(\'count\',this.value);_piPreview()" style="'+iSty+'"></div>';
+    h += '<div><label style="'+lSty+'">Every (days)</label><input type="text" inputmode="decimal" value="'+_esc(String(d.intervalDays||''))+'" oninput="_piSetField(\'intervalDays\',this.value);_piPreview()" style="'+iSty+'"></div>';
+    h += '</div>';
+    // Say what will be written, before it is written. A run of doses landing in the
+    // record is not something to discover afterwards.
+    var preview = _piDates(d);
+    var future  = preview.filter(function(x){ return x > _thTodayStr(); });
+    h += '<div id="pi-preview" style="font-size:11px;color:var(--muted2);line-height:1.55;margin-bottom:16px">' +
+         (preview.length
+            ? _esc(String(preview.length)) + ' injection' + (preview.length===1?'':'s') + ', ' +
+              _esc(preview[0]) + ' → ' + _esc(preview[preview.length-1]) +
+              (future.length ? '<br><span style="color:#e0a050">' + _esc(String(future.length)) +
+                 ' fall after today and will not be written — this sheet records the past.</span>' : '')
+            : 'Set a count and an interval to see the dates.') +
+         '</div>';
+  }
+
+  // ── Already taken? ────────────────────────────────────────────────────────
+  // Default ON: the mid-cycle user entering doses they have already had is the whole
+  // reason this sheet exists. Off writes them as past-dated planned rows, which the
+  // free-T model excludes by design — worth saying, because "why is my curve flat"
+  // has cost days before.
+  h += '<label onclick="_piSetField(\'logged\','+(d.logged?'false':'true')+');_piRerender()" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:6px">' +
+       '<span style="width:22px;height:22px;flex-shrink:0;border-radius:6px;border:1px solid '+(d.logged?'var(--accent)':'var(--border)')+';background:'+(d.logged?'var(--accent)':'none')+';display:flex;align-items:center;justify-content:center">' +
+       (d.logged ? '<svg width="12" height="9" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '') +
+       '</span>' +
+       '<span style="font-size:13.5px;color:var(--text);font-weight:600">Already taken — tick them off</span></label>';
+  h += '<div style="font-size:11px;color:var(--muted2);line-height:1.55;margin-bottom:18px">' +
+       (d.logged
+         ? 'Recorded as injected, and counted by the free-T curve.'
+         : 'Recorded as planned but not taken. Past-dated doses that are never ticked stay OUT of the free-T curve.') +
+       '</div>';
+
   h += '<div id="pi-err" style="color:#e05050;font-size:12px;min-height:15px;margin-bottom:8px"></div>';
-  h += '<button onclick="savePastInjection()" style="width:100%;background:var(--accent);color:#000;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:800;cursor:pointer;font-family:inherit">Save injection</button>';
+  var nDates = _piDates(d).filter(function(x){ return x <= _thTodayStr(); }).length;
+  h += '<button id="pi-save" onclick="savePastInjection()" style="width:100%;background:var(--accent);color:#000;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:800;cursor:pointer;font-family:inherit">' +
+       (d.isSeries && nDates > 1 ? 'Save ' + nDates + ' injections' : 'Save injection') + '</button>';
   h += '</div></div>';
   return h;
 }
@@ -377,63 +457,147 @@ function _piSetTier(t) {
 }
 function _piSetField(k, v) { if (_piDraft) _piDraft[k] = v; }
 
-function _piToCacheRow(e) {
+// A run this long is a typo, not a protocol — and every entry is a real row written
+// to the record, so the cap is a guard rather than a preference.
+var _PI_MAX_SERIES = 60;
+
+function _piRerender() {
+  var ex = document.getElementById('pi-overlay'); if (ex) ex.remove();
+  var wrap = document.createElement('div'); wrap.innerHTML = _piHtml();
+  document.body.appendChild(wrap.firstChild);
+}
+// Updates the preview and the button IN PLACE. A full rerender while the user is
+// typing a count would tear out the input they are typing into and take the caret
+// with it, which reads as the field clearing itself.
+function _piPreview() {
+  var d = _piDraft; if (!d) return;
+  var today = _thTodayStr();
+  var dates = _piDates(d);
+  var future = dates.filter(function(x){ return x > today; });
+  var el = document.getElementById('pi-preview');
+  if (el) {
+    el.innerHTML = dates.length
+      ? _esc(String(dates.length)) + ' injection' + (dates.length===1?'':'s') + ', ' +
+        _esc(dates[0]) + ' → ' + _esc(dates[dates.length-1]) +
+        (future.length ? '<br><span style="color:#e0a050">' + _esc(String(future.length)) +
+           ' fall after today and will not be written — this sheet records the past.</span>' : '')
+      : 'Set a count and an interval to see the dates.';
+  }
+  var btn = document.getElementById('pi-save');
+  if (btn) {
+    var n = dates.filter(function(x){ return x <= today; }).length;
+    btn.textContent = (d.isSeries && n > 1) ? 'Save ' + n + ' injections' : 'Save injection';
+  }
+}
+function _piSetSeries(on) {
+  if (!_piDraft) return;
+  _piDraft.isSeries = !!on;
+  _piRerender();
+}
+
+// `logged` is passed in rather than hardcoded true: the sheet can now record a past
+// dose the user did NOT take, and a cache row that claims otherwise would show it
+// ticked on Today while the record says it is not.
+function _piToCacheRow(e, logged) {
   return { id: e.id, cycle_id: e.cycle_id, date: e.date, compound_id: e.compound_id,
            compound_name: e.compound_name, tier: e.tier, dose: e.dose, unit: e.unit,
            dot: e.dot || '#888', time_of_day: e.time_of_day || null, active: true,
-           logged: true, source: 'manual' };
+           logged: (logged === undefined) ? !!e.logged : !!logged, source: 'manual' };
 }
 
-function savePastInjection() {
+async function savePastInjection() {
   var d = _piDraft; if (!d) return;
   var err = document.getElementById('pi-err');
+  var today = _thTodayStr();
   if (!d.compId) { if (err) err.textContent = 'Pick a compound.'; return; }
   if (!(parseDec(d.dose) > 0)) { if (err) err.textContent = 'Enter a dose greater than 0.'; return; }
-  if (!d.date || d.date > _thTodayStr()) { if (err) err.textContent = 'Pick a date in the past (or today).'; return; }
+  if (!d.date || d.date > today) { if (err) err.textContent = 'Pick a date in the past (or today).'; return; }
+  if (d.isSeries) {
+    var n = parseInt(d.count, 10) || 0;
+    if (!(n > 0)) { if (err) err.textContent = 'How many injections?'; return; }
+    if (n > _PI_MAX_SERIES) { if (err) err.textContent = 'That is more than ' + _PI_MAX_SERIES + ' injections — check the count.'; return; }
+    if (!(parseDec(d.intervalDays) > 0)) { if (err) err.textContent = 'How many days between injections?'; return; }
+  }
+
+  // THIS SHEET RECORDS THE PAST. A run whose later dates have not happened yet is not
+  // a plan — planning is Plan ▸ Compounds — so those dates are dropped rather than
+  // written, and the user is told how many, before anything is sent.
+  var dates = _piDates(d).filter(function(x){ return x <= today; });
+  if (!dates.length) { if (err) err.textContent = 'None of those dates are in the past.'; return; }
+
   var cat = _piCatEntry(d.tier, d.compId);
   var name = cat ? cat.name : d.compId;
   var dot  = (cat && cat.dot) ? cat.dot : (d.tier === 'trt' ? '#e05050' : '#888');
   var meta = (typeof _injPkMeta === 'function') ? _injPkMeta(d.tier, d.compId) : { ester: null, half_life_days: null };
-  var body = { cycle_id: 'manual', date: d.date, compound_id: d.compId, compound_name: name,
-               tier: d.tier, dose: String(parseDec(d.dose)), unit: d.unit || _piDefaultUnit(d.tier),
-               dot: dot, time_of_day: (d.time || null), active: true, logged: true, source: 'manual',
-               ester: meta.ester, half_life_days: meta.half_life_days, route: null };
-  var btnDate = d.date, btnTier = d.tier, btnComp = d.compId, btnDose = parseDec(d.dose);
+  var tier = d.tier, compId = d.compId, doseMg = parseDec(d.dose);
+  var logged = !!d.logged;
+  // A run entered together is one run. The id lets a restore rebuild it as a group
+  // rather than as N identical unrelated rows — the 2026-08-07 lesson, kept.
+  var seriesId = (dates.length > 1)
+    ? 'past-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7)
+    : null;
   if (err) err.textContent = '';
-  // Through inj-writer, like every other injection write. This was the one path still
-  // calling fetch directly, and the test that is supposed to forbid that missed it on a
-  // technicality: its pattern required `method:'POST'` with no space, and this line has
-  // one. The rule is only worth having if it is actually enforced — see the widened
-  // check in tests/test_frontend.js.
-  injWriteOne(body, 'pastInjection')
-    .then(function(r){
-      if (!r) { if (err) err.textContent = 'Could not reach the server — try again.'; return null; }
-      return r.ok ? r.json() : null;
-    })
-    .then(function(res){
-      if (res === null && err && err.textContent) return;   // already reported above
-      if (!res || !res.entry) { if (err) err.textContent = 'Could not save — try again.'; return; }
-      // Cache it for the Today view (recent window only).
-      if (typeof _injectionsCache !== 'undefined') {
-        var dk = res.entry.date;
-        (_injectionsCache[dk] = _injectionsCache[dk] || []).push(_piToCacheRow(res.entry));
-      }
-      // Mirror testosterone into the T-Calc manual log so it surfaces on the plasma curve.
-      if (btnTier === 'trt' && typeof _tcp !== 'undefined' && _tcp) {
-        _tcp.manualLog = _tcp.manualLog || [];
-        _tcp.manualLog.push({ compId: btnComp, doseMg: btnDose, date: btnDate });
-        _tcp.manualLog.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
-        if (typeof _tcSaveProfile === 'function') _tcSaveProfile();
-      }
-      _piClose();
-      if (typeof buildToday === 'function') buildToday();
-      if (typeof buildWeekStrip === 'function') buildWeekStrip();
-      if (typeof buildSchedule === 'function') buildSchedule();
-      // Do NOT auto-write history here. Logging a past injection changes the underlying
-      // data, but stored history only updates when the user explicitly asks (the
-      // "Update saved history" button in T-Calc). Refresh the view so the new injection
-      // tick shows; the stored curve is left exactly as the user last saved it.
-      if (_currentTab === 'thist') buildTHist();
-    })
-    .catch(function(e){ if (typeof _logErr === 'function') _logErr('savePastInj', e); if (err) err.textContent = 'Network error — try again.'; });
+
+  var btn = document.getElementById('pi-save');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  var written = [], failed = 0;
+  for (var i = 0; i < dates.length; i++) {
+    var body = { cycle_id: 'manual', date: dates[i], compound_id: compId, compound_name: name,
+                 tier: tier, dose: String(doseMg), unit: d.unit || _piDefaultUnit(tier),
+                 dot: dot, time_of_day: (d.time || null), active: true, logged: logged,
+                 source: 'manual', series_id: seriesId,
+                 ester: meta.ester, half_life_days: meta.half_life_days, route: null };
+    // Through inj-writer, like every other injection write.
+    var r = await injWriteOne(body, 'pastInjection');
+    if (!r || !r.ok) { failed++; continue; }
+    try {
+      var res = await r.json();
+      if (res && res.entry) written.push(res.entry); else failed++;
+    } catch (e) { failed++; }
+  }
+
+  if (btn) { btn.disabled = false; }
+  if (!written.length) {
+    if (btn) btn.textContent = 'Save injection';
+    if (err) err.textContent = 'Could not save — try again.';
+    return;
+  }
+
+  // Cache the new rows for the Today view (recent window only).
+  if (typeof _injectionsCache !== 'undefined') {
+    written.forEach(function(e){
+      (_injectionsCache[e.date] = _injectionsCache[e.date] || []).push(_piToCacheRow(e, logged));
+    });
+  }
+  // Mirror testosterone into the T-Calc manual log so it surfaces on the plasma curve —
+  // but only what was actually TAKEN. An unticked past dose is deliberately outside the
+  // free-T model, and mirroring it here would put it back in through the side door.
+  if (tier === 'trt' && logged && typeof _tcp !== 'undefined' && _tcp) {
+    _tcp.manualLog = _tcp.manualLog || [];
+    written.forEach(function(e){ _tcp.manualLog.push({ compId: compId, doseMg: doseMg, date: e.date }); });
+    _tcp.manualLog.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
+    if (typeof _tcSaveProfile === 'function') _tcSaveProfile();
+  }
+
+  if (failed) {
+    // Partial success is reported, never rounded up to "saved". The user has to know
+    // the record holds fewer doses than they asked for.
+    if (btn) btn.textContent = 'Save injection';
+    if (err) err.textContent = 'Saved ' + written.length + ' of ' + dates.length +
+                               ' — ' + failed + ' could not be written. Try the rest again.';
+    if (typeof buildToday === 'function') buildToday();
+    if (typeof buildWeekStrip === 'function') buildWeekStrip();
+    return;
+  }
+
+  _piClose();
+  if (typeof buildToday === 'function') buildToday();
+  if (typeof buildWeekStrip === 'function') buildWeekStrip();
+  if (typeof buildSchedule === 'function') buildSchedule();
+  // Do NOT auto-write history here. Logging a past injection changes the underlying
+  // data, but stored history only updates when the user explicitly asks. Refresh the
+  // view so the new ticks show; the stored curve stays as the user last saved it.
+  if (typeof _tcFetchHistory === 'function') { try { await _tcFetchHistory(true); } catch (e) {} }
+  if (_currentTab === 'thist') buildTHist();
 }
