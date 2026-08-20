@@ -1665,9 +1665,20 @@ console.log(`\n${'─'.repeat(59)}`);
   // reachable by any path.
   check('a stored history row carries its injection id, or it cannot be deleted',
     /injId: e\.id \|\| undefined/.test(tcJs));
+  // The request moved into inj-writer.js as injDeleteOne (2026-08-20) — it was the
+  // last injection DELETE issued outside that module. Assert the behaviour where it
+  // now lives, and that T-Calc still routes to it rather than re-opening its own.
   check('deleting a stored row calls DELETE on the record',
-    /AGENT_URL \+ '\/injections\/' \+ encodeURIComponent\(injId\)/.test(tcJs) &&
-    /method: 'DELETE'/.test(tcJs));
+    /injDeleteOne\(injId, 'tcDelInj'\)/.test(tcJs) &&
+    !/AGENT_URL \+ '\/injections\/' \+ encodeURIComponent\(injId\)/.test(tcJs));
+  {
+    const _iw = fs.readFileSync(path.join(__dirname, '../inj-writer.js'), 'utf8');
+    check('  …through inj-writer, which addresses the row by id',
+      /AGENT_URL \+ '\/injections\/' \+ encodeURIComponent\(injId\)/.test(_iw) &&
+      /method:'DELETE'/.test(_iw));
+    check('  …and refuses an empty id rather than issuing a bare DELETE',
+      /if\(!injId\)/.test(_iw));
+  }
   check('  …re-reads the history rather than guessing what is left',
     /await _tcFetchHistory\(true\);/.test(tcJs));
   check('  …and says the delete is global first',
@@ -1679,8 +1690,10 @@ console.log(`\n${'─'.repeat(59)}`);
   check('a profile-only row still deletes locally',
     /_tcp\.manualLog\.splice\(idx, 1\);/.test(tcJs));
   // 404 is success: the record is gone, which is what was asked for.
+  // 404 handling moved with the request into inj-writer.js; assert it there.
+  const _iwSrc = fs.readFileSync(path.join(__dirname, '../inj-writer.js'), 'utf8');
   check('  …and an already-deleted record is not reported as a failure',
-    /if \(!r\.ok && r\.status !== 404\)/.test(tcJs));
+    /if\(!r\.ok && r\.status !== 404\)/.test(_iwSrc));
 
   // ── Adding a PAST injection must create a real record ──────────────────────
   // Reported 2026-08-07, straight after the delete fix: "I cant now add the old
@@ -11297,7 +11310,12 @@ console.log('\n── One writer for injections ──────────�
   const _mods = _fs2.readdirSync(_p2.join(__dirname, '..'))
     .filter(f => (f.endsWith('.js') && f !== 'inj-writer.js'))
     .concat(['index.html']);
-  const _writeRe = /fetch\(\s*AGENT_URL\s*\+\s*'(\/injections[^']*)'[^;]{0,300}?method:'(POST|DELETE|PUT)'/gs;
+  // ⚠️ `method:\s*'…'` — WITH optional whitespace. Until 2026-08-20 this pattern
+  // required `method:'POST'` with none, and tab-thist.js's past-injection write said
+  // `method: 'POST'`. One space was the whole difference between a rule and a rule
+  // that is enforced: the single direct write left in the app sat here reported as
+  // compliant. A guard that can be stepped around by a formatter is not a guard.
+  const _writeRe = /fetch\(\s*AGENT_URL\s*\+\s*'(\/injections[^']*)'[^;]{0,300}?method:\s*'(POST|DELETE|PUT)'/gs;
   const _offenders = [];
   _mods.forEach(f => {
     const body = _fs2.readFileSync(_p2.join(__dirname, '..', f), 'utf8');

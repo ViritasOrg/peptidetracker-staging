@@ -400,9 +400,18 @@ function savePastInjection() {
                ester: meta.ester, half_life_days: meta.half_life_days, route: null };
   var btnDate = d.date, btnTier = d.tier, btnComp = d.compId, btnDose = parseDec(d.dose);
   if (err) err.textContent = '';
-  fetch(AGENT_URL + '/injections', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) })
-    .then(function(r){ return r.ok ? r.json() : null; })
+  // Through inj-writer, like every other injection write. This was the one path still
+  // calling fetch directly, and the test that is supposed to forbid that missed it on a
+  // technicality: its pattern required `method:'POST'` with no space, and this line has
+  // one. The rule is only worth having if it is actually enforced — see the widened
+  // check in tests/test_frontend.js.
+  injWriteOne(body, 'pastInjection')
+    .then(function(r){
+      if (!r) { if (err) err.textContent = 'Could not reach the server — try again.'; return null; }
+      return r.ok ? r.json() : null;
+    })
     .then(function(res){
+      if (res === null && err && err.textContent) return;   // already reported above
       if (!res || !res.entry) { if (err) err.textContent = 'Could not save — try again.'; return; }
       // Cache it for the Today view (recent window only).
       if (typeof _injectionsCache !== 'undefined') {

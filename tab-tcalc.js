@@ -1857,15 +1857,11 @@ function _tcConfirmRemove(idx) {
 //
 // A row carrying injId IS a stored injection: delete the record. Everything else is
 // a profile-only row and keeps the old local behaviour.
+// Moved into inj-writer.js as injDeleteOne (Phase 8 follow-up, 2026-08-20): it was the
+// last injection DELETE issued outside that module. One module owns every write.
 async function _tcDeleteStoredInjection(injId) {
   if (typeof authHeaders !== 'function') return false;
-  try {
-    var r = await fetch(AGENT_URL + '/injections/' + encodeURIComponent(injId),
-                        {method: 'DELETE', headers: authHeaders()});
-    // 404 means it is already gone — the user's intent is satisfied either way.
-    if (!r.ok && r.status !== 404) { _logHttp('tcDelInj', r.status, '/injections/' + injId); return false; }
-    return true;
-  } catch (e) { _logErr('tcDelInj', e); return false; }
+  return injDeleteOne(injId, 'tcDelInj');
 }
 
 async function _tcRemoveManualEntry(idx) {
