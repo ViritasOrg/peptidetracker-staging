@@ -457,7 +457,14 @@ G._wiz.advise.result={headline:'h',base:{id:'test_e',name:'Testosterone Enanthat
 var _advB3={innerHTML:''},_advF3={innerHTML:''};
 G.wizStepAdvise(_advB3,_advF3); // triggers default-select
 var _ids=function(){return ((G._wiz.enhanced&&G._wiz.enhanced.compounds)||[]).map(function(c){return c.id;});};
-check('advisor default-selects base + best addition', _ids().indexOf('test_e')>=0 && _ids().indexOf('primo')>=0);
+// The base no longer joins the ENHANCED list — that is the reported bug ("recommended
+// enhanced compounds lists Test E on top"). It goes to the TRT block, canonicalised,
+// and only the addition is pre-ticked here.
+var _trtIds=function(){return ((G._wiz.trt&&G._wiz.trt.compounds)||[]).map(function(c){return c.id;});};
+check('advisor default-selects the best addition', _ids().indexOf('primo')>=0, _ids().join(','));
+check('  …and puts the testosterone base in the TRT block, not the enhanced list',
+  _trtIds().indexOf('enanthate')>=0 && _ids().indexOf('test_e')<0,
+  'trt='+_trtIds().join(',')+' enh='+_ids().join(','));
 G.wizAdviseToggleCompound('deca'); check('tapping a different compound adds it', _ids().indexOf('deca')>=0);
 G.wizAdviseToggleCompound('primo'); check('tapping the best pick removes it', _ids().indexOf('primo')<0);
 check('after swapping, deca is still selected (choice sticks)', _ids().indexOf('deca')>=0);
@@ -3670,6 +3677,88 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       !gb.innerHTML.includes('pointer-events:none'));
 
     G._userTier = _svTierC;
+  }
+
+  // ── The testosterone base comes from the TRT step ──────────────────────────
+  // Henrik, 2026-08-20, both from the same cause — the enhanced half of the flow still
+  // looked for the base in _wiz.enhanced.compounds after the single Compounds toggle
+  // moved it to the 'trt' step:
+  //   "Even though I added an T ester in TRT step, recommended enhanced compounds lists
+  //    Test E on top, no testosterone esters should show up in this step."
+  //   "Error that a test base is required for masteron even though one is already
+  //    selected in TRT step"
+  console.log('\n── Enhanced flow reads the TRT step ───────────────────────');
+  {
+    const _svCat = G.ENHANCEMENT_COMPOUNDS, _svWiz = G._wiz, _svTier = G._userTier;
+    G._userTier = 3;
+    G.ENHANCEMENT_COMPOUNDS = [
+      {id:'mast_e', name:'Masteron Enanthate', group:'DHT-Derived', cls:'dht', dot:'#3cf', unit:'mg/week', defaultDose:300},
+      {id:'primo',  name:'Primobolan',         group:'DHT-Derived', cls:'dht', dot:'#3cf', unit:'mg/week', defaultDose:400},
+    ];
+
+    // ── the hard block ──
+    G.initWizard();
+    G._wiz.trt = {enabled:true, compounds:[{id:'enanthate', name:'Testosterone Enanthate', dose:'250', unit:'mg'}]};
+    G._wiz.enhanced = {enabled:true, _prefilled:true, compounds:[{id:'mast_e', name:'Masteron Enanthate', dose:'300', unit:'mg/week'}]};
+    check('a testosterone set in the TRT step counts as the base', G._wizTrtHasTesto() === true);
+    const eb = {innerHTML:''}, ef = {innerHTML:''};
+    G.wizStepEnhanced(eb, ef);
+    check('THE BUG: no "testosterone base is required" warning when TRT has one',
+      !eb.innerHTML.includes('testosterone base is required'));
+    check('  …and Next is NOT disabled, so the cycle can actually be finished',
+      !ef.innerHTML.includes('disabled'), ef.innerHTML);
+
+    // …while a genuinely baseless enhanced cycle is still stopped.
+    G._wiz.trt = {enabled:false, compounds:[]};
+    const eb2 = {innerHTML:''}, ef2 = {innerHTML:''};
+    G.wizStepEnhanced(eb2, ef2);
+    check('an enhanced cycle with no testosterone anywhere is still blocked',
+      eb2.innerHTML.includes('testosterone base is required') && ef2.innerHTML.includes('disabled'));
+
+    // ── no testosterone esters in the guidance step ──
+    G.initWizard();
+    G._wiz.trt = {enabled:true, compounds:[{id:'enanthate', name:'Testosterone Enanthate', dose:'250', unit:'mg'}]};
+    G._wiz.enhanced = {enabled:false, compounds:[]};
+    const res = {
+      headline: 'Add ONE compound to your testosterone base',
+      base: {id:'enanthate', name:'Testosterone Enanthate', note:'Twice-weekly smooths the swing.'},
+      best_addition: {id:'primo', name:'Primobolan', reason:'Mild, non-aromatizing.'},
+      primary: [{id:'enanthate', name:'Testosterone Enanthate', reason:'base'},
+                {id:'mast_e', name:'Masteron Enanthate', reason:'hardening'}],
+      consider: [{id:'cypionate', name:'Testosterone Cypionate', reason:'alt base'}],
+    };
+    check('a testosterone recommendation is recognised by id',
+      G._wizAdviseIsTesto({id:'enanthate'}) === true &&
+      G._wizAdviseIsTesto({id:'cypionate'}) === true);
+    check('  …and a non-testosterone one is not',
+      G._wizAdviseIsTesto({id:'mast_e'}) === false &&
+      G._wizAdviseIsTesto({id:'primo'}) === false);
+
+    // The auto-select must not put the ester into the enhanced list.
+    G._wizAdviseDefaultSelect(res);
+    const picked = (G._wiz.enhanced.compounds || []).map(c => c.id);
+    check('THE BUG: the base is not added to the enhanced list when TRT has it',
+      picked.indexOf('enanthate') === -1, picked.join(','));
+    check('  …while the best addition still is', picked.indexOf('primo') >= 0, picked.join(','));
+
+    // …and with no TRT base, the old behaviour stands.
+    G.initWizard();
+    G._wiz.trt = {enabled:false, compounds:[]};
+    G._wiz.enhanced = {enabled:false, compounds:[]};
+    G._wizAdviseDefaultSelect(res);
+    // Third symptom, and the invisible one: _wizAdviseAdd looks the id up in
+    // ENHANCEMENT_COMPOUNDS, which excludes testosterone since the catalogue merge, so
+    // `if(!cat)return;` had been swallowing every recommended base. It now seeds the
+    // TRT block, where testosterone actually lives.
+    check('with no TRT base, the recommended base seeds the TRT block',
+      ((G._wiz.trt && G._wiz.trt.compounds) || []).some(c => c.id === 'enanthate'),
+      JSON.stringify((G._wiz.trt||{}).compounds || []));
+    check('  …and never lands in the enhanced list, which cannot hold testosterone',
+      !(G._wiz.enhanced.compounds || []).some(c => c.id === 'enanthate'));
+    check('  …with the tier switched on so it generates',
+      !!(G._wiz.trt && G._wiz.trt.enabled));
+
+    G.ENHANCEMENT_COMPOUNDS = _svCat; G._wiz = _svWiz; G._userTier = _svTier;
   }
 
   // ── The dose guide follows the protocol, not one injection ─────────────────
