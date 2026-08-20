@@ -4121,6 +4121,44 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       /!hasItems&&!peptides\.length&&!enhanceCmpds\.length&&!trtCmpds\.length/.test(idx));
   }
 
+  // ── The promotion carries every module the page loads ──────────────────────
+  // 2026-08-20, first Push to Prod after the rewrite: prod CI failed with
+  //   ENOENT: no such file or directory, open '.../inj-writer.js'
+  // The promote workflow copied `tab-*.js` by glob plus the whole tests/ directory.
+  // inj-writer.js arrived in Phase 3 as a root-level module that is not tab-*.js, so
+  // prod received the tests that read it without the file itself — 13 of 14 modules.
+  //
+  // A manifest that has to be remembered will be forgotten. index.html already lists
+  // what it loads, so the workflow derives from that; this pins the derivation so
+  // nobody replaces it with a glob again.
+  console.log('\n── Promotion syncs what index.html loads ──────────────────');
+  {
+    const wf = path.join(path.dirname(path.resolve(htmlPath)),
+                         '.github', 'workflows', 'promote-to-prod.yml');
+    if (!fs.existsSync(wf)) {
+      check('promote-to-prod.yml is present', false, wf);
+    } else {
+      const y = fs.readFileSync(wf, 'utf8');
+      // A plain substring, not a regex: the thing being matched is itself a grep
+      // pattern full of brackets and backslashes, and escaping it twice is how you
+      // end up asserting nothing.
+      check('the promotion derives its module list from index.html',
+        y.indexOf('MODULES=$(grep -o') >= 0 && y.indexOf("../staging/index.html") >= 0,
+        'the module list must come from the script tags, not a hardcoded glob');
+      check('  …and no longer copies tab-*.js by glob alone',
+        !/for f in \.\.\/staging\/tab-\*\.js/.test(y));
+      check('  …failing loudly when a listed module is absent',
+        /index\.html loads \$f but staging has no such file/.test(y));
+      check('  …and refusing to promote a prod tree that cannot load',
+        /prod would be missing modules index\.html loads/.test(y));
+
+      // The concrete file that was dropped, named so its loss is unmistakable.
+      const html = fs.readFileSync(path.resolve(htmlPath), 'utf8');
+      check('index.html still loads inj-writer.js, the module that was missed',
+        /src="inj-writer\.js/.test(html));
+    }
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });

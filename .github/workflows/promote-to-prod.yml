@@ -31,9 +31,26 @@ jobs:
           # Copy index.html from staging
           cp ../staging/index.html ./index.html
 
-          # Copy tab JS files from staging
-          for f in ../staging/tab-*.js; do
-            [ -f "$f" ] && cp "$f" ./
+          # Copy every JS module the page actually loads, derived from index.html's own
+          # <script src> tags.
+          #
+          # This used to be `cp ../staging/tab-*.js` — a hardcoded glob. inj-writer.js
+          # arrived in Phase 3 as a root-level module that is not tab-*.js, so the
+          # promotion silently left it behind while copying the tests that read it.
+          # Prod CI then failed on the first Push to Prod after the rewrite with
+          #   ENOENT: no such file or directory, open '.../inj-writer.js'
+          # (2026-08-20, prod PR #324). A manifest that has to be remembered will be
+          # forgotten; index.html already knows the answer, so ask it.
+          MODULES=$(grep -o 'src="[A-Za-z0-9._-]*\.js' ../staging/index.html \
+                    | sed 's/^src="//' | sort -u)
+          echo "Modules to sync:"; echo "$MODULES" | sed 's/^/  /'
+          for f in $MODULES; do
+            if [ -f "../staging/$f" ]; then
+              cp "../staging/$f" ./
+            else
+              echo "::error::index.html loads $f but staging has no such file"
+              exit 1
+            fi
           done
 
           # Copy CI workflow and test suite — they must stay in sync with the code
@@ -52,6 +69,18 @@ jobs:
           PROD_VERSION=$(jq -r '.version' version.json)
           sed -i "s/const VERSION='[0-9.]*'/const VERSION='${PROD_VERSION}'/" index.html
           sed -i "s/\.js?v=[0-9.]*/.js?v=${PROD_VERSION}/g" index.html
+
+          # Refuse to promote a prod tree that cannot load. Cheap, and it turns the
+          # class of failure above into a clear message here instead of a red CI run
+          # on a PR already open against prod.
+          MISSING=""
+          for f in $(grep -o 'src="[A-Za-z0-9._-]*\.js' index.html | sed 's/^src="//' | sort -u); do
+            [ -f "./$f" ] || MISSING="$MISSING $f"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::prod would be missing modules index.html loads:$MISSING"
+            exit 1
+          fi
 
           if git diff --quiet && git diff --staged --quiet && [ -z "$(git status --porcelain)" ]; then
             echo "No changes to promote"
