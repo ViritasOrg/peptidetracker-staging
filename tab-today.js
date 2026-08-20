@@ -44,7 +44,7 @@ function buildToday(){if(typeof buildTodayRings==='function')buildTodayRings();i
   var _sid=(typeof _stackCycleId==='function')?_stackCycleId(_st):(_st.id||'');
   if(_stackHasScheduledTrt(_sid))return;                 // it IS scheduled — say nothing
   var _nm=(_tc.c&&(_tc.c.name||_tc.c.id))||'Testosterone';
-  alertWrap.innerHTML='<div onclick="var b=document.getElementById(\'tab-btn-stack\');if(b)b.click();" style="cursor:pointer;background:rgba(102,136,204,0.08);border:1px solid #6688cc44;border-left:3px solid #6688cc;border-radius:10px;padding:10px 12px;margin-bottom:10px;">'
+  alertWrap.innerHTML='<div onclick="var b=document.getElementById(\'tab-btn-stacks\');if(b)b.click();" style="cursor:pointer;background:rgba(102,136,204,0.08);border:1px solid #6688cc44;border-left:3px solid #6688cc;border-radius:10px;padding:10px 12px;margin-bottom:10px;">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:3px">'
       +'<div style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#6688cc">Testosterone not scheduled</div>'
       +'<div style="font-size:11px;color:#6688cc;flex-shrink:0">Open Plan →</div>'

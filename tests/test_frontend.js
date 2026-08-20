@@ -3932,6 +3932,56 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     G._wiz = _svWiz2; G._userTier = _svTier2;
   }
 
+  // ── Every tab a button navigates to actually exists ────────────────────────
+  // Henrik, 2026-08-20: "Open plan Compounds doesn't do anything if clicked? Do you
+  // have tests for all features/buttons?" — no, and this class had NO coverage.
+  //
+  // The button read getElementById('tab-btn-stack'). The real id is 'tab-btn-stacks',
+  // plural. Wrapped in `if(b)b.click();` the miss was silent: no error, no navigation,
+  // nothing in the console. Two buttons were dead this way, both written by me.
+  //
+  // Same shape as dmWhere and the deleted _tcSetChartZoom: a name that resolves to
+  // nothing, guarded so it cannot complain. Source greps cannot catch it — the string
+  // is present and spelled plausibly. Compare it against the ids the page DEFINES.
+  console.log('\n── Buttons navigate somewhere real ────────────────────────');
+  {
+    const base = path.dirname(path.resolve(htmlPath));
+    const html = fs.readFileSync(path.resolve(htmlPath), 'utf8');
+    const modules = [...html.matchAll(/src="([a-z-]+\.js)/g)].map(m => m[1]);
+    let all = html;
+    for (const f of modules) {
+      const fp = path.join(base, f);
+      if (fs.existsSync(fp)) all += '\n' + fs.readFileSync(fp, 'utf8');
+    }
+
+    // The nav ids the page actually defines.
+    const defined = new Set([...html.matchAll(/id="(tab-btn-[a-z]+)"/g)].map(m => m[1]));
+    check('the page defines its tab buttons', defined.size >= 10, [...defined].join(','));
+
+    // Every tab-btn-* id referenced anywhere, however it is quoted or escaped.
+    const referenced = new Set([...all.matchAll(/tab-btn-[a-z]+/g)].map(m => m[0]));
+    const dangling = [...referenced].filter(id => !defined.has(id)).sort();
+    check('every tab-btn-* id a handler asks for exists',
+      dangling.length === 0,
+      dangling.length ? 'dangling: ' + dangling.join(', ') : 'checked ' + referenced.size);
+
+    // switchTab's first argument must be a tab the app knows.
+    const tabNames = new Set([...defined].map(id => id.replace('tab-btn-', '')));
+    const switched = new Set([...all.matchAll(/switchTab\(\\?'([a-z]+)\\?'/g)].map(m => m[1]));
+    const unknownTabs = [...switched].filter(t => !tabNames.has(t)).sort();
+    check('every switchTab target is a real tab',
+      unknownTabs.length === 0,
+      unknownTabs.length ? 'unknown: ' + unknownTabs.join(', ') : 'checked ' + switched.size);
+
+    // The two buttons that were dead, named so a regression is obvious.
+    const tcSrc = fs.readFileSync(path.join(base, 'tab-tcalc.js'), 'utf8');
+    const tdSrc = fs.readFileSync(path.join(base, 'tab-today.js'), 'utf8');
+    check("T-Calc's \"Open Plan ▸ Compounds\" points at a real button",
+      /tab-btn-stacks/.test(tcSrc) && !/tab-btn-stack['\\]/.test(tcSrc));
+    check("  …as does Today's \"testosterone not scheduled\" alert",
+      /tab-btn-stacks/.test(tdSrc) && !/tab-btn-stack['\\]/.test(tdSrc));
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });

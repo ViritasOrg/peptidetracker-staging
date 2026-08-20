@@ -3563,7 +3563,7 @@ function buildTCalc() {
        +  'Scheduling lives in <b>Plan ▸ Compounds</b> — one place, so a compound cannot '
        +  'be scheduled twice. This tab draws what that schedule produces.</div>';
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
-  html += '<button onclick="var b=document.getElementById(\'tab-btn-stack\');if(b)b.click();" '
+  html += '<button onclick="var b=document.getElementById(\'tab-btn-stacks\');if(b)b.click();" '
        +  'style="background:linear-gradient(135deg,#6688cc,#4466aa);border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;font-family:inherit">Open Plan ▸ Compounds</button>';
   // Record entry moved to Today's "+ Log a past injection" sheet on 2026-08-20
   // (Henrik: "Move Add away from T-calc"), which now also enters a whole run and can
