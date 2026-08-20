@@ -1459,24 +1459,21 @@ function _stackHasScheduledTrt(stackId, cache){
 function _stackHasConfigTrt(st){
   return !!(st&&st.trt&&st.trt.enabled&&st.trt.compounds&&st.trt.compounds.length);
 }
-// Single-source guard, stack-save side. A stack must get testosterone from ONE
-// source only. If the stack being saved has BOTH its own TRT config AND a T-Calc
-// plan assigned to it ('tcalc:<stackId>'), warn and let the user choose:
-//   • OK    → switch to the TRT config: unassign the T-Calc plan (back to global).
-//   • Cancel→ keep T-Calc: drop the just-added config testosterone from the stack.
-// No-op when there is no conflict. Mutates `stack.trt` in the Cancel branch.
-async function _reconcileStackTestoSource(stack){
-  if(!stack||!stack.id)return;
-  if(typeof _tcp==='undefined'||!_tcp||_tcp.targetStackId!==stack.id)return; // not the T-Calc target
-  if(!_stackHasConfigTrt(stack))return;                                      // no config testo → no conflict
-  var _switch=(typeof confirm!=='function')?true
-    :confirm('“'+(stack.name||'This protocol')+'” already gets testosterone from T-Calc. Replace it with this TRT config?');
-  if(_switch){
-    if(typeof _tcSetTargetStack==='function')await _tcSetTargetStack(''); // unassign T-Calc → config wins
-  }else{
-    stack.trt={}; // keep T-Calc → discard the config testosterone the user just added
-  }
-}
+// ── THE SINGLE-SOURCE GUARD IS GONE (Phase 8, 2026-08-20) ──────────────────
+// _reconcileStackTestoSource arbitrated a conflict that no longer exists: a stack
+// holding testosterone from BOTH its own TRT config AND an assigned T-Calc plan.
+// T-Calc stopped planning in Phase 6 and its last write paths went in Phase 8, so
+// nothing can assign a plan to a stack — _tcp.targetStackId can never be set, which
+// made both call sites unreachable and this function inert.
+//
+// It is removed rather than left standing because its one action was to call
+// _tcSetTargetStack(''), which is now deleted. A typeof guard would have hidden that:
+// the branch would silently do nothing where the user was promised "replace it with
+// this TRT config". A guard that cannot fire, whose body would not work if it did, is
+// worse than no guard.
+//
+// A protocol gets its testosterone from one place now — its own compounds — so there
+// is no second source to reconcile with.
 // Which tiers a stack represents, for the stack-card badges. The TRT badge is
 // carried ONLY by an ACTIVE stack that actually has testosterone planned —
 // a configured TRT compound OR testosterone scheduled for it (incl. T-Calc-assigned).

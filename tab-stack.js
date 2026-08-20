@@ -124,11 +124,9 @@ async function wizSave(){
   // already wrote real compounds, and overwriting them with a half-filled planner
   // is what `_trtInline` has always guarded against.
   _wizFoldTrtPlanIntoProto(proto);
-  // Single-source guard: if this stack now has its own TRT config AND a T-Calc plan
-  // is assigned to it, warn and let the user keep one source (may clear proto.trt).
-  // Fast-path: only engage when this stack is the current T-Calc target. Inert since
-  // the hand-off above stopped assigning a target; left in place rather than removed.
-  if(typeof _reconcileStackTestoSource==='function'&&typeof _tcp!=='undefined'&&_tcp&&proto&&_tcp.targetStackId===proto.id)await _reconcileStackTestoSource(proto);
+  // The single-source guard that stood here is gone with _reconcileStackTestoSource
+  // (Phase 8): a protocol can no longer hold testosterone from two sources, so there
+  // is nothing left to reconcile.
   var res=await saveStacksToBackend();
   updateWEEKLY();
   var _savedStack=_wiz.stackIndex>=0?_userStacks[_wiz.stackIndex]:null;
@@ -698,7 +696,6 @@ async function saveEditBuf(){
   // Single-source guard: if this stack now has its own TRT config AND a T-Calc plan
   // is assigned to it, warn and let the user keep one source (may clear _editBuf.trt).
   // Fast-path: only engage when this stack is the current T-Calc target.
-  if(typeof _reconcileStackTestoSource==='function'&&typeof _tcp!=='undefined'&&_tcp&&_editBuf&&_tcp.targetStackId===_editBuf.id)await _reconcileStackTestoSource(_editBuf);
   updateWEEKLY();
   await saveStacksToBackend();
   if(_editBuf&&_editBuf.cycle_start){

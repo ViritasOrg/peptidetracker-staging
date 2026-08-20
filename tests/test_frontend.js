@@ -1795,8 +1795,11 @@ console.log(`\n${'─'.repeat(59)}`);
   // came back as nineteen identical rows and a restore could not rebuild the card.
   check('a created past injection carries its series id to the record',
     /series_id: seriesId \|\| null/.test(tcJs));
-  check('  …and the plan sync writes it too, not just the local grouping',
-    /series_id:e\.seriesId\|\|null/.test(tcJs));
+  // The plan sync that also stamped series_id (_tcSyncLogToBackend) is deleted
+  // (Phase 8). Record entry is the only path left that writes one, and the check
+  // above covers it. Assert the sync is gone rather than that it stamps.
+  check('  …and the deleted plan sync no longer writes a competing one',
+    !/series_id:e\.seriesId\|\|null/.test(tcJs) && !/function _tcSyncLogToBackend/.test(tcJs));
   check('a stored history row reads its series id back',
     /seriesId: e\.series_id \|\| undefined/.test(tcJs));
   check('  …as does a planned row rebuilt from the stack',
@@ -9146,7 +9149,10 @@ if (typeof G._tcTargetCycleId === 'function') {
 }
 {
   const tc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
-  check('T-Calc sync writes the target cycle id', tc.includes('var _cid=_tcTargetCycleId();') && tc.includes('cycle_id:_cid'));
+  // Superseded by Phase 8: _tcSyncLogToBackend is deleted, so there is no T-Calc
+  // sync to write a cycle id. The protocol's generator owns cycle_id now.
+  check('T-Calc has no sync writing a cycle id any more',
+    !tc.includes('function _tcSyncLogToBackend') && !tc.includes('cycle_id:_cid'));
   // The copy-to-stack picker was part of the schedule card and went with it (Phase 6).
   check('the copy-to-stack picker is gone', !tc.includes('_tcStackPickerHtml'));
   const idx = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
@@ -9219,7 +9225,11 @@ if (typeof G._reconcileStackTestoSource === 'function') {
 
   G._tcp = _svTcp; G.confirm = _svConfirm; G._tcSetTargetStack = _svSetTarget;
 } else {
-  check('_reconcileStackTestoSource present', false);
+  // Phase 8 removed _reconcileStackTestoSource: it arbitrated between a stack's TRT
+  // config and an assigned T-Calc plan, and a plan can no longer be assigned. Its
+  // absence is the expected state, not a missing dependency.
+  check('_reconcileStackTestoSource is gone, and nothing calls it',
+    typeof G._reconcileStackTestoSource !== 'function');
 }
 
 if (typeof G._tcClearStackConfigTrt === 'function') {
@@ -9231,14 +9241,22 @@ if (typeof G._tcClearStackConfigTrt === 'function') {
   check('clearStackConfigTrt: disables config testo, keeps peptides', _cs.trt && !_cs.trt.enabled && _cs.peptides.length === 1);
   G.saveStacksToBackend = _svSave; G.authHeaders = _svAuth;
 } else {
-  check('_tcClearStackConfigTrt present', false);
+  // Phase 8 removed _tcClearStackConfigTrt with the rest of T-Calc's write paths.
+  check('_tcClearStackConfigTrt is gone', typeof G._tcClearStackConfigTrt !== 'function');
 }
 
 {
   const tc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
-  check('T-Calc assign guards against config-testo conflict', tc.includes('_stackHasConfigTrt(_tgt)') && tc.includes('_tcClearStackConfigTrt(_tgt)'));
+  // Both of these asserted the two halves of the single-source guard — T-Calc
+  // clearing a protocol's own testosterone to make room for a plan, and the save
+  // paths reconciling the two sources. Phase 8 removed the conflict itself: a
+  // protocol holds testosterone in one place, so there is no second source and no
+  // arbitration. Assert neither half came back.
+  check('nothing clears a protocol\'s testosterone to make room for a plan',
+    !/function _tcClearStackConfigTrt/.test(tc) && !/_tcClearStackConfigTrt\(/.test(tc));
   const stk = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
-  check('wizSave + editSave reconcile testo source', (stk.match(/_reconcileStackTestoSource\(/g) || []).length >= 2);
+  check('the save paths reconcile nothing, because there is one source',
+    (stk.match(/_reconcileStackTestoSource\(/g) || []).length === 0);
 }
 
 // ── Two-tier navigation: 5 primary tabs + nested sub-tabs ─────────────────────
@@ -10937,8 +10955,19 @@ console.log('\n── injection deletes: scoped, and never a record ────
     check(f + ': every /injections DELETE passes unlogged_only',
       bad.length === 0, bad.join(' | ').slice(0, 200));
   });
-  check('_tcSetTargetStack guards against an empty old cycle id',
-    /if\(oldCid&&oldCid!==newCid\)/.test(fs.readFileSync(path.join(_dsDir,'tab-tcalc.js'),'utf8')));
+  // _tcSetTargetStack held the empty-cycle-id guard: an unbound plan produced
+  // `DELETE /injections?cycle_id=&from_date=…`, which is NO filter, and on 2026-08-14
+  // wiped every forward injection in the account. Phase 8 deleted the function, so
+  // assert the guard is enforced where deletes actually live now — one module, which
+  // is the stronger form of the same protection.
+  check('the empty-cycle-id delete cannot be issued from T-Calc any more',
+    !/function _tcSetTargetStack/.test(fs.readFileSync(path.join(_dsDir,'tab-tcalc.js'),'utf8')));
+  {
+    const iw = fs.readFileSync(path.join(_dsDir,'inj-writer.js'),'utf8');
+    check('  …because inj-writer refuses an unscoped delete outright',
+      /if\(!cycleId \|\| !compoundId \|\| !fromDate\)/.test(iw),
+      'inj-writer is the only place a delete is issued — the guard has to be here');
+  }
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
@@ -11812,4 +11841,114 @@ console.log('\n── PK catalogue from the merged endpoint ──────�
     _tcSrc.indexOf("'/compounds/catalog'") < _tcSrc.indexOf("'/trt-catalog'"));
   check('  …and the fallback is inside the catch, so a failure cannot leave it unset',
     /catch\(function\(\)\{[\s\S]{0,400}\/trt-catalog/.test(_tcSrc));
+}
+
+// ── Nothing calls a function that no longer exists ──────────────────────────
+// Phase 8 deleted _tcSyncLogToBackend while three live call sites still named it.
+// Shipping that would have thrown ReferenceError the moment one ran — the same
+// shape as the admin UI's dmWhere on 2026-08-20, where a missing function was
+// reported to the user as a network failure.
+//
+// Source greps cannot catch this: every assertion about a deleted function passes
+// precisely BECAUSE the name is absent. So check the other direction — every
+// helper this app CALLS must also be DEFINED in a file the page loads.
+console.log('\n── No call reaches a function that was deleted ─────────────');
+{
+  const base = path.dirname(path.resolve(htmlPath));
+  const html = fs.readFileSync(path.resolve(htmlPath), 'utf8');
+  // Every module the page actually loads, taken from its own script tags, so a new
+  // file cannot silently fall outside the check.
+  const loaded = [...html.matchAll(/src="([a-z-]+\.js)/g)].map(m => m[1]);
+  check('the loaded modules were discovered from index.html', loaded.length >= 10);
+
+  let all = html;
+  for (const f of loaded) {
+    const fp = path.join(base, f);
+    if (fs.existsSync(fp)) all += '\n' + fs.readFileSync(fp, 'utf8');
+  }
+
+  // Strip line comments and block comments so prose ("_tcSyncLogToBackend would
+  // also have re-posted…") is not read as a call. Strings are left in place: an
+  // inline onclick="_tcFoo()" IS a real call site and must count.
+  const code = all.replace(/\/\*[\s\S]*?\*\//g, ' ')
+                  .split('\n').map(l => l.replace(/\/\/.*$/, '')).join('\n');
+
+  const defined = new Set();
+  let m;
+  const reDecl = /\b(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/g;
+  while ((m = reDecl.exec(code))) defined.add(m[1]);
+  const reAssign = /\b(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=/g;
+  while ((m = reAssign.exec(code))) defined.add(m[1]);
+
+  // A call behind `typeof X === 'function'` is a deliberate optional dependency —
+  // load order across these modules is real, and those guards are how it is handled.
+  const guarded = new Set();
+  const reGuard = /typeof\s+([A-Za-z_$][\w$]*)\s*[!=]==?\s*'(?:function|undefined)'/g;
+  while ((m = reGuard.exec(code))) guarded.add(m[1]);
+
+  // This app's own helpers only, by prefix: browser and DOM builtins are out of
+  // scope and cannot produce a false failure.
+  const isOurs = n => /^(_tc|_wiz|_gen|_enh|_canon|_inj|inj|_cal|_trt)[A-Z_]/.test(n);
+  const called = new Set();
+  // Not preceded by '.', or `canvas._tcTouchMove(e)` — a property holding a
+  // function, defined by assignment on the element — reads as a missing global.
+  const reCall = /(^|[^.\w$])([A-Za-z_$][\w$]*)\s*\(/g;
+  while ((m = reCall.exec(code))) if (isOurs(m[2])) called.add(m[2]);
+
+  const missing = [...called].filter(n => !defined.has(n) && !guarded.has(n)).sort();
+  check('every helper the app calls is defined in a module it loads',
+    missing.length === 0,
+    missing.length ? 'undefined: ' + missing.join(', ')
+                   : 'checked ' + called.size + ' helpers across ' + loaded.length + ' modules');
+
+  // The three Phase 8 removed, named so a re-add is caught.
+  for (const gone of ['_tcSyncLogToBackend','_tcSetTargetStack','_tcClearStackConfigTrt']) {
+    check('  \u2026' + gone + ' is defined nowhere', !defined.has(gone));
+  }
+}
+
+// ── An unscoped delete never leaves the app ─────────────────────────────────
+// On 2026-08-14 `DELETE /injections?cycle_id=&from_date=<today>` went out and
+// destroyed a user's entire forward schedule: an empty value is not a narrow
+// filter, it is NO filter, and the backend matched every row in the account.
+// The guard lived in _tcSetTargetStack; Phase 8 deleted that with the rest of
+// T-Calc's write paths, so it now lives in inj-writer.js — the only module that
+// issues a delete. Driven for real, not grepped.
+console.log('\n── inj-writer refuses an unscoped delete ──────────────────');
+{
+  const _svFetch = G.fetch, _svAuth = G.authHeaders;
+  let urls = [];
+  G.fetch = function(u, o){ urls.push(String(u) + ' [' + ((o && o.method) || 'GET') + ']');
+                            return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve([])}); };
+  G.authHeaders = function(){ return {}; };
+
+  const today = '2026-08-20';
+  const cases = [
+    ['empty cycle id',    ['',        'nebido', today]],
+    ['empty compound id', ['cyc1',    '',       today]],
+    ['empty from date',   ['cyc1',    'nebido', '']],
+    ['all three missing', ['',        '',       '']],
+  ];
+  for (const [label, args] of cases) {
+    urls = [];
+    G.injClearFuture(args[0], args[1], args[2], {tag:'guardtest'});
+    check('refused: ' + label, urls.length === 0, urls.join(' | '));
+  }
+
+  // …and a fully scoped delete still goes out, or the guard would be a bug of its own.
+  urls = [];
+  G.injClearFuture('cyc1', 'nebido', today, {tag:'guardtest'});
+  const sent = urls.join(' | ');
+  check('a fully scoped delete is still issued', urls.length === 1, sent);
+  check('  …carrying all three filters', /cycle_id=cyc1/.test(sent) &&
+        /compound_id=nebido/.test(sent) && /from_date=2026-08-20/.test(sent));
+  check('  …and unlogged_only, so a recorded dose is never taken with the plan',
+        /unlogged_only=true/.test(sent));
+
+  // injClearFutureMany fans out through the same guard.
+  urls = [];
+  G.injClearFutureMany('', ['nebido','enanthate'], today, {tag:'guardtest'});
+  check('the many-compound form is guarded too, not just the single', urls.length === 0, urls.join(' | '));
+
+  G.fetch = _svFetch; G.authHeaders = _svAuth;
 }

@@ -72,9 +72,33 @@ async function injWriteOne(row, tag){
 // to pass it. A logged injection is the record of something that was
 // administered; clearing a plan must never take one with it. A caller that
 // genuinely means "remove the record too" has to say so explicitly.
+//
+// ⚠️ AN EMPTY cycleId OR compoundId IS NOT A NARROW DELETE — IT IS NO FILTER.
+// The backend reads `if cycle_id and ...`, so `?cycle_id=&from_date=<today>` matches
+// EVERY injection in the account from today on, across every protocol. That exact
+// request went out on 2026-08-14 and destroyed a user's whole forward schedule: 106
+// HGH rows, every forward peptide row and a logged dose, none of it testosterone and
+// none of it the caller's to touch.
+//
+// The guard against it used to live in _tcSetTargetStack, which Phase 8 deleted along
+// with the rest of T-Calc's write paths — and this module, which is now the only
+// place a delete is issued, never had one. So it lives here, where every delete has
+// to pass through it. Refusing is always safe; a delete that does not happen leaves
+// the record intact, and the caller that meant to scope it can be fixed.
+//
+// fromDate is required for the same reason: without it the backend has no lower
+// bound and the "future" delete reaches back through the whole history.
 async function injClearFuture(cycleId, compoundId, fromDate, opts){
   var o = opts || {};
   var unloggedOnly = (o.unloggedOnly === false) ? false : true;
+  if(!cycleId || !compoundId || !fromDate){
+    _injLogErr(o.tag || 'injClearFuture',
+      new Error('refused: a delete needs cycle_id, compound_id and from_date — got ' +
+                JSON.stringify({cycle_id: cycleId || '', compound_id: compoundId || '',
+                                from_date: fromDate || ''}) +
+                '. An empty value is NOT a filter; the backend would match every row.'));
+    return null;
+  }
   try{
     var r = await fetch(AGENT_URL + '/injections?cycle_id=' + encodeURIComponent(cycleId) +
                         '&compound_id=' + encodeURIComponent(compoundId) +

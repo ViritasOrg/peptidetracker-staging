@@ -1,10 +1,11 @@
 # Unified Plan rewrite — one scheduler, three tabs
 
-Status: **in progress** — Phases 0–6 landed 2026‑08‑19/20 (Phase 2 was largely
-already in place). Phase 7 resolved to a single deletion (§6.1) — the one non‑canonical
-row turned out to duplicate a dose already recorded correctly — and is waiting only on
-Henrik running it in the admin Records tab. Phase 8 (dropping the alias at runtime)
-follows once it is gone. See §6.
+Status: **complete** — Phases 0–8 landed 2026‑08‑19/20 (Phase 2 was largely already in
+place). Phase 7 resolved to a single deletion (§6.1) and Henrik ran it: 253 rows, every
+id canonical. Phase 8 was narrowed on the evidence (§6.2) — the alias map and the
+curve's dedup both stay, because removing them reintroduces documented failures; what
+went was the dead weight Phase 6 left behind, which turned out to include one live
+broken control and one missing delete guard. See §6.
 Author: drafted 2026-08-16 with Henrik
 Scope: multi-day. Ships in phases, each independently mergeable and revertible.
 
@@ -341,8 +342,8 @@ Each phase is a mergeable PR that leaves the app working.
 | 4 | Plan: Compounds tab | TRT + Enhanced editors merged into one | medium |
 | 5 | Un‑suppress the generator | **DONE 2026‑08‑19** — `_genInjBatches` emits testosterone; T‑Calc's writes disabled | **high** |
 | 6 | T‑Calc read‑only | **DONE 2026‑08‑20** — planner UI and every write path deleted; curve reads stored rows only | medium |
-| 7 | Migration | dry run done (§6.1) — one duplicate row to **delete**; action specified, awaiting Henrik running it | medium |
-| 8 | Cleanup | `_TC_TESTO_ALIAS` runtime use and the curve's dedup removed | low |
+| 7 | Migration | **DONE 2026‑08‑20** — the one duplicate row deleted; 253 rows, every id canonical | medium |
+| 8 | Cleanup | **DONE 2026‑08‑20, narrowed** — dead write paths and broken sheets deleted; alias and dedup KEPT, see §6.2 | low |
 
 ### 6.1 Phase 7 dry run — staging, read 2026‑08‑20
 
@@ -388,6 +389,41 @@ deletion rather than a bulk pass.
 **Rule this leaves behind:** a dry run must check whether the canonical target *already
 exists* before proposing a rewrite. Id‑and‑tier normalisation looks purely mechanical
 right up to the point where it collides with a row that is already correct.
+
+### 6.2 Phase 8 was narrowed, and why
+
+Phase 8 was written as "`_TC_TESTO_ALIAS` runtime use and the curve's dedup removed".
+Reading the code with Phase 7 done, **neither should go**, and saying so is the finding:
+
+- **The alias map stays.** Two ways to drop it, both worse than keeping it.
+  Removing the alias check from `_tcIsTestoRow` leaves `tier === 'trt'` deciding what
+  counts as testosterone — the exact filter that on 2026‑08‑14 discarded 4 logged and
+  26 scheduled doses and produced the plateau nobody could explain. Sourcing it from
+  the backend catalogue instead swaps a constant available at parse time for one that
+  arrives asynchronously, and the curve drawing before its inputs land is a documented
+  failure of its own (§ the `_tcInputsReady` note in `tab-tcalc.js`).
+- **The dedup stays.** Its comment says what it is for and it is not aliases:
+  *"MANUAL WINS on conflict … counting both would double it."* A logged manual row and
+  a planned protocol row for the same compound and day are one injection. Canonical ids
+  do not change that.
+
+What Phase 8 actually removed is the dead weight Phase 6 left standing — see the
+commit. Two of those were not merely dead:
+
+1. **The curve's zoom buttons were broken.** `buildTCalc` renders TODAY/WEEK/MONTH/
+   WHOLE with `onclick="_tcSetChartZoom(…)"`, and Phase 6 had deleted
+   `_tcSetChartZoom`. Live UI, throwing on every press. Restored.
+2. **`inj-writer.js` had no empty‑`cycleId` guard.** The check that stopped
+   `DELETE /injections?cycle_id=&from_date=…` — no filter at all, the request that
+   destroyed a forward schedule on 2026‑08‑14 — lived in `_tcSetTargetStack`, which
+   this phase deletes. The only module that now issues a delete never had one. Added,
+   with behavioural tests driving all four unscoped shapes.
+
+Both were found by a new test asserting the *opposite* direction from the usual grep:
+every helper the app **calls** must be **defined** in a module the page loads. Every
+"the deleted thing is gone" assertion passes precisely because a name is absent, so
+that family of test is blind to a call left pointing at nothing — which is how the
+admin UI shipped `dmWhere` the same day.
 
 Phases 3 and 5 are where this can go wrong. Both touch the code that writes the user's
 record; both need the full behavioural test set below green before merge.
