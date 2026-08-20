@@ -1643,6 +1643,65 @@ function _calcEnhancementCartItem(c,weeks){
   var packDesc=isTab?'('+pack.mg_per_tab+' mg/tab × '+pack.tabs_per_pack+' tabs/pack)':'('+pack.conc_mg_ml+' mg/mL × '+pack.vol_ml+' mL)';
   return{name:c.name,totalMg:Math.round(totalMg),totalUnit:'mg',units:units,unitLabel:isTab?(units===1?'pack':'packs'):(units===1?'vial':'vials'),packDesc:packDesc};
 }
+// ── TESTOSTERONE BELONGS IN THE SHOPPING LIST ───────────────────────────────
+// Reported 2026-08-20: "Test U missing in Shopping list for a new protocol."
+//
+// The cart was built from two sections, st.peptides and st.enhanced.compounds, and
+// never read st.trt.compounds at all. Testosterone was invisible to it. That went
+// unnoticed while enhanced cycles carried their base ester in the ENHANCED block —
+// it showed up there — but Phase 4 merged the tiers and testosterone now lives in
+// `trt` for every protocol, so a new protocol lists everything EXCEPT the compound
+// it is built on.
+//
+// TRT_CAT carries no sku and testosterone is not in PRICELIST, so this reports the
+// total and the ampoule count the way the Enhanced section does — "source
+// separately" — rather than inventing a price.
+//
+// The pack size is parsed from the catalogue's own `sub` string ("Testosterone
+// Undecanoate 1000mg/4ml", "Testosterone Enanthate 250mg/ml"), which is the only
+// place it is written down. When it cannot be parsed the item still lists its total
+// mg; a number with no pack count is more use than a missing row.
+function _cartTrtPack(cat){
+  var sub=String((cat&&cat.sub)||'');
+  var m=sub.match(/(\d+(?:\.\d+)?)\s*mg\s*\/\s*(\d+(?:\.\d+)?)?\s*ml/i);
+  if(!m)return null;
+  var mg=parseFloat(m[1]);
+  var ml=m[2]?parseFloat(m[2]):1;
+  if(!(mg>0)||!(ml>0))return null;
+  return {mgPerAmp:mg, ml:ml, conc:mg/ml};
+}
+
+// How many injections the cycle actually contains — the same two shapes the
+// generator understands: named weekdays, or an every-N-days interval.
+function _cartTrtInjections(c,weeks){
+  var days=weeks*7;
+  if(c.id!=='nebido'&&c.days&&c.days.length)return c.days.length*weeks;
+  var freqDays=(c.freqUnit==='weeks')?((c.freqVal||1)*7):(c.freqVal||1);
+  if(!(freqDays>0))return 0;
+  return Math.ceil(days/freqDays);
+}
+
+function _calcTrtCartItem(c,weeks){
+  if(!c||!c.id)return null;
+  var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(t){return t.id===c.id;}):null;
+  var name=c.name||(cat&&cat.name)||c.id;
+  // A RATE IS NOT THE AMOUNT IN THE SYRINGE. A compound folded in from the Enhanced
+  // side can carry "mg/week"; the same helper the generator uses converts it.
+  var pd=(typeof _enhDosePerInjection==='function')?_enhDosePerInjection(c):{dose:c.dose,unit:c.unit};
+  var perInj=parseDec(pd&&pd.dose)||0;
+  var unit=_canonUnit((pd&&pd.unit)||c.unit||'mg');
+  if(unit!=='mg')return {name:name,totalMg:0,totalUnit:unit,units:null,unitLabel:'',packDesc:'',noData:true};
+  var injections=_cartTrtInjections(c,weeks);
+  var totalMg=perInj*injections;
+  if(!(totalMg>0))return {name:name,totalMg:0,totalUnit:'mg',units:null,unitLabel:'',packDesc:'',noData:true};
+  var pack=_cartTrtPack(cat);
+  if(!pack)return {name:name,totalMg:Math.round(totalMg),totalUnit:'mg',units:null,unitLabel:'',packDesc:''};
+  var amps=Math.ceil(totalMg/pack.mgPerAmp);
+  return {name:name,totalMg:Math.round(totalMg),totalUnit:'mg',units:amps,
+          unitLabel:(amps===1?'ampoule':'ampoules'),
+          packDesc:'('+pack.mgPerAmp+' mg/'+(pack.ml===1?'mL':pack.ml+' mL')+')'};
+}
+
 function _renderCartModal(){
   var inner=document.getElementById('cart-modal-inner');if(!inner)return;
   var st=_userStacks[_cartStackIdx];
@@ -1683,6 +1742,25 @@ function _renderCartModal(){
       h+='<div style="font-size:12px;color:var(--muted2);padding:8px 0">No peptide data available</div>';
     }
   }
+  // Testosterone first, matching Plan ▸ Compounds, where it is the top group.
+  var trtCmpds=(st.trt&&st.trt.compounds)?st.trt.compounds.filter(function(c){return c&&c.active!==false&&c.id;}):[];
+  if(trtCmpds.length){
+    h+='<div style="font-size:10px;font-weight:700;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;margin-top:18px">Testosterone — source separately</div>';
+    trtCmpds.forEach(function(c){
+      var item=_calcTrtCartItem(c,weeks);if(!item)return;hasItems=true;
+      h+='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px">';
+      h+='<div style="font-size:13px;font-weight:600;color:var(--text)">'+_esc(item.name)+'</div>';
+      if(item.noData){
+        h+='<div style="font-size:11px;color:var(--muted2);margin-top:4px">Set a dose in Plan ▸ Compounds to calculate</div>';
+      }else{
+        h+='<div style="font-size:11px;color:var(--muted2);line-height:1.9;margin-top:4px">';
+        h+='Total: '+item.totalMg.toLocaleString()+' '+item.totalUnit;
+        if(item.units!=null)h+=' · <span style="font-weight:600;color:var(--text)">'+item.units+' '+item.unitLabel+'</span> '+_esc(item.packDesc);
+        h+='</div>';
+      }
+      h+='</div>';
+    });
+  }
   var enhanceCmpds=(st.enhanced&&st.enhanced.compounds)?st.enhanced.compounds.filter(function(c){return c.active!==false&&c.name;}):[];
   if(enhanceCmpds.length){
     h+='<div style="font-size:10px;font-weight:700;color:var(--muted2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;margin-top:18px">Enhancement Compounds — source separately</div>';
@@ -1697,7 +1775,7 @@ function _renderCartModal(){
       h+='</div>';
     });
   }
-  if(!hasItems&&!peptides.length&&!enhanceCmpds.length){
+  if(!hasItems&&!peptides.length&&!enhanceCmpds.length&&!trtCmpds.length){
     h+='<div style="text-align:center;padding:24px 0;color:var(--muted2);font-size:13px">Add peptides to this protocol to see your shopping list.</div>';
   }
   h+='</div>';
