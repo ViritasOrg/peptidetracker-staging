@@ -4169,6 +4169,90 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     }
   }
 
+  // ── Editing a protocol sets dates, not a number of months ──────────────────
+  // Henrik, 2026-08-20: "Edit Protocol needs to be able to set start and end date. The
+  // no of months is to course. It makes sense in the wizard when u create a protocol
+  // but not when you edit it."
+  console.log('\n── Edit protocol: start and end dates ─────────────────────');
+  {
+    const _svBuf = G._editBuf, _svDoc = G.document.getElementById;
+    G.document.getElementById = () => null;   // no DOM: the buffer is what is under test
+
+    // ── the derived length ──
+    check('a fortnight is two weeks', G._cycleWeeksBetween('2026-09-01','2026-09-15') === 2);
+    check('a part week rounds UP, so nothing stops short of the end date',
+      G._cycleWeeksBetween('2026-09-01','2026-09-16') === 3);
+    check('an end on the start is no length at all', G._cycleWeeksBetween('2026-09-01','2026-09-01') === 0);
+    check('missing dates give no length', G._cycleWeeksBetween('', '2026-09-15') === 0);
+
+    // ── what the editor stores ──
+    G._editBuf = {name:'P', cycle_start:'2026-09-01', cycle_length:12};
+    G.editSetCycleEnd('2026-10-14');
+    check('setting an end date stores it', G._editBuf.end_date === '2026-10-14');
+    // 1 Sep → 14 Oct is 43 days, which is 7 weeks rounded up — not 6. Written as 6 on
+    // the first pass, and the code was right: rounding UP is what stops anything
+    // derived from the length falling short of the end date.
+    check('  …and brings cycle_length with it, so nothing downstream disagrees',
+      G._editBuf.cycle_length === 7, String(G._editBuf.cycle_length));
+
+    // ── an end before the start is refused, not silently corrected ──
+    G._editBuf = {name:'P', cycle_start:'2026-09-01', end_date:'2026-10-14', cycle_length:6};
+    G.editSetCycleEnd('2026-08-01');
+    check('an end before the start is refused', G._editBuf.end_date === '2026-10-14');
+    check('  …and says which way round it should be', !!G._editBuf._cycleErr);
+
+    // ── clearing means "runs until stopped" in BOTH fields ──
+    G._editBuf = {name:'P', cycle_start:'2026-09-01', end_date:'2026-10-14', cycle_length:6};
+    G.editSetCycleEnd('');
+    check('clearing the end date leaves no end', G._editBuf.end_date === undefined);
+    check('  …and zeroes the length to match, so the two cannot disagree',
+      G._editBuf.cycle_length === 0);
+
+    // ── moving the start past the end does not invert the protocol ──
+    G._editBuf = {name:'P', cycle_start:'2026-09-01', end_date:'2026-09-20', cycle_length:3};
+    G.editSetCycleStart('2026-10-01');
+    check('moving the start past the end drops the end rather than inverting',
+      G._editBuf.end_date === undefined && G._editBuf.cycle_length === 0);
+
+    // ── the end date a protocol implies, however it was set ──
+    check('an explicit end date is reported as-is',
+      G._cycleEndDateStr({cycle_start:'2026-09-01', end_date:'2026-10-14'}) === '2026-10-14');
+    check('  …and a length is converted to one',
+      G._cycleEndDateStr({cycle_start:'2026-09-01', cycle_length:2}) === '2026-09-15');
+    check('  …with no end meaning no date', G._cycleEndDateStr({cycle_start:'2026-09-01', cycle_length:0}) === '');
+
+    G._editBuf = _svBuf; G.document.getElementById = _svDoc;
+  }
+
+  // ── The schedule stops on the date, not the rounded week ───────────────────
+  // The point of the request: a precise end date is useless if the generator rounds it
+  // up to whole weeks. cycle_length is whole weeks ROUNDED UP, so a protocol ending
+  // mid-week would otherwise generate past its own end.
+  {
+    const proto = {
+      id:'p1', name:'P', cycle_start:'2026-09-01', end_date:'2026-09-16',
+      cycle_length: 3,                       // 15 days rounds up to 3 weeks = 21 days
+      peptides:[], enhanced:{enabled:false,compounds:[]},
+      trt:{enabled:true, compounds:[{id:'enanthate', name:'Testosterone Enanthate',
+            dose:'100', unit:'mg', freqVal:1, freqUnit:'days', dot:'#e05050'}]}
+    };
+    const batches = G._genInjBatches(proto, 'p1', null) || [];
+    const dates = batches.reduce((a,b) => a.concat((b.entries||[]).map(e => e.date)), []).sort();
+    check('the schedule runs to the end date', dates.indexOf('2026-09-16') >= 0, dates.join(','));
+    check('  …and NOT past it to the rounded week',
+      dates.every(d => d <= '2026-09-16'),
+      'latest: ' + (dates[dates.length-1] || '(none)'));
+    check('  …which the rounded length alone would have done',
+      new Date('2026-09-01T00:00:00').getTime() + 3*7*86400000 > new Date('2026-09-16T00:00:00').getTime());
+
+    // Without an end_date the length still governs, unchanged.
+    const legacy = Object.assign({}, proto); delete legacy.end_date;
+    const lDates = (G._genInjBatches(legacy,'p1',null)||[])
+      .reduce((a,b)=>a.concat((b.entries||[]).map(e=>e.date)),[]).sort();
+    check('a protocol with only a length is unaffected',
+      lDates[lDates.length-1] === '2026-09-22', lDates[lDates.length-1]);
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -4940,10 +5024,30 @@ console.log('\n── dose dedup migration ────────────�
   check('buildWeekStrip reads enhanced dots from _injectionsCache, not _getDynamicEnhancedDoses directly',
     todayJs.includes('_injectionsCache') && !todayJs.includes('_getDynamicEnhancedDoses(d,false)'));
 
-  check('tab-stack.js edit view has no Cycle End field (removed — use cycle length instead)',
-    !tabStackJs.includes("id='edit-cycle-end'")&&!tabStackJs.includes('id="edit-cycle-end"'));
-  check('tab-stack.js Cycle Length select has No end date option (value 0)',
-    tabStackJs.includes("value=\"0\"")&&tabStackJs.includes('No end date'));
+  // REVERSED 2026-08-20. Henrik: "Edit Protocol needs to be able to set start and end
+  // date. The no of months is to course. It makes sense in the wizard when u create a
+  // protocol but not when you edit it." The end-date field was removed once in favour
+  // of a months dropdown; editing a run already under way is the case where the date is
+  // the thing you know, so it is back — and now authoritative.
+  check('tab-stack.js edit view offers an end date',
+    tabStackJs.includes('id="edit-cycle-end"'));
+  // Scoped to renderStackEditor: the wizard keeps its months dropdown, which is the
+  // point — creating is a choice about length, editing is a correction to dates.
+  check('  …and no longer offers the months dropdown in the EDITOR',
+    (function(){
+      var i=tabStackJs.indexOf('function renderStackEditor(');
+      var j=tabStackJs.indexOf('function _stackTabBar(', i);
+      var body=tabStackJs.slice(i, j > i ? j : i + 20000);
+      return body.indexOf('CYCLE_WEEKS.forEach') === -1;
+    })());
+  check('  …while the wizard still has it',
+    (function(){
+      var i=tabStackJs.indexOf('function wizStep1(');
+      if(i<0) i=tabStackJs.indexOf('wizSetCycleLength');
+      return tabStackJs.slice(Math.max(0,i-400), i+900).indexOf('CYCLE_WEEKS.forEach') >= 0;
+    })());
+  check('  …while "no end date" is still reachable',
+    tabStackJs.includes('No end date'));
 }
 
 // ── Duplicate-dosing detection, within one protocol ───────────────────────────
