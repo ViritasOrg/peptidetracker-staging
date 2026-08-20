@@ -5343,8 +5343,58 @@ console.log('\n── Wizard TRT step ──────────────
     /footer\.innerHTML=[\s\S]{0,200}try\{/.test(_stSrc2));
   check('an empty body is backfilled rather than shown blank',
     /if\(!body\.innerHTML\|\|!body\.innerHTML\.trim\(\)\)/.test(_stSrc2));
-  check('saving commits the wizard plan into the T-Calc simple plan',
-    /_tcp\.simplePlan=\{compId:_wp\.compId/.test(_stSrc2) && /_tcp\.plannerMode='simple'/.test(_stSrc2));
+  // ── The wizard plan becomes a scheduled compound, not planner state ───────
+  // Until 2026-08-20 this asserted the plan was committed to `_tcp.simplePlan`.
+  // Phase 6 deleted the planner that read it, so the commit wrote to a field the
+  // profile keeps only so old saves are not rewritten — the user's dose, cadence
+  // and start date went in and nothing ever came out. Behavioural now: drive the
+  // fold and read the protocol it produced.
+  check('the plan is no longer committed to the dead planner',
+    !/_tcp\.simplePlan=\{compId:_wp\.compId/.test(_stSrc2) && !/_tcp\.plannerMode='simple'/.test(_stSrc2));
+  if(typeof G._wizFoldTrtPlanIntoProto==='function'){
+    const _svW=G._wiz;
+    G._wiz={goals:['trt'], trtPlan:{compId:'enanthate',doseMg:'125',cadenceN:3,cadenceUnit:'day',cadenceDays:3.5,startDate:'2026-07-01'}};
+
+    const proto={id:'p1', name:'P1'};
+    const wrote=G._wizFoldTrtPlanIntoProto(proto);
+    const c=((proto.trt||{}).compounds||[])[0];
+    check('the wizard plan lands in the protocol as a real compound', wrote===true && !!c);
+    check('  …under the canonical id', !!c && c.id==='enanthate');
+    check('  …carrying the dose as a per-injection amount, never a rate',
+      !!c && c.dose==='125' && c.unit==='mg');
+    check('  …with the cadence as an interval the generator understands',
+      !!c && Number(c.freqVal)===3.5 && c.freqUnit==='days');
+    check('  …and the first-injection date the user picked',
+      !!c && c.start_date==='2026-07-01');
+    check('  …with the tier switched on, or nothing would generate',
+      !!proto.trt && proto.trt.enabled===true);
+
+    // A classic multi-compound configuration is the user's own work. A planner must
+    // never overwrite it — this is the guard `_trtInline` has always provided.
+    const classic={id:'p2', trt:{enabled:true, compounds:[{id:'nebido',name:'Nebido',dose:'100',unit:'mg'}]}};
+    const wrote2=G._wizFoldTrtPlanIntoProto(classic);
+    check('a classic configuration still wins over the wizard plan',
+      wrote2===false && classic.trt.compounds.length===1 && classic.trt.compounds[0].id==='nebido');
+
+    // An Enhanced cycle already picked its base ester in the wizard's `base` step.
+    // Folding again would schedule the same molecule twice — the doubling the whole
+    // rewrite exists to end — including across the two id spellings.
+    const enh={id:'p3', enhanced:{enabled:true, compounds:[{id:'test_e',name:'Testosterone Enanthate'}]}};
+    const wrote3=G._wizFoldTrtPlanIntoProto(enh);
+    check('an ester already on the protocol is not scheduled a second time',
+      wrote3===false && !((enh.trt||{}).compounds||[]).length);
+
+    // Half-filled is not a schedule. Inventing the missing half would be inventing
+    // doses nobody asked for.
+    G._wiz.trtPlan={compId:'enanthate',doseMg:'',cadenceDays:3.5,startDate:'2026-07-01'};
+    const partial={id:'p4'};
+    check('an incomplete plan schedules nothing at all',
+      G._wizFoldTrtPlanIntoProto(partial)===false && !((partial.trt||{}).compounds||[]).length);
+
+    G._wiz=_svW;
+  }else{
+    check('_wizFoldTrtPlanIntoProto exists', false);
+  }
 }
 
 // ── T-Calc simple planner (ester → dose → cadence → curve) ───────────────────
@@ -5477,17 +5527,22 @@ console.log('\n── T-Calc simple planner ────────────
   check('the wizard TRT step hands off to T-Calc', /trt:wizStepTRTHandoff/.test(_stSrc));
   check('the classic in-wizard TRT config is kept, one tap away',
     /function wizStepTRT\(body,footer\)/.test(_stSrc) && /wizToggleTrtClassic/.test(_stSrc));
-  check('saving a TRT protocol routes to T-Calc and links the stack',
-    /_tcp\.targetStackId=_savedStack\.id/.test(_stSrc) && /switchTab\('tcalc'/.test(_stSrc));
-  // Superseded 2026-08-14. This asserted that a protocol configured through the
-  // classic multi-compound step "still lands on Protocols" — correct while that step
-  // generated its own injections, a dead end now that it does not: settings saved,
-  // nothing scheduled, and no route to the only tab that can schedule it.
-  check('the classic TRT step routes to T-Calc as well — it schedules nothing itself',
-    !/_wantsTrt && !_trtInline && typeof _tcp/.test(_stSrc),
-    'the inline-config path is skipping the T-Calc hand-off again');
-  check('  …while a classic configuration still wins over a half-filled planner',
-    /_wantsTrt && !_trtInline && typeof _wizTrtPlanComplete/.test(_stSrc));
+  // ── Where saving lands, and what it links (rewritten 2026-08-20) ──────────
+  // These asserted the T-Calc hand-off: route to 'tcalc' and set targetStackId so
+  // "the plan and the protocol stay linked". Phase 6 removed the planner at the
+  // other end, which turned the hand-off into the bug — the user was shown a tab
+  // that could not hold what they had just described, and the schedule was dropped
+  // on the way. The protocol is now both where it is built and where you land.
+  check('saving no longer routes to T-Calc',
+    !/switchTab\('tcalc'/.test(_stSrc),
+    'the wizard is sending the user back to a tab that cannot schedule');
+  check('  …nor re-binds a protocol as the T-Calc target',
+    !/_tcp\.targetStackId=_savedStack\.id/.test(_stSrc),
+    'setting targetStackId re-arms the single-source confirm + the writes-disabled alert');
+  check('  …and everyone lands on the protocol they just built',
+    /switchTab\('stacks',document\.getElementById\('tab-btn-stacks'\)\);/.test(_stSrc));
+  check('the classic in-wizard TRT config is still what wins when present',
+    /if\(existing\.length\) return false;/.test(_stSrc));
 
   // The hand-off triggers on WHAT THE PROTOCOL CARRIES, not the goal chip. Gating on
   // goals.includes('trt') missed the entire Enhanced path: an enhanced cycle picks its
@@ -5514,11 +5569,15 @@ console.log('\n── T-Calc simple planner ────────────
     check('  …and a TRT-tier ester is found by tier, brand name notwithstanding',
       (G._stackTestoComp({trt:{enabled:true, compounds:[{id:'nebido',name:'Nebido'}]}})||{}).tier === 'trt');
   }
-  // Outside the guard, so they run — and fail — on a source that lacks the fix.
-  check('the hand-off is driven by that, not by the goal chip alone',
-    /_wantsTrt = \(_wiz\.goals\|\|\[\]\)\.indexOf\('trt'\)>=0 \|\| !!_testoIn/.test(_stSrc));
-  check('  …carrying the chosen ester into the planner, canonicalised',
-    /_tcCanonCompId\(_testoIn\.c\.id\)/.test(_stSrc) && /!_sp\.compId/.test(_stSrc));
+  // _stackTestoComp used to drive the hand-off. It now drives DUPLICATE DETECTION
+  // in the fold: an Enhanced cycle that already carries its base ester must not have
+  // the same molecule scheduled again from the wizard step. Same question — what does
+  // this protocol already carry — put to better use.
+  check('the fold asks what the protocol already carries',
+    /_stackTestoComp\(proto\)/.test(_stSrc),
+    'without this an Enhanced base ester gets scheduled twice');
+  check('  …and canonicalises the wizard ester before storing it',
+    /_canonCompoundId\(p\.compId\)/.test(_stSrc));
 }
 
 // ── T-Calc is populated by the planned TRT protocol ──────────────────────────
