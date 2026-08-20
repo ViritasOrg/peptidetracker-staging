@@ -540,8 +540,17 @@ function editToggleDay(el,pi,di){
   else if(p.days.length>1){p.days.splice(i,1);el.classList.remove('sel');}
 }
 function editRemovePeptide(pi){_editBuf.peptides.splice(pi,1);renderStackEditor();}
-function editToggleTRT(){if(!_editBuf.trt)_editBuf.trt={};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];_editBuf.trt.enabled=!_editBuf.trt.enabled;_collectEditInputs();renderStackEditor();}
-function editToggleTRTCompound(id){if(!_editBuf.trt)_editBuf.trt={enabled:true,compounds:[]};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];var idx=_editBuf.trt.compounds.findIndex(function(c){return c.id===id;});if(idx!==-1){_editBuf.trt.compounds.splice(idx,1);}else{var cat=TRT_CAT.find(function(c){return c.id===id;});if(cat)_editBuf.trt.compounds.push({id:id,name:cat.name,dose:cat.defaultDose||'',unit:cat.unit||'mg',freqVal:cat.freqVal||1,freqUnit:cat.freqUnit||'weeks',days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});}_collectEditInputs();renderStackEditor();}
+// Same defence in depth as editToggleEnhancedCompound: the locked cards do not call
+// these, but rendering is presentation and these are what change the protocol. Turning
+// the tier ON is refused below tier 2; turning it OFF is not, so a protocol carrying
+// testosterone after a downgrade is not frozen that way.
+function editToggleTRT(){
+  if((_userTier||1)<2 && !(_editBuf.trt&&_editBuf.trt.enabled)){ showCompoundUpgrade('testosterone'); return; }
+  if(!_editBuf.trt)_editBuf.trt={};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];_editBuf.trt.enabled=!_editBuf.trt.enabled;_collectEditInputs();renderStackEditor();}
+function editToggleTRTCompound(id){
+  var _has=((_editBuf.trt&&_editBuf.trt.compounds)||[]).some(function(c){return c&&c.id===id;});
+  if((_userTier||1)<2 && !_has){ showCompoundUpgrade(id); return; }
+  if(!_editBuf.trt)_editBuf.trt={enabled:true,compounds:[]};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];var idx=_editBuf.trt.compounds.findIndex(function(c){return c.id===id;});if(idx!==-1){_editBuf.trt.compounds.splice(idx,1);}else{var cat=TRT_CAT.find(function(c){return c.id===id;});if(cat)_editBuf.trt.compounds.push({id:id,name:cat.name,dose:cat.defaultDose||'',unit:cat.unit||'mg',freqVal:cat.freqVal||1,freqUnit:cat.freqUnit||'weeks',days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});}_collectEditInputs();renderStackEditor();}
 // A SELECT MUST NEVER DISPLAY A UNIT IT IS NOT HOLDING.
 // Reported 2026-08-19: "Choosing 100mg every 2 day generates a 28mg dose instead of the
 // planned 100mg." The entry stored unit "mg/week" — carried in from the Enhanced block
@@ -641,7 +650,28 @@ function _halfLifeLabel(entry){
   return head?('t½ '+head):'';
 }
 
-function _renderEditTRT(trt){if(!trt)trt={};var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';if(c.id!=='nebido'){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqVal=parseInt(x)||1;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)" style="max-width:70px;"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqUnit=x;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)"><option'+('days'===(selData.freqUnit||'weeks')?' selected':'')+'>days</option><option'+('weeks'===(selData.freqUnit||'weeks')?' selected':'')+'>weeks</option></select></div></div>';}html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
+function _renderEditTRT(trt){if(!trt)trt={};
+  // ── TIER 1 SEES TESTOSTERONE TOO, LOCKED (2026-08-20) ─────────────────────
+  // Henrik: "Tier 1 & 2 should see everything but greyed out if not included in
+  // their tier." Tier 1 is the peptide tier and has no testosterone access, so this
+  // group renders in full and locked rather than being hidden — the same treatment
+  // the enhancement classes get one tier up. Whole catalogue at every tier; what the
+  // tier decides is what you can switch ON.
+  //
+  // Locked here rather than through _renderEditEnhanced because testosterone lives in
+  // the TRT block, keyed on TRT_CAT and the PK ids. Same lock, same overlay.
+  if((_userTier||1)<2){
+    var lockedHtml='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><span style="font-size:13px;color:var(--muted2)">🔒</span></div>';
+    (typeof TRT_CAT!=='undefined'?TRT_CAT:[]).forEach(function(c){
+      lockedHtml+='<div class="pep-card" onclick="showCompoundUpgrade(\''+_esc(String(c.id))+'\')" style="margin-bottom:6px;opacity:0.45;cursor:pointer">'
+        +'<div class="pep-dot-sm" style="background:'+c.dot+'"></div>'
+        +'<div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div>'
+        +'<div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div>'
+        +'<div class="pep-chk" style="font-size:13px;color:var(--muted2)">🔒</div></div>';
+    });
+    return lockedHtml;
+  }
+  var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';if(c.id!=='nebido'){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqVal=parseInt(x)||1;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)" style="max-width:70px;"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqUnit=x;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)"><option'+('days'===(selData.freqUnit||'weeks')?' selected':'')+'>days</option><option'+('weeks'===(selData.freqUnit||'weeks')?' selected':'')+'>weeks</option></select></div></div>';}html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
 function editSetTRTTime(id,tm){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.time=(tm==='PM'?'PM':'AM');_collectEditInputs();renderStackEditor();}
 function editAddPeptide(){
   var currentIds=(_editBuf.peptides||[]).map(function(p){return p.id;});
@@ -2165,6 +2195,19 @@ function wizSetTRTFreqUnit(id,v){var c=(_wiz.trt.compounds||[]).find(function(c)
 function wizSetTRTDays(id,di){var c=(_wiz.trt.compounds||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1)c.days.splice(idx,1);else c.days.push(di);c.days.sort(function(a,b){return a-b;});wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 function editSetTRTDays(id,di){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1)c.days.splice(idx,1);else c.days.push(di);c.days.sort(function(a,b){return a-b;});_collectEditInputs();renderStackEditor();}
 function editToggleEnhancedCompound(id){
+  // The gate is enforced HERE as well as in the rendering, because the rendering is a
+  // presentation and this is the thing that changes the protocol. The locked cards do
+  // not call this — but an inline onclick is one devtools console away, and the tier
+  // boundary is an entitlement, not a styling choice. Adding is refused; REMOVING is
+  // not, so a compound already on a protocol can still be taken off after a downgrade
+  // rather than being stuck there.
+  var _already=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[])
+                 .some(function(c){return c&&c.id===id;});
+  if(!_already){
+    var _cat=(typeof ENHANCEMENT_COMPOUNDS!=='undefined'&&ENHANCEMENT_COMPOUNDS)
+      ? ENHANCEMENT_COMPOUNDS.find(function(c){return c&&c.id===id;}) : null;
+    if(!_compoundAllowedForTier(_cat)){ showCompoundUpgrade(id); return; }
+  }
   if(!_editBuf.enhanced)_editBuf.enhanced={enabled:false,compounds:[]};
   if(!_editBuf.enhanced.compounds)_editBuf.enhanced.compounds=[];
   var idx=_editBuf.enhanced.compounds.findIndex(function(c){return c.id===id;});
@@ -2243,6 +2286,78 @@ function _enhDormantNoteHtml(c,stackLike){
   // The only thing left worth saying is that an unmigrated id is an old spelling.
   return _unmigratedTestoNote(c);
 }
+// ── WHAT A TIER-2 USER MAY ACTUALLY ADD ─────────────────────────────────────
+// Henrik, 2026-08-20: "I want a tier2 user to still see the full catalog, but
+// anything else than testosterone, PCT and HCT compounds should be greyed out.
+// Clicking a Enhanced compound will trigger an overlay with an (for now dummy)
+// message about requiring an app upgrade."
+//
+// Tier 2 is the testosterone tier: TRT plus the things that go with running it —
+// hCG on cycle, and the PCT compounds that come after. Everything else is tier 3.
+//
+// Testosterone is recognised by the CATALOGUE FLAG, not by name. The backend's
+// merged catalogue carries isTestosterone, and a name check is what let
+// "Testoviron Depot" slip past a testosterone filter once already. ENHANCEMENT_COMPOUNDS
+// is itself already filtered to non-testosterone, so in practice everything it holds is
+// locked at tier 2 today — the allowance is written out in full anyway, because the
+// PCT and hCG entries are expected in this catalogue and must not arrive locked.
+var _TIER2_EXTRA_IDS = ['hcg','hmg','clomid','clomiphene','enclomiphene','nolvadex',
+                        'tamoxifen','raloxifene','toremifene'];
+var _TIER2_EXTRA_GROUPS = ['PCT','Recovery','Post-Cycle','HCG'];
+
+function _compoundAllowedForTier(c, tier){
+  var t = tier || _userTier || 1;
+  if (t >= 3) return true;
+  if (t < 2) return false;
+  if (!c) return false;
+  if (c.isTestosterone === true) return true;
+  if (String(c.group||'') === 'Base') return true;
+  if (_TIER2_EXTRA_IDS.indexOf(String(c.id||'')) >= 0) return true;
+  if (_TIER2_EXTRA_GROUPS.indexOf(String(c.group||'')) >= 0) return true;
+  return false;
+}
+
+// Dummy for now, by request — the copy and the upgrade route are not decided yet.
+// Deliberately NOT a confirm()/alert(): those block the page and read as an error.
+function showCompoundUpgrade(compId){
+  // Takes an ID and resolves the name here. Interpolating a display name straight into
+  // an inline onclick breaks the moment one contains an apostrophe.
+  var c = null;
+  if (typeof ENHANCEMENT_COMPOUNDS !== 'undefined' && ENHANCEMENT_COMPOUNDS)
+    c = ENHANCEMENT_COMPOUNDS.find(function(x){ return x && x.id === compId; });
+  if (!c && typeof _COMPOUND_CATALOG !== 'undefined' && _COMPOUND_CATALOG)
+    c = _COMPOUND_CATALOG.find(function(x){ return x && x.id === compId; });
+  // TRT_CAT too: at tier 1 the locked cards are the testosterone esters, and they are
+  // not in ENHANCEMENT_COMPOUNDS at all.
+  if (!c && typeof TRT_CAT !== 'undefined' && TRT_CAT)
+    c = TRT_CAT.find(function(x){ return x && x.id === compId; });
+  var name = (c && c.name) || (compId === 'testosterone' ? 'Testosterone' : compId);
+  var ex = document.getElementById('upg-overlay'); if (ex && ex.remove) ex.remove();
+  // Built as markup and appended, the same way every other sheet in this app is. The
+  // onclick belongs in the string rather than on the element: it keeps the close
+  // behaviour with the markup it closes, and setAttribute is not something to assume.
+  var html =
+    '<div id="upg-overlay" onclick="if(event.target===this)_closeCompoundUpgrade()" ' +
+      'style="position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;padding:24px">' +
+      '<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:340px;width:100%;text-align:center">' +
+        '<div style="font-size:26px;margin-bottom:10px">🔒</div>' +
+        '<div style="font-size:11px;color:var(--muted);letter-spacing:1.5px;font-weight:700;margin-bottom:6px">ENHANCED TIER</div>' +
+        '<div style="font-size:17px;font-weight:800;color:var(--text);margin-bottom:10px">' + _esc(name) + '</div>' +
+        '<div style="font-size:13px;color:var(--muted2);line-height:1.6;margin-bottom:20px">' +
+          'Your plan covers testosterone, hCG and PCT. Adding this compound needs an app upgrade.' +
+        '</div>' +
+        '<button onclick="_closeCompoundUpgrade()" style="width:100%;background:var(--accent);color:#000;border:none;border-radius:12px;padding:13px;font-size:14px;font-weight:800;cursor:pointer;font-family:inherit">Got it</button>' +
+      '</div>' +
+    '</div>';
+  var wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  if (wrap.firstChild && document.body && document.body.appendChild)
+    document.body.appendChild(wrap.firstChild);
+}
+function _closeCompoundUpgrade(){
+  var el = document.getElementById('upg-overlay'); if (el && el.remove) el.remove();
+}
+
 function _renderEditEnhanced(enh,opts){
   if(!enh)enh={enabled:false,compounds:[]};
   var o=opts||{};
@@ -2261,6 +2376,19 @@ function _renderEditEnhanced(enh,opts){
     groups[grp].forEach(function(c){
       var isSel=selIds.includes(c.id);
       var selData=isSel?sel.find(function(s){return s.id===c.id;}):null;
+      // LOCKED, NOT HIDDEN. The card renders in full — name, class, half-life — so the
+      // catalogue reads as complete and a tier-2 user can see what the tier holds.
+      // Tapping explains rather than doing nothing, which is the difference between a
+      // locked door and a broken one.
+      var locked=!_compoundAllowedForTier(c);
+      if(locked){
+        html+='<div class="pep-card" onclick="showCompoundUpgrade(\''+_esc(String(c.id))+'\')" style="margin-bottom:8px;opacity:0.45;cursor:pointer">'
+          +'<div class="pep-dot-sm" style="background:'+c.dot+'"></div>'
+          +'<div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div>'
+          +'<div class="pep-meta">'+_esc(_halfLifeLabel(c)||c.group||'')+'</div></div>'
+          +'<div class="pep-chk" style="font-size:13px;color:var(--muted2)">🔒</div></div>';
+        return;   // no config panel, and no way to select it
+      }
       html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="editToggleEnhancedCompound(\''+c.id+'\')" style="margin-bottom:'+(isSel?'0':'8px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div><div class="pep-meta">'+_esc(_halfLifeLabel(c)||c.group||'')+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';
       if(isSel&&selData){
         // #637: AM/PM split is user-toggleable on any enhanced compound (defaults to
@@ -2308,12 +2436,20 @@ var COMPOUND_GROUP_ORDER=['DHT-Derived','19-Nor','Oral','GH Axis'];
 function _renderEditCompounds(st){
   var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">One protocol, every compound. Testosterone first, then by class.</div>';
   html+=_renderEditTRT(st.trt);
-  if((_userTier||1)>=3){
-    html+=_renderEditEnhanced(_editBuf.enhanced||{enabled:false,compounds:[]},
-                              {skipGroups:['Base'],order:COMPOUND_GROUP_ORDER});
-  }else{
-    html+=_renderEnhancedUpgradeCTA();
-  }
+  // TIER 2 SEES THE WHOLE CATALOGUE (2026-08-20). It used to get an upgrade card in
+  // place of the list, so there was no way to find out what the tier above actually
+  // holds — the pitch without the product. Now the same list renders, with everything
+  // outside testosterone/hCG/PCT greyed and tapping through to the upgrade message.
+  // _renderEditEnhanced locks per compound, so this is ONE call for both tiers and the
+  // two cannot drift apart.
+  //
+  // EVERY tier gets the list, corrected 2026-08-20 — "Tier 1 & 2 should see everything
+  // but greyed out if not included in their tier." One call, one catalogue; the lock is
+  // per compound inside the renderer, so no tier can quietly end up with a different
+  // list from another.
+  html+=_renderEditEnhanced(_editBuf.enhanced||{enabled:false,compounds:[]},
+                            {skipGroups:['Base'],order:COMPOUND_GROUP_ORDER});
+  if((_userTier||1)<3) html+=_renderEnhancedUpgradeCTA();
   return html;
 }
 
