@@ -4056,17 +4056,38 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     check('a weekly ester totals dose × weeks', tv.totalMg === 125 * wk, JSON.stringify(tv));
     check('  …and rounds ampoules up, never down', tv.units === Math.ceil(1500 / 250), JSON.stringify(tv));
 
-    // KNOWN GAP, pinned deliberately: only nebido and testoviron state a concentration
-    // in TRT_CAT ("1000mg/4ml", "250mg/ml"). enanthate/cypionate/propionate say
-    // "Generic / Jenapharm" and the like, so there is nothing to divide by and no
-    // ampoule count can be given. They still report total mg, which is the part that
-    // matters for ordering. Adding pack sizes for them is Henrik's data to supply —
-    // inventing a concentration would put a wrong number on a shopping list.
+    // GAP CLOSED 2026-08-20. Henrik: "All testosteron esters are usually avail in
+    // 250mg/ml some also in 100mg/ml and some mixes in 400mg/ml." The generics now
+    // carry a concentration list and report VOLUME — a strength alone gives millilitres,
+    // not a container count, and ampoule vs vial sizes differ by source.
     const ena = G._calcTrtCartItem({id:'enanthate', name:'Testosterone Enanthate',
                                     dose:'125', unit:'mg', freqVal:1, freqUnit:'weeks',
                                     days:[1]}, wk);
-    check('an ester with no stated concentration reports total mg and no ampoule count',
-      ena.totalMg === 125 * wk && ena.units === null, JSON.stringify(ena));
+    check('a generic ester reports millilitres at its default strength',
+      ena.totalMg === 125 * wk && ena.ml === 6 && ena.conc === 250, JSON.stringify(ena));
+    check('  …and offers the strengths it is actually sold at',
+      Array.isArray(ena.concList) && ena.concList.indexOf(100) >= 0, JSON.stringify(ena.concList));
+    check('  …with no invented container count',
+      ena.units === null, JSON.stringify(ena));
+
+    // Propionate leads with 100 mg/mL: 50 mg at 250 would be 0.2 mL.
+    const prop = G._calcTrtCartItem({id:'propionate', name:'Testosterone Propionate',
+                                     dose:'50', unit:'mg', days:[1,3,5]}, wk);
+    check('propionate is priced at 100 mg/mL by default', prop.conc === 100, JSON.stringify(prop));
+
+    // A blend is available at 400.
+    check('a mixed ester offers 400 mg/mL',
+      (G._calcTrtCartItem({id:'sustanon', name:'Sustanon 250', dose:'250', unit:'mg',
+                           freqVal:3, freqUnit:'weeks', days:[1]}, wk).concList || []).indexOf(400) >= 0);
+
+    // Switching strength changes the volume, not the milligrams.
+    G._cartSetTrtConc = G._cartSetTrtConc; // present
+    G._cartTrtConcSel['enanthate'] = 100;
+    const ena100 = G._calcTrtCartItem({id:'enanthate', name:'Testosterone Enanthate',
+                                       dose:'125', unit:'mg', days:[1]}, wk);
+    check('choosing 100 mg/mL doubles the volume and leaves the dose alone',
+      ena100.ml === 15 && ena100.totalMg === 1500, JSON.stringify(ena100));
+    G._cartTrtConcSel['enanthate'] = undefined;
 
     // Twice weekly is twice the total.
     const twice = G._calcTrtCartItem({id:'enanthate', name:'Testosterone Enanthate',
