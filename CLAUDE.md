@@ -601,10 +601,31 @@ Use them. Every time. No exceptions. Asking Henrik to touch GitHub is a failure.
    is why step 6 checks the Pages run against the bump SHA, not the merge SHA.
    The run also prunes superseded `version-bump/*` branches, which used to
    accumulate forever (407 of them here before #865)
-6. **After merging, you must confirm BOTH of these before telling the user it's live:**
-   - `mcp__github__actions_list` (method: list_workflow_runs, resource_id: version-bump.yml) → confirm `conclusion: success` and read the bumped version from the commit message
-   - `mcp__github__actions_list` (method: list_workflow_runs, resource_id: pages-build-deployment) → confirm the latest run has `conclusion: success` and its `head_sha` matches the bump commit SHA
-   Only once pages-build-deployment is complete say "live as vX.XXX — test now". DO NOT say "live" after just the version-bump — that only commits the bump, it does not deploy. DO NOT attempt to curl or WebFetch `viritasorg.github.io` — outbound network access to that host is blocked in this remote environment and will always fail.
+6. **After merging, confirm the deploy before telling the user it's live.**
+
+   **Preferred — read the `deploy-status` branch. No API, no polling, no rate limit:**
+   ```
+   git fetch origin deploy-status && git show origin/deploy-status:deploy-status.json
+   ```
+   `.github/workflows/deploy-report.yml` writes it on the `deployment_status` event —
+   the moment Pages finishes publishing — carrying `version`, `state`, `sha` and
+   `finished_at`. `state: success` with the version you expect IS the confirmation.
+   Wait for it with a `git fetch` loop, never a REST poll.
+
+   Fall back to the API only if that branch is stale or missing:
+   - `mcp__github__actions_list` (method: list_workflow_runs, resource_id: version-bump.yml) → `conclusion: success`, read the bumped version from the commit message
+   - `mcp__github__actions_list` (method: list_workflow_runs, resource_id: pages-build-deployment) → latest run `conclusion: success` and `head_sha` matching the bump commit
+
+   ⚠️ **Never confirm a deploy with unauthenticated `curl` to api.github.com.** It is
+   rate-limited, and on 2026-08-20 six watchers built that way died mid-run and reported
+   "no terminal state" for deploys that had actually succeeded — which reads as a broken
+   deploy and wastes a round trip correcting it. Use the branch, or the MCP tool, which
+   is authenticated.
+
+   Only once the deploy is confirmed say "live as vX.XXX — test now". DO NOT say "live"
+   after just the version-bump — that only commits the bump, it does not deploy. DO NOT
+   attempt to curl or WebFetch `viritasorg.github.io` — outbound network access to that
+   host is blocked in this remote environment and will always fail.
 
 ## ⚠️ SOMETIMES A PUSH CREATES NO WORKFLOW RUN — RE-TRIGGER, NEVER ASSUME
 Intermittently, a push or PR produces **no workflow run at all** — not queued, not

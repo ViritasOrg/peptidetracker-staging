@@ -1,0 +1,90 @@
+# Reports when the SITE is actually updated, so nobody has to poll the GitHub API.
+#
+# Henrik, 2026-08-20: "Can you add a trigger to the page deploy that just reports when
+# page is updated instead of polling github?"
+#
+# The problem it solves: confirming a deploy meant polling
+# /actions/runs?branch=main, and unauthenticated polling is rate-limited — six of those
+# watchers died mid-run on 2026-08-20 and reported "no terminal state" for deploys that
+# had in fact succeeded. The deployed site itself would answer instantly, but
+# viritasorg.github.io is unreachable from the agent sandbox (blocked by the proxy), so
+# the site cannot be asked directly either.
+#
+# A branch can. `git fetch` works over the proxy, costs no API quota and has no rate
+# limit worth the name, so this writes one small file to a branch nobody builds from:
+#
+#     git fetch origin deploy-status
+#     git show origin/deploy-status:deploy-status.json
+#
+# Triggered by `deployment_status`, which GitHub fires when Pages finishes publishing —
+# the actual "the page is updated" moment, not the build that precedes it.
+name: Deploy Report
+
+on:
+  deployment_status:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    # Only terminal states. 'in_progress' and 'queued' fire too and say nothing useful.
+    if: >
+      github.event.deployment_status.state == 'success' ||
+      github.event.deployment_status.state == 'failure' ||
+      github.event.deployment_status.state == 'error'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the commit that was deployed
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.deployment.sha }}
+          fetch-depth: 1
+
+      - name: Read the version that just went live
+        id: ver
+        run: |
+          # version.json is the file the app's own update checker reads, so this
+          # reports the same number the user sees — not a commit sha they cannot match
+          # to anything on screen.
+          if [ -f version.json ]; then
+            V=$(node -e "process.stdout.write(String(require('./version.json').version||''))" 2>/dev/null || echo '')
+          else
+            V=''
+          fi
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the status to the deploy-status branch
+        env:
+          STATE:   ${{ github.event.deployment_status.state }}
+          SHA:     ${{ github.event.deployment.sha }}
+          ENVNAME: ${{ github.event.deployment.environment }}
+          RUNURL:  ${{ github.event.deployment_status.target_url }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # An ORPHAN branch, force-pushed: this file is a current-state readout, not a
+          # history, and letting it accumulate a commit per deploy would grow the repo
+          # for no one's benefit.
+          git checkout --orphan deploy-status
+          git rm -rf . > /dev/null 2>&1 || true
+          cat > deploy-status.json <<EOF
+          {
+            "version": "${VERSION}",
+            "state": "${STATE}",
+            "sha": "${SHA}",
+            "environment": "${ENVNAME}",
+            "finished_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "run_url": "${RUNURL}"
+          }
+          EOF
+          git add deploy-status.json
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -m "deploy ${STATE}: v${VERSION} (${SHA})"
+          # Force, because the branch is rewritten from scratch each time.
+          git push -f origin deploy-status
