@@ -408,13 +408,18 @@ check('_wizFlow: peps+TRT ends with review', pepTrtFlow[pepTrtFlow.length-1]==='
 // _wizFlow: TRT + Enhanced (T3, trt enabled, enhanced goal, no pep goals)
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
 var trtEnhFlow=G._wizFlow();
-check('_wizFlow: TRT+enhanced has 9 steps', trtEnhFlow.length===9, 'got '+trtEnhFlow.length);
-check('_wizFlow: TRT+enhanced steps', trtEnhFlow.join(',')===('cycle,goals,trt,base,advise,enhanced,validate,nutrition,review'));
+// 8, not 9, since 2026-08-20: the single Compounds toggle sets trt AND enhanced
+// together, and the 'trt' step already asks for the ester, dose and cadence — so
+// 'base', which asks an enhanced cycle for its testosterone, would ask twice.
+check('_wizFlow: TRT+enhanced has 8 steps', trtEnhFlow.length===8, 'got '+trtEnhFlow.length);
+check('_wizFlow: TRT+enhanced steps', trtEnhFlow.join(',')===('cycle,goals,trt,advise,enhanced,validate,nutrition,review'));
+check('  …and testosterone is asked for exactly once',
+  trtEnhFlow.filter(function(x){return x==='trt'||x==='base';}).length===1);
 check('_wizFlow: advise precedes enhanced', trtEnhFlow.indexOf('advise')===trtEnhFlow.indexOf('enhanced')-1);
 // _wizFlow: Peps + TRT + Enhanced (T3, all tiers)
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced','muscle'];
 var allFlow=G._wizFlow();
-check('_wizFlow: peps+TRT+enhanced has 12 steps', allFlow.length===12, 'got '+allFlow.length);
+check('_wizFlow: peps+TRT+enhanced has 11 steps', allFlow.length===11, 'got '+allFlow.length);
 check('_wizFlow: peps+TRT+enhanced has advise', allFlow.includes('advise'));
 check('_wizFlow: peps+TRT+enhanced has peptides', allFlow.includes('peptides'));
 check('_wizFlow: peps+TRT+enhanced has trt',      allFlow.includes('trt'));
@@ -472,17 +477,21 @@ G.wizNext();G.wizNext();G.wizNext();G.wizNext();
 check('wizNext: TRT-only after 4 calls = step 4 (review)', G._wiz.step===4);
 G.wizNext();check('wizNext: TRT-only does not exceed step 4', G._wiz.step===4);
 G.wizBack();check('wizBack: TRT-only 4→3 (nutrition)', G._wiz.step===3);
-// TRT+Enhanced (no peps): flow is cycle,goals,trt,base,advise,enhanced,validate,nutrition,review
+// TRT+Enhanced (no peps): cycle,goals,trt,advise,enhanced,validate,nutrition,review.
+// 'base' is gone from this path as of 2026-08-20 — the single Compounds toggle sets
+// both flags, so the 'trt' step already asked for the testosterone an enhanced cycle
+// runs on. One question, one answer.
 G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
-G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
-check('wizNext: TRT+enhanced after 8 calls = step 8 (review)', G._wiz.step===8);
-G.wizNext();check('wizNext: TRT+enhanced does not exceed step 8', G._wiz.step===8);
-G.wizBack();check('wizBack: TRT+enhanced 8→7 (nutrition)', G._wiz.step===7);
-G.wizBack();check('wizBack: TRT+enhanced 7→6 (validate)', G._wiz.step===6);
-G.wizBack();check('wizBack: TRT+enhanced 6→5 (enhanced)', G._wiz.step===5);
-G.wizBack();check('wizBack: TRT+enhanced 5→4 (advise)', G._wiz.step===4);
-G.wizBack();check('wizBack: TRT+enhanced 4→3 (base)', G._wiz.step===3);
+G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
+check('wizNext: TRT+enhanced after 7 calls = step 7 (review)', G._wiz.step===7);
+G.wizNext();check('wizNext: TRT+enhanced does not exceed step 7', G._wiz.step===7);
+G.wizBack();check('wizBack: TRT+enhanced 7→6 (nutrition)', G._wiz.step===6);
+G.wizBack();check('wizBack: TRT+enhanced 6→5 (validate)', G._wiz.step===5);
+G.wizBack();check('wizBack: TRT+enhanced 5→4 (enhanced)', G._wiz.step===4);
+G.wizBack();check('wizBack: TRT+enhanced 4→3 (advise)', G._wiz.step===3);
 G.wizBack();check('wizBack: TRT+enhanced 3→2 (trt)', G._wiz.step===2);
+check('  …and no step asks for the testosterone base a second time',
+  G._wizFlow().indexOf('base')===-1);
 // Peps+TRT: validate step appears
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
 G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();G.wizNext();
@@ -3606,6 +3615,63 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     G.document.getElementById = _svGetEl;
   }
 
+  // ── One Compounds toggle, never a TRT/Enhanced fork ────────────────────────
+  // Henrik, 2026-08-20: "Why you ignore this? TRT and Enhanced should never be
+  // separated." The two toggles set 'trt' and 'enhanced' as mutually exclusive goals,
+  // each handler wiping the other — so the wizard made the user choose which of two
+  // places their testosterone lived, the exact question the tier merge removed.
+  console.log('\n── Goals: one Compounds toggle ────────────────────────────');
+  {
+    const _svTierC = G._userTier;
+
+    // ── tier 3: one switch turns both on ──
+    G._userTier = 3; G.initWizard();
+    check('starts off', !G._wiz.trt.enabled && !G._wiz.goals.includes('enhanced'));
+    G.wizToggleCompounds();
+    check('one toggle turns testosterone AND the enhanced catalogue on together',
+      G._wiz.trt.enabled === true && G._wiz.goals.includes('enhanced'));
+    check('  …never one at the cost of the other',
+      G._wiz.goals.includes('trt') && G._wiz.goals.includes('enhanced'));
+    check('  …and the flow asks for testosterone exactly once',
+      G._wizFlow().filter(x => x === 'trt' || x === 'base').length === 1,
+      G._wizFlow().join(','));
+    G.wizToggleCompounds();
+    check('toggling off clears both sides',
+      !G._wiz.trt.enabled && !G._wiz.goals.includes('enhanced') &&
+      !G._wiz.goals.includes('trt') && (G._wiz.trt.compounds||[]).length === 0);
+
+    // ── tier 2: same switch, flow just ends sooner ──
+    G._userTier = 2; G.initWizard();
+    G.wizToggleCompounds();
+    check('tier 2: the same toggle turns testosterone on', G._wiz.trt.enabled === true);
+    check('  …without granting the tier-3 catalogue', !G._wiz.goals.includes('enhanced'));
+    check('  …and its flow still includes the testosterone step',
+      G._wizFlow().indexOf('trt') > -1);
+
+    // ── tier 1: no compounds at all ──
+    G._userTier = 1; G.initWizard();
+    G.wizToggleCompounds();
+    check('tier 1: the toggle does nothing, because the tier has no compounds',
+      !G._wiz.trt.enabled && !G._wiz.goals.includes('enhanced'));
+
+    // ── the screen itself ──
+    G._userTier = 3; G.initWizard();
+    const gb = {innerHTML:''}, gf = {innerHTML:''};
+    G.wizStepGoals(gb, gf);
+    check('the Goals screen has ONE compounds toggle',
+      (gb.innerHTML.match(/class="toggle-sw/g) || []).length === 1, gb.innerHTML);
+    check('  …under a single Compounds heading',
+      gb.innerHTML.includes('>Compounds</div>') &&
+      !gb.innerHTML.includes('>TRT</div>') &&
+      !gb.innerHTML.includes('>Enhanced Cycle</div>'));
+    check('  …naming TRT and the other enhanced compounds',
+      /TRT and other enhanced compounds/.test(gb.innerHTML));
+    check('  …and greying nothing, since there is no either/or left',
+      !gb.innerHTML.includes('pointer-events:none'));
+
+    G._userTier = _svTierC;
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -4756,7 +4822,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 4: TRT + Enhanced (T3, trt.enabled, enhanced goal, no pep goals)
   G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced'];
   var f4=G._wizFlow();
-  check('flow TRT+enhanced: 9 steps', f4.length===9, 'got '+f4.length);
+  check('flow TRT+enhanced: 8 steps', f4.length===8, 'got '+f4.length);
   check('flow TRT+enhanced: has advise before enhanced', f4.indexOf('advise')===f4.indexOf('enhanced')-1);
   check('flow TRT+enhanced: has enhanced', f4.includes('enhanced'));
   check('flow TRT+enhanced: has validate', f4.includes('validate'));
@@ -4765,7 +4831,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 5: Peps + TRT + Enhanced (T3, all tiers)
   G._userTier=3;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['enhanced','muscle'];
   var f5=G._wizFlow();
-  check('flow peps+TRT+enhanced: 12 steps', f5.length===12, 'got '+f5.length);
+  check('flow peps+TRT+enhanced: 11 steps', f5.length===11, 'got '+f5.length);
   check('flow peps+TRT+enhanced: has all tiers', f5.includes('peptides')&&f5.includes('trt')&&f5.includes('enhanced'));
   check('flow peps+TRT+enhanced: has validate', f5.includes('validate'));
 
@@ -4964,7 +5030,8 @@ console.log('\n── Edit Enhanced tab — stack editor regression ────
     var gBody={innerHTML:''};var gFoot={innerHTML:''};
     G.initWizard();G._wiz.goals=['enhanced'];
     G.wizStepGoals(gBody,gFoot);
-    check('wizStepGoals T3: shows the Enhanced toggle', gBody.innerHTML.includes('Steroids'));
+    check('wizStepGoals T3: shows the single Compounds toggle',
+      gBody.innerHTML.includes('Testosterone &amp; enhanced compounds'));
 
     // #637: AM/PM split is user-toggleable on any enhanced compound
     check('editSetEnhAmPm defined', typeof G.editSetEnhAmPm==='function');
@@ -5025,17 +5092,25 @@ console.log('\n── Wizard step render tests ───────────
   G.initWizard();
   var gB2={innerHTML:''};var gF2={innerHTML:''};
   G.wizStepGoals(gB2,gF2);
-  check('wizStepGoals T2: has Testosterone protocol toggle', gB2.innerHTML.includes('Testosterone protocol'));
-  check('wizStepGoals T2: no Enhanced toggle', !gB2.innerHTML.includes('Steroids'));
+  // One toggle since 2026-08-20 ("TRT and Enhanced should never be separated"), at
+  // every tier that has compounds at all. What the tier changes is where the flow ENDS,
+  // not whether there are two switches to choose between.
+  check('wizStepGoals T2: has the Compounds toggle',
+    gB2.innerHTML.includes('Testosterone &amp; enhanced compounds'));
+  check('wizStepGoals T2: and only one toggle, not a TRT/Enhanced pair',
+    (gB2.innerHTML.match(/class="toggle-sw/g)||[]).length===1);
 
   // wizStepGoals T3: Enhanced Cycle section visible + toggleable
   G._userTier=3;
   G.initWizard();
   var gB3={innerHTML:''};var gF3={innerHTML:''};
   G.wizStepGoals(gB3,gF3);
-  check('wizStepGoals T3: shows the Enhanced toggle', gB3.innerHTML.includes('Steroids'));
+  check('wizStepGoals T3: shows the same single Compounds toggle',
+    gB3.innerHTML.includes('Testosterone &amp; enhanced compounds'));
+  check('wizStepGoals T3: one toggle here too, same as tier 2',
+    (gB3.innerHTML.match(/class="toggle-sw/g)||[]).length===1);
   check('wizStepGoals T3: initWizard does not auto-include enhanced in goals', !G._wiz.goals.includes('enhanced'));
-  check('wizStepGoals T3: Enhanced toggle starts OFF by default', !gB3.innerHTML.includes('toggle-sw on'));
+  check('wizStepGoals T3: the toggle starts OFF by default', !gB3.innerHTML.includes('toggle-sw on'));
 
   // wizStepCheck: empty peptides
   G._userTier=1;
@@ -5175,23 +5250,31 @@ console.log('\n── Wizard step render tests ───────────
   check('wizToggleGoal enhanced: removes trt from goals', !G._wiz.goals.includes('trt'));
   check('wizToggleGoal enhanced: clears TRT compounds', G._wiz.trt.compounds.length===0);
 
-  // wizStepGoals: TRT toggle greyed when Enhanced is on
+  // ── THE MUTUAL EXCLUSION IS GONE (2026-08-20) ─────────────────────────────
+  // These asserted that turning one of TRT/Enhanced on GREYED THE OTHER OUT. That
+  // greying WAS the separation Henrik asked to end — "TRT and Enhanced should never be
+  // separated" — so what used to be the correct behaviour is now the bug. One toggle
+  // covers both, and neither state disables anything.
   G._userTier=3;
   G.initWizard();
   G._wiz.goals=['enhanced'];
   var gmB={innerHTML:''};var gmF={innerHTML:''};
   G.wizStepGoals(gmB,gmF);
-  check('wizStepGoals: TRT section visible when Enhanced is on', gmB.innerHTML.includes('TRT'));
-  check('wizStepGoals: TRT toggle greyed (pointer-events:none) when Enhanced is on', gmB.innerHTML.includes('pointer-events:none'));
+  check('wizStepGoals: the Compounds section is shown when enhanced is on',
+    gmB.innerHTML.includes('Compounds'));
+  check('  …and nothing is greyed out, because there is nothing to exclude',
+    !gmB.innerHTML.includes('pointer-events:none'));
+  check('  …with the toggle reading ON', gmB.innerHTML.includes('toggle-sw on'));
 
-  // wizStepGoals: Enhanced toggle greyed when TRT is on
   G._userTier=3;
   G.initWizard();
   G._wiz.trt.enabled=true;G._wiz.goals=['trt'];
   var gmB2={innerHTML:''};var gmF2={innerHTML:''};
   G.wizStepGoals(gmB2,gmF2);
-  check('wizStepGoals: the Enhanced toggle is still shown when TRT is on', gmB2.innerHTML.includes('Steroids'));
-  check('wizStepGoals: Enhanced toggle greyed (pointer-events:none) when TRT is on', gmB2.innerHTML.includes('pointer-events:none'));
+  check('wizStepGoals: TRT on reads as the same single toggle, ON',
+    gmB2.innerHTML.includes('Testosterone &amp; enhanced compounds') &&
+    gmB2.innerHTML.includes('toggle-sw on'));
+  check('  …and still greys nothing out', !gmB2.innerHTML.includes('pointer-events:none'));
 
   // wizStepEnhanced: mandatory Testosterone — Next disabled when no base compound selected
   G._userTier=3;
@@ -5378,9 +5461,11 @@ console.log('\n── Source-code structural assertions ────────
   // describe an app that no longer exists. The TOGGLE is what the 2026-06-25 guard is
   // actually about, so assert that instead — and the T1/T2 negatives above move with
   // it, or they would pass for the wrong reason now the heading is gone everywhere.
-  check('source: wizStepGoals still offers the Enhanced toggle for T3',
+  check('source: wizStepGoals offers ONE compounds toggle, not a TRT/Enhanced pair',
     (function(){var fn=tsJs.match(/function wizStepGoals\([\s\S]{0,4000}/);
-      return fn && fn[0].includes("wizToggleGoal(\\'enhanced\\')");})());
+      return fn && fn[0].includes('wizToggleCompounds()') &&
+             !fn[0].includes("wizToggleGoal(\\'enhanced\\')") &&
+             !fn[0].includes('wizToggleGoalTRT()');})());
   check('source: the two headings became one Compounds section',
     (function(){var fn=tsJs.match(/function wizStepGoals\([\s\S]{0,4000}/);
       return fn && fn[0].includes("wiz-section\">Compounds<") &&
