@@ -2828,8 +2828,28 @@ function _wizAdviseAdd(id){
 //
 // The second was a hard block: the Next button was disabled, so an enhanced cycle could
 // not be finished at all once testosterone moved.
+// ⚠️ THE WIZARD HOLDS THE CHOSEN ESTER IN **TWO** PLACES, AND THIS MUST SEE BOTH.
+// Reported 2026-08-20: "Wizard silently adds Test E by itself even though I choose
+// Nebido" — the Validate step listed Nebido AND Testosterone Enanthate under TRT.
+//
+//   _wiz.trtPlan.compId   ← the TRT step's own planner: ester + dose + cadence. This
+//                           is what a normal run through the wizard fills in.
+//   _wiz.trt.compounds[]  ← the classic multi-compound editor, one tap away.
+//
+// This guard only read the second. So after choosing Nebido in the planner it answered
+// "no testosterone yet", and the advise step seeded its recommended base — Test E —
+// as a second TRT compound. _wizTrtSummaryRows renders both lists, which is why both
+// esters showed up; nothing had gone wrong at save time yet, but the protocol was
+// already carrying a compound the user never picked.
+//
+// A protocol gets its testosterone from ONE place. Both representations count as that
+// place.
 function _wizTrtHasTesto(){
-  var cs=(typeof _wiz!=='undefined'&&_wiz&&_wiz.trt&&_wiz.trt.enabled)?(_wiz.trt.compounds||[]):[];
+  var w=(typeof _wiz!=='undefined')?_wiz:null;
+  if(!w)return false;
+  var p=w.trtPlan;
+  if(p&&p.compId)return true;
+  var cs=(w.trt&&w.trt.enabled)?(w.trt.compounds||[]):[];
   return cs.length>0;
 }
 // Is this recommendation a testosterone ester? Checked by id against the catalogue
@@ -2848,6 +2868,10 @@ function _wizAdviseIsTesto(entry){
 // it. Never overwrites an existing choice.
 function _wizSeedTrtBase(id){
   if(!id)return false;
+  // Refuses whenever the protocol already has an ester from EITHER representation, not
+  // just from the list it is about to write into. Callers check too; this is the one
+  // that actually adds the row, so it is the one that must not be bypassable.
+  if(_wizTrtHasTesto())return false;
   if(!_wiz.trt)_wiz.trt={enabled:false,compounds:[]};
   if(!_wiz.trt.compounds)_wiz.trt.compounds=[];
   if(_wiz.trt.compounds.length)return false;
