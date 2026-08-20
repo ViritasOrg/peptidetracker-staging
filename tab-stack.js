@@ -94,9 +94,43 @@ function wizRender(){
   var body=document.getElementById('wiz-body');
   var footer=document.getElementById('wiz-footer');
   body.scrollTop=0;
-  (_WIZ_RENDERERS[flow[idx]]||wizStepReview)(body,footer);
+
+  // ── A STEP THAT IS NOT READY YET MUST SAY SO ──────────────────────────────
+  // Henrik, 2026-08-20: "The wizard needs a loading spinner between screens, I am
+  // having slow internet and you are sometimes presented with an empty screen for a
+  // while."
+  //
+  // wizRender used to hand `body` straight to the renderer without clearing it. A step
+  // that needs backend data — the compound catalogue, a recommendation — returns early
+  // and fills the body later, so on a slow connection the user sat looking at whatever
+  // happened to be there: the previous step, or nothing.
+  //
+  // Painting the spinner FIRST costs nothing when the step is ready. This is one
+  // synchronous tick: a renderer that writes immediately replaces the spinner before
+  // the browser paints, so there is no flash. Only a renderer that returns without
+  // writing leaves it up — which is exactly when it should be up.
+  //
+  // The footer goes disabled with it, so Next cannot be pressed through a half-loaded
+  // step. Whatever the renderer writes replaces both.
+  body.innerHTML=_WIZ_LOADING_HTML;
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1;opacity:0.5" disabled>Next →</button>';
+  try{
+    (_WIZ_RENDERERS[flow[idx]]||wizStepReview)(body,footer);
+  }catch(err){
+    // A throwing renderer must not strand the user on a spinner that never resolves.
+    if(typeof _logErr==='function')_logErr('wizRender:'+flow[idx],err);
+    body.innerHTML='<div style="padding:40px 20px;text-align:center;">'
+      +'<div style="font-size:14px;color:var(--text);font-weight:600;margin-bottom:8px;">This step could not be drawn</div>'
+      +'<div style="font-size:12px;color:var(--muted2);line-height:1.55;margin-bottom:18px;">'+_esc(String((err&&err.message)||err))+'</div>'
+      +'<button class="btn btn-primary" onclick="wizRender()">Try again</button></div>';
+    footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
+  }
   body.scrollTop=0;
 }
+// Uses the app's existing spinner (css/main.css: .today-spinner/.today-spinner-dot),
+// so the wizard looks like the rest of the app while it waits.
+var _WIZ_LOADING_HTML='<div class="today-spinner"><div class="today-spinner-dot"></div></div>'
+  +'<div style="text-align:center;font-size:12.5px;color:var(--muted2);margin-top:-24px">Loading…</div>';
 // ── Updated save to include cycle_length ────────────────────────────────────
 async function wizSave(){
   var btn=document.querySelector('.wiz-footer .btn.btn-primary');
@@ -2678,10 +2712,28 @@ function wizStepBase(body,footer){
     +'Every enhanced cycle runs on a testosterone base. The ester sets how often you inject '
     +'and how fast a dose change shows up — pick the one that fits how you want to run the cycle.</div>';
   if(!list.length){
-    html+='<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:8px;padding:10px 14px;font-size:12px;color:#f59e0b;">'
-      +'Compound catalogue not loaded yet — reopen this step in a moment.</div>';
-    body.innerHTML=html;
-    footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
+    // WAIT FOR IT, rather than telling the user to come back. This said "Compound
+    // catalogue not loaded yet — reopen this step in a moment" and left Next enabled,
+    // so on a slow connection the step was a dead end that also let you walk past it
+    // without a base. It now shows the spinner and fetches, the same way
+    // wizStepEnhanced does, and redraws itself when the catalogue lands.
+    body.innerHTML=_WIZ_LOADING_HTML;
+    footer.innerHTML='<button class="btn btn-primary" style="flex:1;opacity:0.5" disabled>Next →</button>';
+    if(typeof syncEnhancedCompoundsFromAgent==='function'){
+      syncEnhancedCompoundsFromAgent().then(function(result){
+        // Only redraw if the user is still on this step — they may have gone back.
+        if(_wizFlow()[_wiz.step]!=='base')return;
+        var b=document.getElementById('wiz-body'),f=document.getElementById('wiz-footer');
+        if(!b||!f)return;
+        if(_wizBaseList().length){wizStepBase(b,f);return;}
+        var _d=(result&&result.status)?(' (HTTP '+result.status+')'):(result&&result.msg?(' ('+result.msg+')'):'');
+        b.innerHTML='<div style="padding:32px 0;text-align:center;">'
+          +'<div style="font-size:14px;color:var(--text);font-weight:600;margin-bottom:8px;">Catalogue unavailable</div>'
+          +'<div style="font-size:13px;color:var(--muted2);margin-bottom:20px;">Check your connection and try again.'+_esc(_d)+'</div>'
+          +'<button class="btn btn-primary" onclick="wizStepBase(document.getElementById(\'wiz-body\'),document.getElementById(\'wiz-footer\'))">Try again</button></div>';
+        f.innerHTML='<button class="btn btn-primary" style="flex:1;opacity:0.5" disabled>Next →</button>';
+      });
+    }
     return;
   }
   list.forEach(function(c){
