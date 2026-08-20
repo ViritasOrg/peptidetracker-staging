@@ -3813,6 +3813,77 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       label(bpcA).join('|') === label(bpcB).join('|'), label(bpcA).join('|') + ' vs ' + label(bpcB).join('|'));
   }
 
+  // ── Deselecting a recommendation sticks ────────────────────────────────────
+  // Henrik, 2026-08-20: "Even if I deselect Primo and click Next it is preselected
+  // again." wizApplyAdviseRecommendations re-seeds when the enhanced list is EMPTY,
+  // reasoning that empty means the user never chose — but clearing the one pre-ticked
+  // compound produces exactly that empty list, so Primobolan came straight back.
+  console.log('\n── Advise: a deselect is an answer ────────────────────────');
+  {
+    const _svCat = G.ENHANCEMENT_COMPOUNDS, _svWiz = G._wiz, _svDoc = G.document.getElementById;
+    // The toggle re-renders the step through wiz-body/wiz-footer, so those two have to
+    // be writable objects; everything else can be null. The selection is what is under
+    // test, not the markup.
+    G.document.getElementById = id =>
+      (id === 'wiz-body' || id === 'wiz-footer') ? {innerHTML:''} : null;
+    G.ENHANCEMENT_COMPOUNDS = [
+      {id:'primo', name:'Primobolan', group:'DHT-Derived', cls:'dht',   defaultDose:400, unit:'mg/week', defaultDays:[1,4], dot:'#3cf'},
+      {id:'npp',   name:'NPP',        group:'19-Nor',      cls:'19nor', defaultDose:300, unit:'mg/week', defaultDays:[1,4], dot:'#888'},
+    ];
+    const advice = {best_addition:{id:'primo', name:'Primobolan'},
+                    primary:[{id:'primo', name:'Primobolan'}, {id:'npp', name:'NPP'}],
+                    consider:[]};
+    const fresh = () => {
+      G.initWizard();
+      G._userTier = 3;
+      G._wiz.trt = {enabled:true, compounds:[{id:'enanthate', name:'Testosterone Enanthate'}]};
+      G._wiz.goals = ['trt','enhanced'];
+      G._wiz.enhanced = {enabled:false, compounds:[]};
+      G._wiz.advise = {objective:'lean_mass', experience:'first', flags:{}, result:advice,
+                       loading:false, error:'', fetched:true, _seeded:false, _autoSel:false};
+      return G._wizAdviseState();
+    };
+    const ids = () => ((G._wiz.enhanced||{}).compounds||[]).map(c => c.id);
+
+    // Render pre-ticks the best addition, as before.
+    let st = fresh();
+    G.wizStepAdvise({innerHTML:''}, {innerHTML:''});
+    check('the best pick is pre-ticked on a fresh recommendation', ids().indexOf('primo') >= 0, ids().join(','));
+
+    // THE BUG: untick it, press Next.
+    G.wizAdviseToggleCompound('primo');
+    check('unticking it removes it', ids().indexOf('primo') === -1, ids().join(','));
+    G.wizApplyAdviseRecommendations();
+    check('THE BUG: pressing Next does not put it back', ids().indexOf('primo') === -1, ids().join(','));
+    check('  …and nothing else is seeded in its place', ids().length === 0, ids().join(','));
+
+    // A user who picks something else keeps exactly that.
+    st = fresh();
+    G.wizStepAdvise({innerHTML:''}, {innerHTML:''});
+    G.wizAdviseToggleCompound('primo');   // off
+    G.wizAdviseToggleCompound('npp');     // on
+    G.wizApplyAdviseRecommendations();
+    check('a deliberate swap survives Next', ids().join(',') === 'npp', ids().join(','));
+
+    // Untouched: seeding still works, which is what it was for.
+    st = fresh();
+    G.wizApplyAdviseRecommendations();
+    check('an untouched step is still seeded from the recommendation',
+      ids().indexOf('primo') >= 0, ids().join(','));
+
+    // A NEW recommendation is a new question — pre-ticking is allowed again.
+    st = fresh();
+    G.wizStepAdvise({innerHTML:''}, {innerHTML:''});
+    G.wizAdviseToggleCompound('primo');
+    check('touched is recorded', G._wizAdviseState()._touched === true);
+    G._wizAdviseInvalidate(G._wizAdviseState());
+    check('a new recommendation clears every seed flag',
+      G._wizAdviseState()._touched === false && G._wizAdviseState()._seeded === false &&
+      G._wizAdviseState()._autoSel === false && G._wizAdviseState().result === null);
+
+    G.ENHANCEMENT_COMPOUNDS = _svCat; G._wiz = _svWiz; G.document.getElementById = _svDoc;
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
