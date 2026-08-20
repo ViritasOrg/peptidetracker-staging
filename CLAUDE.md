@@ -576,6 +576,22 @@ Use them. Every time. No exceptions. Asking Henrik to touch GitHub is a failure.
 3. `mcp__github__create_pull_request` — do this yourself immediately after pushing
 4. Check CI: `pull_request_read` with `method: get_check_runs` — wait for `conclusion: success`. If still running, poll. If failed, fix and re-push. **Never merge with failing or pending checks.**
 5. `mcp__github__merge_pull_request` — once CI is green, merge it yourself immediately
+
+   **⚠️ "Immediately" means WITHOUT WAITING TO BE TOLD. Henrik, 2026-08-20: *"Amd stop
+   waiting with merging stuff, now you been blocked several times today wasting my
+   time."*** Green CI is the go-ahead; there is no second approval step. Do not end a
+   turn with a merge-ready PR open, do not describe a PR as done when it is only
+   opened, and never write "I'll merge it when CI is green" and then stop — poll the
+   check and merge in the same turn.
+
+   What this cost on 2026-08-20: #1017 and #1020 both sat green and unmerged while
+   Henrik was testing. He had to ask *"Merged yet?"* and *"Still only see 677? Is 678
+   deployed?"* — and 678 did not exist, because the fix he was looking for was sitting
+   in an open PR. He was testing an app that could not contain the change.
+
+   A PR is not delivered until it is **merged, version-bumped and deployed**. Report
+   those three, not "PR opened". The only reasons to leave one open are the two below:
+   CI red or pending, or a review comment that has to be answered first.
 5. After merge the `version-bump` GitHub Action increments the minor version in
    `version.json` and `const VERSION` in `index.html`. **It does NOT commit with
    `[skip ci]`** (corrected 2026-08-08 — the file said so, the workflow never did):
