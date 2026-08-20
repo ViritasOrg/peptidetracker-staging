@@ -1823,9 +1823,15 @@ async function _tcConfirmAddSheet() {
 function _tcConfirmRemove(idx) {
   var ex = document.getElementById('tc-del-confirm');
   if (ex) ex.remove();
-  var entry = _tcp.manualLog && _tcp.manualLog[idx];
-  var sid = entry && entry.seriesId;
-  var seriesCount = sid ? _tcp.manualLog.filter(function(e){ return e.seriesId===sid; }).length : 0;
+  // THE "DELETE ALL N IN SERIES" BRANCH IS GONE (Phase 8, 2026-08-20). Its button
+  // called _tcRemoveSeries, which Phase 6 deleted with the rest of the series
+  // machinery — so the more destructive of the two choices was a ReferenceError,
+  // and the sheet offered it in red as the primary action. Only the fact that this
+  // whole editor is unreachable kept anyone from pressing it.
+  //
+  // Not rebuilt: a run of doses belongs to a protocol now, and Plan ▸ Compounds is
+  // where one is shortened or removed. What is left here deletes the one entry the
+  // user pointed at, which is the part that still works and still means something.
   var d = document.createElement('div');
   d.id = 'tc-del-confirm';
   d.style.cssText = 'position:fixed;inset:0;background:#000c;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
@@ -1833,18 +1839,10 @@ function _tcConfirmRemove(idx) {
     '<div style="background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:24px;max-width:300px;width:100%;text-align:center">' +
       '<div style="font-size:13px;color:var(--accent);font-weight:700;letter-spacing:0.5px;margin-bottom:6px">Delete this injection?</div>' +
       '<div style="font-size:12px;color:#555;margin-bottom:20px">This cannot be undone.</div>' +
-      (sid && seriesCount > 1 ?
-        '<div style="display:flex;flex-direction:column;gap:8px">' +
-        '<button onclick="document.getElementById(\'tc-del-confirm\').remove();_tcRemoveManualEntry(' + idx + ')" style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;color:#ccc;font-size:13px;font-weight:700;padding:12px;cursor:pointer;font-family:inherit">Delete this entry only</button>' +
-        '<button onclick="document.getElementById(\'tc-del-confirm\').remove();_tcRemoveSeries(\''+sid+'\')" style="background:var(--danger,#ef4444);border:none;border-radius:10px;color:#fff;font-size:13px;font-weight:700;padding:12px;cursor:pointer;font-family:inherit">Delete all '+seriesCount+' in series</button>' +
-        '<button onclick="document.getElementById(\'tc-del-confirm\').remove()" style="background:none;border:none;color:#555;font-size:13px;cursor:pointer;padding:8px;font-family:inherit">Cancel</button>' +
-        '</div>'
-      :
-        '<div style="display:flex;gap:10px">' +
-        '<button onclick="document.getElementById(\'tc-del-confirm\').remove()" style="flex:1;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;color:#888;font-size:13px;font-weight:700;padding:12px;cursor:pointer;font-family:inherit">Cancel</button>' +
-        '<button onclick="document.getElementById(\'tc-del-confirm\').remove();_tcRemoveManualEntry(' + idx + ')" style="flex:1;background:var(--accent);border:none;border-radius:10px;color:#000;font-size:13px;font-weight:700;padding:12px;cursor:pointer;font-family:inherit">Delete</button>' +
-        '</div>'
-      ) +
+      '<div style="display:flex;gap:10px">' +
+      '<button onclick="document.getElementById(\'tc-del-confirm\').remove()" style="flex:1;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;color:#888;font-size:13px;font-weight:700;padding:12px;cursor:pointer;font-family:inherit">Cancel</button>' +
+      '<button onclick="document.getElementById(\'tc-del-confirm\').remove();_tcRemoveManualEntry(' + idx + ')" style="flex:1;background:var(--accent);border:none;border-radius:10px;color:#000;font-size:13px;font-weight:700;padding:12px;cursor:pointer;font-family:inherit">Delete</button>' +
+      '</div>' +
     '</div>';
   document.body.appendChild(d);
 }
@@ -1890,98 +1888,15 @@ async function _tcRemoveManualEntry(idx) {
   _tcp.manualLog.splice(idx, 1);
   _tcSaveProfile();
   buildTCalc();
-  _tcSyncLogToBackend();
+  // The _tcSyncLogToBackend() call that stood here went with the function (Phase 8):
+  // rewriting the record from manualLog is the protocol's job now.
 }
 
 
-function _tcOpenEditSeriesSheet(sid) {
-  if (!_tcp || !_tcp.manualLog) return;
-  var entries = _tcp.manualLog.filter(function(e){ return e.seriesId === sid; }).sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
-  if (!entries.length) return;
-  var first = entries[0];
-  var compId = first.compId;
-  var doseMg = first.doseMg || '';
-  var startDate = first.date || new Date().toISOString().slice(0,10);
-  var count = entries.length;
-  // Same MODAL-gap cadence the series card shows. Reading entries[1]-entries[0] made
-  // the sheet disagree with the card the moment a dose was missing — the card said
-  // "every 2 days · 2 missed" while the editor pre-filled 6, so simply opening it and
-  // pressing SAVE rewrote an EOD run to every-6-days.
-  var interval = 2;
-  if (entries.length >= 2) {
-    var _eg = {}, _eBest = 0, _eBestN = 0;
-    for (var _ei = 1; _ei < entries.length; _ei++) {
-      var _p0 = (entries[_ei-1].date||'').split('-'), _p1 = (entries[_ei].date||'').split('-');
-      var _g = Math.round((new Date(+_p1[0],+_p1[1]-1,+_p1[2]) - new Date(+_p0[0],+_p0[1]-1,+_p0[2]))/86400000);
-      if (!(_g > 0)) continue;
-      _eg[_g] = (_eg[_g]||0) + 1;
-      if (_eg[_g] > _eBestN || (_eg[_g] === _eBestN && _g < _eBest)) { _eBest = _g; _eBestN = _eg[_g]; }
-    }
-    interval = Math.max(1, _eBest || 2);
-  }
-  _tcEditSeriesId = sid;
-  var comps = _tcManualComps();
-  var iSty = 'background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:11px 13px;color:var(--text);font-size:15px;font-family:inherit;outline:none;width:100%;box-sizing:border-box';
-  var lSty = 'font-size:11px;font-weight:700;letter-spacing:0.8px;color:var(--muted);text-transform:uppercase;margin-bottom:8px;display:block';
-  var compOpts = comps.map(function(id){ var n=_tcCompInfo(id).name; return '<option value="'+_esc(id)+'"'+(id===compId?' selected':'')+'>'+_esc(n)+'</option>'; }).join('');
-  var ol = document.createElement('div');
-  ol.id = 'tc-edit-series-overlay';
-  ol.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
-  ol.onclick = function(e){ if(e.target===ol)_tcCloseEditSeriesSheet(); };
-  ol.innerHTML =
-    '<div style="background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 36px;max-height:85vh;overflow-y:auto">' +
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
-    '<div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--text)">EDIT SERIES</div>' +
-    '<button onclick="_tcCloseEditSeriesSheet()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;line-height:1">×</button>' +
-    '</div>' +
-    '<div style="margin-bottom:14px"><label style="'+lSty+'">COMPOUND</label>' +
-    '<select id="tc-es-comp" style="'+iSty+'">'+compOpts+'</select></div>' +
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">' +
-    '<div style="min-width:0"><label style="'+lSty+'">DOSE (mg)</label>' +
-    '<input id="tc-es-dose" type="text" inputmode="decimal" placeholder="e.g. 100" value="'+_esc(String(doseMg))+'" style="'+iSty+'"></div>' +
-    '<div style="min-width:0"><label style="'+lSty+'">START DATE</label>' +
-    '<input id="tc-es-date" type="date" value="'+_esc(startDate)+'" style="'+iSty+'"></div>' +
-    '</div>' +
-    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px">' +
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
-    '<div><label style="'+lSty+'">INJECTIONS</label>' +
-    '<input id="tc-es-count" type="number" inputmode="numeric" min="2" max="365" step="1" value="'+_esc(String(count))+'" style="'+iSty+'"></div>' +
-    '<div><label style="'+lSty+'">EVERY (DAYS)</label>' +
-    '<input id="tc-es-interval" type="number" inputmode="numeric" min="1" max="90" step="1" value="'+_esc(String(interval))+'" style="'+iSty+'"></div>' +
-    '</div></div>' +
-    '<button onclick="_tcSaveEditSeries()" style="width:100%;background:linear-gradient(135deg,#6688cc,#4466aa);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:800;letter-spacing:0.5px;padding:14px;cursor:pointer;font-family:inherit">SAVE</button>' +
-    '</div>';
-  document.body.appendChild(ol);
-}
 
 
-function _tcShowSeriesDetail(sid) {
-  if (!_tcp || !_tcp.manualLog) return;
-  var entries = _tcp.manualLog.filter(function(e){ return e.seriesId === sid; }).sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
-  if (!entries.length) return;
-  var mcd = _tcCompInfo(entries[0].compId || '');
-  var fmtD = function(iso){ if(!iso)return''; var p=iso.split('-'); var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return parseInt(p[2],10)+' '+M[parseInt(p[1],10)-1]; };
-  var lSty = 'font-size:11px;font-weight:700;letter-spacing:0.8px;color:var(--muted);text-transform:uppercase';
-  var listHtml = entries.map(function(e, i){
-    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">' +
-      '<div style="'+lSty+'">INJ ' + (i+1) + '</div>' +
-      '<div style="font-size:13px;font-weight:600;color:var(--text)">' + fmtD(e.date||'') + '</div>' +
-      '<div style="font-size:13px;font-weight:600;color:#6688cc">' + _esc(String(e.doseMg||'')) + ' mg</div>' +
-      '</div>';
-  }).join('');
-  var ol = document.createElement('div');
-  ol.id = 'tc-series-detail-overlay';
-  ol.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
-  ol.onclick = function(e){ if(e.target===ol) ol.remove(); };
-  ol.innerHTML =
-    '<div style="background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 36px;max-height:80vh;overflow-y:auto">' +
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
-    '<div><div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--text)">SERIES INJECTIONS</div>' +
-    '<div style="font-size:11px;color:var(--muted2);margin-top:2px">' + _esc(mcd.name) + ' · ' + entries.length + ' injections</div></div>' +
-    '<button onclick="document.getElementById(\'tc-series-detail-overlay\').remove()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;line-height:1">×</button>' +
-    '</div>' + listHtml + '</div>';
-  document.body.appendChild(ol);
-}
+
+
 
 function _tcSetChartZoom(z) {
   _tcChartZoom = z;
@@ -2059,32 +1974,17 @@ function _tcAttachPanListeners(canvas) {
 }
 
 
-function _tcConfirmRemoveSeries(sid) {
-  var ex = document.getElementById('tc-del-confirm');
-  if (ex) ex.remove();
-  var count = _tcp.manualLog ? _tcp.manualLog.filter(function(e){ return e.seriesId===sid; }).length : 0;
-  var d = document.createElement('div');
-  d.id = 'tc-del-confirm';
-  d.style.cssText = 'position:fixed;inset:0;background:#000c;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
-  d.innerHTML =
-    '<div style="background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:24px;max-width:300px;width:100%;text-align:center">' +
-      '<div style="font-size:13px;color:var(--accent);font-weight:700;letter-spacing:0.5px;margin-bottom:6px">Delete this series?</div>' +
-      '<div style="font-size:12px;color:#555;margin-bottom:20px">' + count + ' injections will be removed. This cannot be undone.</div>' +
-      '<div style="display:flex;gap:10px">' +
-      '<button onclick="document.getElementById(\'tc-del-confirm\').remove()" style="flex:1;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;color:#888;font-size:13px;font-weight:700;padding:12px;cursor:pointer;font-family:inherit">Cancel</button>' +
-      '<button onclick="document.getElementById(\'tc-del-confirm\').remove();_tcRemoveSeries(\'' + sid + '\')" style="flex:1;background:var(--danger,#ef4444);border:none;border-radius:10px;color:#fff;font-size:13px;font-weight:700;padding:12px;cursor:pointer;font-family:inherit">Delete</button>' +
-      '</div>' +
-    '</div>';
-  document.body.appendChild(d);
-}
+
 
 function _tcSetManualField(idx, field, val) {
   if (!_tcp.manualLog || !_tcp.manualLog[idx]) return;
   _tcp.manualLog[idx][field] = val;
   _tcSaveProfile();
+  // Both branches used to end in _tcSyncLogToBackend(), deleted in Phase 8:
+  // rewriting the record from manualLog is the protocol's job now. Editing here
+  // moves the profile and the drawing, and nothing else.
   if (field === 'compId') {
     buildTCalc();
-    _tcSyncLogToBackend();
   } else {
     var validLog = _tcCurveLog();
     if (validLog.length > 0 && document.getElementById('tc-main-chart')) {
@@ -2092,7 +1992,6 @@ function _tcSetManualField(idx, field, val) {
     } else {
       buildTCalc();
     }
-    _tcSyncLogToBackend();
   }
 }
 
@@ -3615,154 +3514,34 @@ function _tcHasTargetStack(){ return !!_tcTargetCycleId(); }
 // generated (cycle_id '<stackId>', per testo compound, from today). Leaves the
 // stack's peptides/enhanced injections untouched. Used when the user switches a
 // stack's testosterone source to the T-Calc plan.
-async function _tcClearStackConfigTrt(stack){
-  if(!stack)return;
-  var _cyc=(typeof _stackCycleId==='function')?_stackCycleId(stack):(stack.id||'');
-  var _cids=((stack.trt&&stack.trt.compounds)||[]).map(function(c){return c.id;});
-  stack.trt={};
-  if(typeof saveStacksToBackend==='function'){try{await saveStacksToBackend();}catch(_e){}}
-  var h=(typeof authHeaders==='function')?authHeaders():null;
-  if(h&&_cyc){
-    var _n=new Date();_n.setHours(0,0,0,0);
-    var _td=_n.getFullYear()+'-'+String(_n.getMonth()+1).padStart(2,'0')+'-'+String(_n.getDate()).padStart(2,'0');
-    await injClearFutureMany(_cyc, _cids, _td, {tag:'tcClearHome'});
-  }
-}
+// ── T-CALC'S LAST THREE WRITE PATHS ARE GONE (Phase 8, 2026-08-20) ──────────
+// _tcClearStackConfigTrt, _tcSetTargetStack and _tcSyncLogToBackend lived here:
+// ~150 lines that bound a T-Calc plan to a protocol, cleared the protocol's own
+// testosterone to make room for it, and rewrote every future dose from the planner's
+// manual log.
+//
+// Phase 5 disabled them behind _TC_PLANNING_REMOVED and Phase 6 deleted the UI that
+// reached them, which left three functions whose first statement was a return. Keeping
+// a disabled write path beside a live one is its own hazard: it reads as supported, and
+// _tcSetTargetStack still answered its caller with the "scheduling has moved" alert
+// about a binding that can no longer be made.
+//
+// Nothing replaces them. A protocol schedules its own testosterone through
+// _genInjBatches, and inj-writer.js is the only module that writes an injection. The one
+// caller left, _reconcileStackTestoSource in index.html, is typeof-guarded and its
+// precondition — a protocol that is the T-Calc target — can no longer be true.
+//
+// The reasoning is not lost: the three faults that destroyed a forward schedule on
+// 2026-08-14 (an empty cycle_id deleting every injection in the account, no compound
+// filter, no unlogged_only) are enforced by injClearFuture/injClearFutureMany in
+// inj-writer.js, which is where they belong now that one module owns every delete.
+
+
 // Assign (copy) the T-Calc testosterone to a stack — active OR inactive. Clears the
 // previous home so it never duplicates, then re-syncs into the new one.
-async function _tcSetTargetStack(stackId){
-  if(_tcWritesDisabled('Binding a plan to a protocol')) return;
 
-  // Single-source guard: a stack gets testosterone from ONE source. If the chosen
-  // stack already has its own TRT config, warn and let the user choose — OK replaces
-  // the config with the T-Calc source (clears it), Cancel keeps the config (aborts).
-  if(stackId){
-    var _tgt=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks.find(function(s){return s&&s.id===stackId;}):null;
-    if(_tgt&&typeof _stackHasConfigTrt==='function'&&_stackHasConfigTrt(_tgt)){
-      var _ok=(typeof confirm!=='function')?true
-        :confirm('“'+(_tgt.name||'This protocol')+'” already has testosterone from its TRT config. Replace it with the T-Calc source?');
-      if(!_ok){ if(typeof buildTCalc==='function')buildTCalc(); return; } // keep config; revert picker
-      await _tcClearStackConfigTrt(_tgt);
-    }
-  }
-  var oldCid=_tcTargetCycleId();
-  _tcp.targetStackId=stackId||'';
-  _tcSaveProfile();
-  var newCid=_tcTargetCycleId();
-  // ── CLEARING THE OLD HOME MUST TOUCH ONLY T-CALC'S OWN TESTOSTERONE ────────
-  // This call used to be:
-  //     DELETE /injections?cycle_id=<oldCid>&from_date=<today>
-  // with no compound filter and no unlogged_only. Three faults, and on 2026-08-14
-  // all three fired at once and destroyed a user's entire forward schedule.
-  //
-  //  1. EMPTY oldCid DELETES EVERYTHING. _tcTargetCycleId() returns '' when nothing
-  //     is bound, and the backend's filter is `if cycle_id and ...` — an empty value
-  //     is NO filter. Binding for the first time therefore issued
-  //     `DELETE /injections?cycle_id=&from_date=<today>`: every injection in the
-  //     account from today on, every protocol. That is what happened — 106 HGH rows,
-  //     every forward peptide row, and a logged dose, none of them testosterone and
-  //     none of them T-Calc's to touch. Only cycles whose rows all predate today
-  //     survived, which is why it looked protocol-scoped and was not.
-  //  2. NO compound_id. T-Calc owns testosterone and nothing else. Clearing its old
-  //     home must not reach a protocol's peptides or HGH — exactly what the sibling
-  //     _tcClearStackConfigTrt above gets right, per compound, deliberately.
-  //  3. NO unlogged_only. A logged injection is a record of something administered;
-  //     rebinding a planner must never delete one. The backend defaults this to
-  //     False, so it had to be asked for and was not.
-  if(oldCid&&oldCid!==newCid){
-    var h=(typeof authHeaders==='function')?authHeaders():null;
-    if(h){
-      var _n=new Date();_n.setHours(0,0,0,0);
-      var _td=_n.getFullYear()+'-'+String(_n.getMonth()+1).padStart(2,'0')+'-'+String(_n.getDate()).padStart(2,'0');
-      var _tids=(typeof _tcAllCompIds==='function')?_tcAllCompIds():[];
-      await injClearFutureMany(oldCid, _tids, _td, {tag:'tcMoveStack'});
-    }
-  }
-  await _tcSyncLogToBackend();
-  if(typeof buildTCalc==='function')buildTCalc();
-  if(typeof buildStackStore==='function')buildStackStore();
-}
 
-async function _tcSyncLogToBackend() {
-  if(_TC_PLANNING_REMOVED) return;   // internal: called by the paths above
 
-  var h=(typeof authHeaders==='function')?authHeaders():null;
-  if(!h)return;
-  var _cid=_tcTargetCycleId();
-  if(!_cid)return;   // no stack chosen yet — Save to stack is where that happens
-  var _now=new Date();_now.setHours(0,0,0,0);
-  var todayStr=_now.getFullYear()+'-'+String(_now.getMonth()+1).padStart(2,'0')+'-'+String(_now.getDate()).padStart(2,'0');
-
-  // Group future log entries (>= today) by compId
-  var byComp={};
-  (_tcp.manualLog||[]).forEach(function(e){
-    if(!e.compId||!e.date||!(parseDec(e.doseMg)>0))return;
-    if(e.date<todayStr)return;
-    if(!byComp[e.compId])byComp[e.compId]=[];
-    byComp[e.compId].push(e);
-  });
-
-  // Clear all unlogged tcalc entries from today onwards (covers removed compounds too),
-  // then re-post each compound's future entries via batch upsert.
-  try{
-    // unlogged_only: this clears the PLAN. Without it the delete also removed
-    // logged records dated today or later, and the batch re-post recreated them
-    // as unlogged plans — a record silently downgraded to a schedule.
-    //
-    // compound_id: and it must be scoped to TESTOSTERONE. _cid is the STACK's cycle
-    // id ("the stack is the container", 2026-08-06), so that cycle also holds the
-    // protocol's peptides and HGH. Unscoped, every sync — every dose edit, every
-    // series save — deleted the protocol's whole unlogged forward plan and re-posted
-    // only testosterone. Looping the known esters still "covers removed compounds
-    // too" (the original intent), because it clears every testosterone id under the
-    // cycle whether or not it is still in the plan.
-    // BOTH SPELLINGS, OR THE DELETE MISSES HALF THE RECORD.
-    // _tcAllCompIds returns the TRT catalogue (nebido, testoviron, enanthate…). The
-    // ENHANCED catalogue keys the same esters differently — test_u, test_e, test_c,
-    // test_p — and a protocol carrying its testosterone in the Enhanced tier stores rows
-    // under those ids. Deleting by the TRT ids alone never touched them, so a plan that
-    // was shortened kept its old doses: reported 2026-08-16 as a Nebido series cut to
-    // 16 Aug whose curve went on running to October, with the series card and the chart
-    // disagreeing on screen.
-    //
-    // _TC_TESTO_ALIAS is exactly the enhanced-id set, and it is already the map every
-    // other part of this file canonicalises through, so it is the right source rather
-    // than a second hand-maintained list. _tcAllCompIds itself is left alone — it also
-    // populates the ester dropdown, where the aliases would appear as duplicates.
-    var _tid2=(typeof _tcAllCompIds==='function')?_tcAllCompIds().slice():[];
-    if (typeof _TC_TESTO_ALIAS !== 'undefined' && _TC_TESTO_ALIAS){
-      Object.keys(_TC_TESTO_ALIAS).forEach(function(_a){ if (_tid2.indexOf(_a) === -1) _tid2.push(_a); });
-    }
-    // In PARALLEL, not one after another. This is ~10 ids now that both catalogue
-    // spellings are covered, and awaiting each in turn made every save ten sequential
-    // round-trips — slow on a phone, and it pushed the write far enough down the
-    // microtask queue to change when callers observe it.
-    await injClearFutureMany(_cid, _tid2, todayStr, {tag:'tcSyncPrune'});
-  }catch(_e){}
-
-  var compIds=Object.keys(byComp);
-  for(var _i=0;_i<compIds.length;_i++){
-    var cid=compIds[_i];
-    var cd=_tcCompInfo(cid);
-    var entries=byComp[cid].map(function(e){
-      return {
-        cycle_id:_cid,compound_id:cid,
-        compound_name:cd.name||cid,tier:'trt',
-        date:e.date,
-        dose:String(Math.round(parseDec(e.doseMg)*10)/10),
-        unit:'mg',dot:cd.dot||'#e8a020',
-        // The run this dose belongs to. Without it the grouping lived only in the
-        // profile cache: nineteen doses came back from the record as nineteen
-        // identical rows, and a restore could not rebuild the series card.
-        series_id:e.seriesId||null,
-        source:'tcalc'
-      };
-    });
-    await injWriteBatch(_cid, cid, todayStr, entries, 'tcSyncWrite');
-  }
-
-  if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
-}
 
 
 // ── Save to stack ─────────────────────────────────────────────────────────────
