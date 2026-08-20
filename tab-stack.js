@@ -2665,8 +2665,7 @@ function wizSetBaseEster(id){
   _wiz.enhanced.compounds=_wiz.enhanced.compounds.filter(function(c){return baseIds.indexOf(c.id)<0;});
   _wizAdviseAdd(id);
   _wiz.enhanced.enabled=(_wiz.enhanced.compounds||[]).length>0;
-  var st=_wizAdviseState();
-  if(st){st.result=null;st.fetched=false;st._seeded=false;st._autoSel=false;}
+  _wizAdviseInvalidate(_wizAdviseState());
   wizStepBase(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 function wizStepBase(body,footer){
@@ -2718,7 +2717,7 @@ function _wizAdviseInputs(){
   return {experience:_advNormExp(st.experience),sex:sex,objective:st.objective,body_fat:bf,flags:st.flags||{},base_id:_wizBaseId()};
 }
 function wizAdviseSetExperience(v){
-  var st=_wizAdviseState();st.experience=v;st.result=null;st.fetched=false;st._seeded=false;
+  var st=_wizAdviseState();st.experience=v;_wizAdviseInvalidate(st);
   // Persist the correction so it isn't stale here or elsewhere in the app.
   try{var p=(typeof getData==='function'&&getData('pep-profile',null))||{};p.experience=v;if(typeof setData==='function')setData('pep-profile',p);
       if(typeof pushPepSettingsToAgent==='function')pushPepSettingsToAgent({'pep-experience':v,'pep-profile':p});}catch(e){}
@@ -2733,9 +2732,25 @@ async function enhancedAdvisorFromAgent(inp){
     var d=await r.json();return{ok:true,advice:(d&&d.advice)||null};
   }catch(e){clearTimeout(tid);if(typeof _logErr==='function')_logErr('advisor',e);return{ok:false,status:null,msg:String(e&&e.message||e)};}
 }
+// ── ONE PLACE THAT INVALIDATES A RECOMMENDATION ─────────────────────────────
+// Three flags travel together and were being reset in five places, inconsistently:
+//   _seeded  — wizApplyAdviseRecommendations has already run for this recommendation
+//   _autoSel — the render has already pre-ticked for it
+//   _touched — the user has answered this step (added, or removed, or removed the last)
+// Two sites cleared _seeded but not _autoSel, so a new recommendation could arrive and
+// never pre-tick. Adding _touched on 2026-08-20 would have made that worse — a fourth
+// thing to remember at five call sites. One function instead.
+//
+// A NEW recommendation is a new question: everything clears, and it may pre-tick again.
+function _wizAdviseInvalidate(st){
+  if(!st)return;
+  st.result=null; st.fetched=false;
+  st._seeded=false; st._autoSel=false; st._touched=false;
+}
+
 async function wizAdviseFetch(){
   var st=_wizAdviseState();
-  st.loading=true;st.error='';st._seeded=false;
+  st.loading=true;st.error='';st._seeded=false;st._touched=false;
   wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
   var res=await enhancedAdvisorFromAgent(_wizAdviseInputs());
   st.loading=false;st.fetched=true;st._autoSel=false;
@@ -2743,8 +2758,8 @@ async function wizAdviseFetch(){
   else{st.result=null;st.error='Could not load recommendations'+(res.status?(' (HTTP '+res.status+')'):'')+'.';}
   if(_wizFlow()[_wiz.step]==='advise')wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
-function wizAdviseSetObjective(v){var st=_wizAdviseState();st.objective=v;st.result=null;st.fetched=false;st._seeded=false;wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
-function wizAdviseToggleFlag(k){var st=_wizAdviseState();if(!st.flags)st.flags={};st.flags[k]=!st.flags[k];st.result=null;st.fetched=false;st._seeded=false;wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+function wizAdviseSetObjective(v){var st=_wizAdviseState();st.objective=v;_wizAdviseInvalidate(st);wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+function wizAdviseToggleFlag(k){var st=_wizAdviseState();if(!st.flags)st.flags={};st.flags[k]=!st.flags[k];_wizAdviseInvalidate(st);wizStepAdvise(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 function _wizAdviseCompoundRow(item,kind,opts){
   opts=opts||{};
   var map={best:['var(--accent)','★'],primary:['var(--accent)','✓'],consider:['var(--muted2)','○'],later:['#7a8899','⏱'],avoid:['#f59e0b','✕'],oncycle:['var(--accent)','＋']};
@@ -2771,6 +2786,16 @@ function _wizAdviseSection(title,items,kind,selIds){
 // Tap a recommended compound to add/remove it from the protocol (same store the
 // Enhanced step uses) — so the guidance is directly actionable.
 function wizAdviseToggleCompound(id){
+  // THE USER HAS NOW CHOSEN. Reported 2026-08-20: "Even if I deselect Primo and click
+  // Next it is preselected again." wizApplyAdviseRecommendations re-seeds the
+  // recommendations when the enhanced list is EMPTY, on the reasoning that an empty
+  // list means the user never picked anything — but it cannot tell "never touched"
+  // from "deliberately cleared", and clearing the one pre-ticked compound produces
+  // exactly the empty list it treats as untouched. So it put Primobolan straight back.
+  //
+  // A flag on the step's own state settles it: the moment a row is tapped, this step
+  // has an answer, and an empty answer is still an answer.
+  var _ast=_wizAdviseState(); if(_ast)_ast._touched=true;
   if(!_wiz.enhanced)_wiz.enhanced={enabled:false,compounds:[]};
   if(!_wiz.enhanced.compounds)_wiz.enhanced.compounds=[];
   var idx=_wiz.enhanced.compounds.findIndex(function(c){return c.id===id;});
@@ -2858,8 +2883,10 @@ function wizApplyAdviseRecommendations(){
   st._seeded=true;
   if(!_wiz.enhanced)_wiz.enhanced={enabled:false,compounds:[]};
   if(!_wiz.enhanced.compounds)_wiz.enhanced.compounds=[];
-  // Only seed when the user hasn't already built a selection, so we never
-  // overwrite manual choices (respects "only fix what was asked").
+  // Only seed when the user has not answered this step. Two ways to have answered:
+  // a non-empty list, or having tapped anything at all — including tapping the last
+  // pick OFF, which leaves the list empty on purpose.
+  if(st._touched)return;
   if(_wiz.enhanced.compounds.length)return;
   var picks=[];
   // Not a `pick` — picks go into the enhanced list, which cannot hold testosterone.
