@@ -1182,21 +1182,42 @@ function wizStepGoals(body,footer){
     html+='<div class="goal-chip '+sel+'" onclick="wizToggleGoal(\''+g.id+'\')">'+g.icon+' '+g.label+'</div>';
   });
   html+='</div><div style="font-size:12px;color:var(--muted2);margin-top:8px;margin-bottom:16px;">Select all that apply — filters the peptide catalogue.</div>';
+  // ── ONE SECTION: COMPOUNDS ────────────────────────────────────────────────
+  // Henrik, 2026-08-20: "Wizard still have the choice between TRT and Enhanced,
+  // this isn't true anymore, just add a heading for Compounds and have a
+  // description mentioning TRT 'and other enhanced compounds'."
+  //
+  // The step used to carry two headings, TRT and ENHANCED CYCLE, which read as two
+  // separate places testosterone could live. The tiers were merged in Phase 4 —
+  // Plan ▸ Compounds holds testosterone beside the 19-nors, orals and GH — so a
+  // heading that splits them describes an app that no longer exists.
+  //
+  // The two TOGGLES stay. They are not the same choice as the headings were: they
+  // carry different entitlements (testosterone from tier 2, the enhanced catalogue
+  // from tier 3) and they select different wizard steps. Collapsing them would
+  // either walk a tier-2 user into a steroid catalogue or force a tier-3 user who
+  // wants testosterone alone through the whole enhanced flow.
   if(_wizTier()>=2){
-    html+='<div class="wiz-section">TRT</div>';
+    html+='<div class="wiz-section">Compounds</div>';
+    html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:12px;">'
+       +  (_wizTier()>=3
+            ? 'TRT and other enhanced compounds. Testosterone, 19-nors, orals and GH all sit together in Plan ▸ Compounds once the protocol is built.'
+            : 'TRT. Testosterone sits with the rest of your compounds in Plan ▸ Compounds once the protocol is built.')
+       +  '</div>';
     if(enhOn){
       html+='<div class="trt-toggle" style="opacity:0.4;pointer-events:none"><div class="trt-toggle-label">⚡ Testosterone protocol</div><div class="toggle-sw"></div></div>';
-      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">Not available — Testosterone is already included in the Enhanced cycle.</div>';
+      // Still true, and worth saying plainly rather than as a refusal: every enhanced
+      // cycle runs on a testosterone base, chosen in the enhanced flow's own step.
+      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">Testosterone comes with the enhanced cycle — you pick the ester in the next step.</div>';
     }else{
       html+='<div class="trt-toggle" onclick="wizToggleGoalTRT()"><div class="trt-toggle-label">⚡ Testosterone protocol</div><div class="toggle-sw'+(trtOn?' on':'')+'"></div></div>';
-      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">'+(trtOn?'Compound, dose &amp; schedule configured in the next step.':'Add Testoviron, Nebido or another ester to your cycle.')+'</div>';
+      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">'+(trtOn?'Compound, dose &amp; schedule configured in the next step.':'Add Testoviron, Nebido or another ester to your protocol.')+'</div>';
     }
   }
   if(_wizTier()>=3){
-    html+='<div class="wiz-section">Enhanced Cycle</div>';
     if(trtOn){
       html+='<div class="trt-toggle" style="opacity:0.4;pointer-events:none"><div class="trt-toggle-label">💉 Steroids &amp; prescription compounds</div><div class="toggle-sw"></div></div>';
-      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">Not available — disable the TRT protocol above first.</div>';
+      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">Turn off the testosterone protocol above to build a full enhanced cycle instead — it brings its own testosterone base.</div>';
     }else{
       html+='<div class="trt-toggle" onclick="wizToggleGoal(\'enhanced\')"><div class="trt-toggle-label">💉 Steroids &amp; prescription compounds</div><div class="toggle-sw'+(enhOn?' on':'')+'"></div></div>';
       html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">Select and configure enhancement compounds in the next wizard step.</div>';
