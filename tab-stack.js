@@ -2165,6 +2165,19 @@ function wizSetTRTFreqUnit(id,v){var c=(_wiz.trt.compounds||[]).find(function(c)
 function wizSetTRTDays(id,di){var c=(_wiz.trt.compounds||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1)c.days.splice(idx,1);else c.days.push(di);c.days.sort(function(a,b){return a-b;});wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 function editSetTRTDays(id,di){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1)c.days.splice(idx,1);else c.days.push(di);c.days.sort(function(a,b){return a-b;});_collectEditInputs();renderStackEditor();}
 function editToggleEnhancedCompound(id){
+  // The gate is enforced HERE as well as in the rendering, because the rendering is a
+  // presentation and this is the thing that changes the protocol. The locked cards do
+  // not call this — but an inline onclick is one devtools console away, and the tier
+  // boundary is an entitlement, not a styling choice. Adding is refused; REMOVING is
+  // not, so a compound already on a protocol can still be taken off after a downgrade
+  // rather than being stuck there.
+  var _already=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[])
+                 .some(function(c){return c&&c.id===id;});
+  if(!_already){
+    var _cat=(typeof ENHANCEMENT_COMPOUNDS!=='undefined'&&ENHANCEMENT_COMPOUNDS)
+      ? ENHANCEMENT_COMPOUNDS.find(function(c){return c&&c.id===id;}) : null;
+    if(!_compoundAllowedForTier(_cat)){ showCompoundUpgrade(id); return; }
+  }
   if(!_editBuf.enhanced)_editBuf.enhanced={enabled:false,compounds:[]};
   if(!_editBuf.enhanced.compounds)_editBuf.enhanced.compounds=[];
   var idx=_editBuf.enhanced.compounds.findIndex(function(c){return c.id===id;});
@@ -2243,6 +2256,74 @@ function _enhDormantNoteHtml(c,stackLike){
   // The only thing left worth saying is that an unmigrated id is an old spelling.
   return _unmigratedTestoNote(c);
 }
+// ── WHAT A TIER-2 USER MAY ACTUALLY ADD ─────────────────────────────────────
+// Henrik, 2026-08-20: "I want a tier2 user to still see the full catalog, but
+// anything else than testosterone, PCT and HCT compounds should be greyed out.
+// Clicking a Enhanced compound will trigger an overlay with an (for now dummy)
+// message about requiring an app upgrade."
+//
+// Tier 2 is the testosterone tier: TRT plus the things that go with running it —
+// hCG on cycle, and the PCT compounds that come after. Everything else is tier 3.
+//
+// Testosterone is recognised by the CATALOGUE FLAG, not by name. The backend's
+// merged catalogue carries isTestosterone, and a name check is what let
+// "Testoviron Depot" slip past a testosterone filter once already. ENHANCEMENT_COMPOUNDS
+// is itself already filtered to non-testosterone, so in practice everything it holds is
+// locked at tier 2 today — the allowance is written out in full anyway, because the
+// PCT and hCG entries are expected in this catalogue and must not arrive locked.
+var _TIER2_EXTRA_IDS = ['hcg','hmg','clomid','clomiphene','enclomiphene','nolvadex',
+                        'tamoxifen','raloxifene','toremifene'];
+var _TIER2_EXTRA_GROUPS = ['PCT','Recovery','Post-Cycle','HCG'];
+
+function _compoundAllowedForTier(c, tier){
+  var t = tier || _userTier || 1;
+  if (t >= 3) return true;
+  if (t < 2) return false;
+  if (!c) return false;
+  if (c.isTestosterone === true) return true;
+  if (String(c.group||'') === 'Base') return true;
+  if (_TIER2_EXTRA_IDS.indexOf(String(c.id||'')) >= 0) return true;
+  if (_TIER2_EXTRA_GROUPS.indexOf(String(c.group||'')) >= 0) return true;
+  return false;
+}
+
+// Dummy for now, by request — the copy and the upgrade route are not decided yet.
+// Deliberately NOT a confirm()/alert(): those block the page and read as an error.
+function showCompoundUpgrade(compId){
+  // Takes an ID and resolves the name here. Interpolating a display name straight into
+  // an inline onclick breaks the moment one contains an apostrophe.
+  var c = null;
+  if (typeof ENHANCEMENT_COMPOUNDS !== 'undefined' && ENHANCEMENT_COMPOUNDS)
+    c = ENHANCEMENT_COMPOUNDS.find(function(x){ return x && x.id === compId; });
+  if (!c && typeof _COMPOUND_CATALOG !== 'undefined' && _COMPOUND_CATALOG)
+    c = _COMPOUND_CATALOG.find(function(x){ return x && x.id === compId; });
+  var name = (c && c.name) || compId;
+  var ex = document.getElementById('upg-overlay'); if (ex && ex.remove) ex.remove();
+  // Built as markup and appended, the same way every other sheet in this app is. The
+  // onclick belongs in the string rather than on the element: it keeps the close
+  // behaviour with the markup it closes, and setAttribute is not something to assume.
+  var html =
+    '<div id="upg-overlay" onclick="if(event.target===this)_closeCompoundUpgrade()" ' +
+      'style="position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;padding:24px">' +
+      '<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:340px;width:100%;text-align:center">' +
+        '<div style="font-size:26px;margin-bottom:10px">🔒</div>' +
+        '<div style="font-size:11px;color:var(--muted);letter-spacing:1.5px;font-weight:700;margin-bottom:6px">ENHANCED TIER</div>' +
+        '<div style="font-size:17px;font-weight:800;color:var(--text);margin-bottom:10px">' + _esc(name) + '</div>' +
+        '<div style="font-size:13px;color:var(--muted2);line-height:1.6;margin-bottom:20px">' +
+          'Your plan covers testosterone, hCG and PCT. Adding this compound needs an app upgrade.' +
+        '</div>' +
+        '<button onclick="_closeCompoundUpgrade()" style="width:100%;background:var(--accent);color:#000;border:none;border-radius:12px;padding:13px;font-size:14px;font-weight:800;cursor:pointer;font-family:inherit">Got it</button>' +
+      '</div>' +
+    '</div>';
+  var wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  if (wrap.firstChild && document.body && document.body.appendChild)
+    document.body.appendChild(wrap.firstChild);
+}
+function _closeCompoundUpgrade(){
+  var el = document.getElementById('upg-overlay'); if (el && el.remove) el.remove();
+}
+
 function _renderEditEnhanced(enh,opts){
   if(!enh)enh={enabled:false,compounds:[]};
   var o=opts||{};
@@ -2261,6 +2342,19 @@ function _renderEditEnhanced(enh,opts){
     groups[grp].forEach(function(c){
       var isSel=selIds.includes(c.id);
       var selData=isSel?sel.find(function(s){return s.id===c.id;}):null;
+      // LOCKED, NOT HIDDEN. The card renders in full — name, class, half-life — so the
+      // catalogue reads as complete and a tier-2 user can see what the tier holds.
+      // Tapping explains rather than doing nothing, which is the difference between a
+      // locked door and a broken one.
+      var locked=!_compoundAllowedForTier(c);
+      if(locked){
+        html+='<div class="pep-card" onclick="showCompoundUpgrade(\''+_esc(String(c.id))+'\')" style="margin-bottom:8px;opacity:0.45;cursor:pointer">'
+          +'<div class="pep-dot-sm" style="background:'+c.dot+'"></div>'
+          +'<div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div>'
+          +'<div class="pep-meta">'+_esc(_halfLifeLabel(c)||c.group||'')+'</div></div>'
+          +'<div class="pep-chk" style="font-size:13px;color:var(--muted2)">🔒</div></div>';
+        return;   // no config panel, and no way to select it
+      }
       html+='<div class="pep-card'+(isSel?' sel':'')+'" onclick="editToggleEnhancedCompound(\''+c.id+'\')" style="margin-bottom:'+(isSel?'0':'8px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+_esc(c.name)+'</div><div class="pep-meta">'+_esc(_halfLifeLabel(c)||c.group||'')+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';
       if(isSel&&selData){
         // #637: AM/PM split is user-toggleable on any enhanced compound (defaults to
@@ -2308,12 +2402,21 @@ var COMPOUND_GROUP_ORDER=['DHT-Derived','19-Nor','Oral','GH Axis'];
 function _renderEditCompounds(st){
   var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">One protocol, every compound. Testosterone first, then by class.</div>';
   html+=_renderEditTRT(st.trt);
-  if((_userTier||1)>=3){
+  // TIER 2 SEES THE WHOLE CATALOGUE (2026-08-20). It used to get an upgrade card in
+  // place of the list, so there was no way to find out what the tier above actually
+  // holds — the pitch without the product. Now the same list renders, with everything
+  // outside testosterone/hCG/PCT greyed and tapping through to the upgrade message.
+  // _renderEditEnhanced locks per compound, so this is ONE call for both tiers and the
+  // two cannot drift apart.
+  //
+  // Tier 1 is not included: it is the peptide tier, with no testosterone either, and
+  // the request was for tier 2. Showing someone a steroid catalogue they have no route
+  // to at all is an advert, not a locked feature.
+  if((_userTier||1)>=2){
     html+=_renderEditEnhanced(_editBuf.enhanced||{enabled:false,compounds:[]},
                               {skipGroups:['Base'],order:COMPOUND_GROUP_ORDER});
-  }else{
-    html+=_renderEnhancedUpgradeCTA();
   }
+  if((_userTier||1)<3) html+=_renderEnhancedUpgradeCTA();
   return html;
 }
 

@@ -3380,6 +3380,88 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     /await _tcFetchHistory\(true\);[\s\S]{0,200}refreshInjectionsCache\(\)/.test(_esSrc));
 }
 
+  // ── Tier 2 sees the whole catalogue, locked ────────────────────────────────
+  // Henrik, 2026-08-20: "I want a tier2 user to still see the full catalog, but
+  // anything else than testosterone, PCT and HCT compounds should be greyed out.
+  // Clicking a Enhanced compound will trigger an overlay with an (for now dummy)
+  // message about requiring an app upgrade."
+  console.log('\n── Tier 2: full catalogue, locked ─────────────────────────');
+  {
+    const _svCat = G.ENHANCEMENT_COMPOUNDS, _svTier = G._userTier, _svBuf = G._editBuf;
+    G.ENHANCEMENT_COMPOUNDS = [
+      {id:'deca',  name:'Deca',        group:'19-Nor',      dot:'#888', isTestosterone:false},
+      {id:'tren_e',name:'Tren E',      group:'19-Nor',      dot:'#888', isTestosterone:false},
+      {id:'primo', name:'Primobolan',  group:'DHT-Derived', dot:'#3cf', isTestosterone:false},
+      {id:'hgh',   name:'HGH',         group:'GH Axis',     dot:'#e8a', isTestosterone:false},
+      {id:'hcg',   name:'HCG',         group:'Recovery',    dot:'#4c8', isTestosterone:false},
+      {id:'nolvadex', name:'Nolvadex', group:'PCT',         dot:'#4c8', isTestosterone:false},
+    ];
+
+    // ── the rule itself ──
+    G._userTier = 2;
+    const allowed = id => G._compoundAllowedForTier(
+      G.ENHANCEMENT_COMPOUNDS.find(c => c.id === id));
+    check('tier 2: hCG is allowed',      allowed('hcg') === true);
+    check('tier 2: PCT is allowed',      allowed('nolvadex') === true);
+    check('tier 2: a 19-nor is locked',  allowed('deca') === false);
+    check('tier 2: tren is locked',      allowed('tren_e') === false);
+    check('tier 2: a DHT is locked',     allowed('primo') === false);
+    check('tier 2: GH is locked',        allowed('hgh') === false);
+    check('tier 2: testosterone is allowed by the catalogue FLAG, not its name',
+      G._compoundAllowedForTier({id:'testoviron', name:'Testoviron Depot', isTestosterone:true}) === true &&
+      G._compoundAllowedForTier({id:'mystery', name:'No testosterone in this name', isTestosterone:true}) === true);
+    G._userTier = 3;
+    check('tier 3: everything is allowed',
+      ['deca','tren_e','primo','hgh','hcg','nolvadex'].every(allowed));
+
+    // ── what tier 2 actually sees ──
+    G._userTier = 2;
+    G._editBuf = {trt:{enabled:false,compounds:[]}, enhanced:{enabled:false,compounds:[]}};
+    const t2 = G._renderEditCompounds({trt:{}, enhanced:{}});
+    check('tier 2 sees the whole catalogue, not an upgrade card in its place',
+      t2.includes('Deca') && t2.includes('Primobolan') && t2.includes('HGH'));
+    check('  …with the classes named, so the tier reads as complete',
+      t2.includes('19-Nor') && t2.includes('DHT-Derived') && t2.includes('GH Axis'));
+    check('  …the locked ones greyed', (t2.match(/opacity:0\.45/g) || []).length >= 4);
+    check('  …and tapping one opens the upgrade overlay',
+      t2.includes("showCompoundUpgrade('deca')"));
+    check('  …never the selection toggle', !t2.includes("editToggleEnhancedCompound('deca')"));
+    check('  …while hCG and PCT stay selectable, because tier 2 may have them',
+      t2.includes("editToggleEnhancedCompound('hcg')") &&
+      t2.includes("editToggleEnhancedCompound('nolvadex')"));
+
+    // ── and the gate holds where it counts: the protocol ──
+    // The overlay's own DOM is not under test here; the harness element stub has no
+    // remove(). Hand these lookups back null and let the guards do their job.
+    const _svGetEl2 = G.document.getElementById;
+    G.document.getElementById = function(id){
+      if (id === 'upg-overlay') return null;
+      return _svGetEl2.call(G.document, id);
+    };
+    G._editBuf = {trt:{enabled:false,compounds:[]}, enhanced:{enabled:false,compounds:[]}};
+    G.editToggleEnhancedCompound('deca');
+    check('a locked compound cannot be added even by calling the toggle directly',
+      (G._editBuf.enhanced.compounds || []).length === 0);
+    G.editToggleEnhancedCompound('hcg');
+    check('  …while an allowed one still adds normally',
+      (G._editBuf.enhanced.compounds || []).some(c => c.id === 'hcg'));
+    // A downgrade must not strand a compound on the protocol.
+    G._editBuf.enhanced.compounds.push({id:'deca', name:'Deca'});
+    G.editToggleEnhancedCompound('deca');
+    check('  …and a locked compound already on the protocol can still be REMOVED',
+      !(G._editBuf.enhanced.compounds || []).some(c => c.id === 'deca'));
+
+    // ── tier 3 is untouched ──
+    G._userTier = 3;
+    G._editBuf = {trt:{enabled:false,compounds:[]}, enhanced:{enabled:false,compounds:[]}};
+    const t3 = G._renderEditCompounds({trt:{}, enhanced:{}});
+    check('tier 3 still gets a fully selectable catalogue',
+      t3.includes("editToggleEnhancedCompound('deca')") && !t3.includes('opacity:0.45'));
+
+    G.document.getElementById = _svGetEl2;
+    G.ENHANCEMENT_COMPOUNDS = _svCat; G._userTier = _svTier; G._editBuf = _svBuf;
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -5016,7 +5098,9 @@ console.log('\n── _stackTabBar ───────────────
   G._editBuf={trt:{enabled:false,compounds:[]},enhanced:{enabled:false,compounds:[]}};
   var cmpT1=G._renderEditCompounds({trt:{},enhanced:{}});
   check('Compounds T1: testosterone is available',   cmpT1.includes('Testosterone'));
-  check('  …and the enhancement classes are gated',  !cmpT1.includes('19-Nor'));
+  // Tier 1 is the peptide tier and still gets no steroid catalogue at all — showing a
+  // list with no route to any of it is an advert, not a locked feature.
+  check('  …and tier 1 sees no enhancement classes whatsoever',  !cmpT1.includes('19-Nor'));
   G._userTier=3;
   var cmpT3=G._renderEditCompounds({trt:{},enhanced:{}});
   check('Compounds T3: the other classes appear',    cmpT3.includes('19-Nor'));
@@ -5169,10 +5253,15 @@ console.log('\n── Source-code structural assertions ────────
   check('source: function _renderTRTViewTab( defined', tsJs.includes('function _renderTRTViewTab('));
   check('source: function _stackTabBar( defined', tsJs.includes('function _stackTabBar('));
 
-  // Tier gates confirmed in source
-  // The gate moved inside the merged tab (Phase 4) — same tier, new home.
-  check('source: edit Enhanced classes gate on tier >=3',
-    tsJs.includes("if((_userTier||1)>=3){\n    html+=_renderEditEnhanced("));
+  // Tier gates confirmed in source.
+  // The gate moved inside the merged tab (Phase 4), then changed SHAPE on 2026-08-20:
+  // tier 2 now sees the whole catalogue with the compounds it cannot use greyed out,
+  // rather than a card in place of the list. So the gate is no longer "render or do
+  // not render at tier 3" — it is per-compound, inside the renderer.
+  check('source: the catalogue renders from tier 2, not only tier 3',
+    tsJs.includes("if((_userTier||1)>=2){\n    html+=_renderEditEnhanced("));
+  check('source: and the lock is per compound, inside the renderer',
+    /var locked=!_compoundAllowedForTier\(c\);/.test(tsJs));
   check('source: view Enhanced branch gates on tier >=3', tsJs.includes('(_userTier||1)>=3?_renderEnhancedViewTab'));
 
   // _buildEnhancementCycleSection still exists (used by Cycles tab via stackSetCyclePhase etc.)
@@ -10153,6 +10242,9 @@ console.log('\n── Dose inputs: numeric keypad ──────────
   // The enhanced tier is where HGH actually lives, so pin its rendered markup directly.
   // ENHANCEMENT_COMPOUNDS is backend-fetched, so seed the HGH entry the editor looks up.
   var _prevEnhCat = G.ENHANCEMENT_COMPOUNDS;
+  // _renderEditEnhanced locks non-testosterone cards below tier 3 as of 2026-08-20, so
+  // the tier has to be stated to exercise the editor itself. It used to be ignored here.
+  var _prevTierEnh = G._userTier; G._userTier = 3;
   G.ENHANCEMENT_COMPOUNDS = [{id:'hgh',name:'HGH (Somatropin)',group:'GH Axis',cls:'ghaxis',
     dot:'#e8a020',defaultDose:2,unit:'IU/day',defaultDays:[1,2,3,4,5],
     amPm:true,defaultDoseAm:2,defaultDosePm:0}];
@@ -10163,7 +10255,7 @@ console.log('\n── Dose inputs: numeric keypad ──────────
   check('every rendered enhanced dose input has the numeric keypad',
     _enhInputs.length>0 && _enhInputs.every(function(t){return t.indexOf('inputmode="decimal"')>=0;}));
   check('enhanced tier renders one dose input per slot', _enhInputs.length===3, 'got '+_enhInputs.length);
-  G.ENHANCEMENT_COMPOUNDS = _prevEnhCat;
+  G.ENHANCEMENT_COMPOUNDS = _prevEnhCat; G._userTier = _prevTierEnh;
 }
 
 // ── Every numeric field raises a numeric keypad, app-wide ─────────────────────
@@ -10234,6 +10326,9 @@ console.log('\n── Enhanced tier: fasted-window labels ───────�
   check('_isGhAxis resolves an enhanced-catalogue GH compound', G._isGhAxis('hgh')===true);
   check('_isGhAxis is false for a non-GH enhanced compound', G._isGhAxis('test_e')===false);
 
+  // Tier stated explicitly: _renderEditEnhanced locks non-testosterone cards below
+  // tier 3 as of 2026-08-20, and these exercise the editor itself.
+  var _prevTierSlots=G._userTier; G._userTier=3;
   var _mk=function(id){return G._renderEditEnhanced({enabled:true,compounds:[
     {id:id,name:id,dose_am:'2',dose_mid:'2',dose_pm:'2',unit:'IU/day',days:[1],amPm:true}]});};
   var _hghHtml=_mk('hgh'), _tHtml=_mk('test_e');
@@ -10310,6 +10405,7 @@ console.log('\n── Enhanced tier: schedule chips ─────────�
     _off.indexOf('>Dose</div>')>=0 && _off.indexOf('AM Dose')<0);
   check('the split toggle is still present when off',
     _off.indexOf('Split across AM / Pre-GYM / PM')>=0);
+  G._userTier=_prevTierSlots;
 
   // seeding a fresh entry from the catalogue
   var _seed={};
