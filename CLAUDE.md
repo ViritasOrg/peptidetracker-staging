@@ -605,8 +605,16 @@ Use them. Every time. No exceptions. Asking Henrik to touch GitHub is a failure.
 
    **Preferred — read the `deploy-status` branch. No API, no polling, no rate limit:**
    ```
-   git fetch origin deploy-status && git show origin/deploy-status:deploy-status.json
+   git fetch origin '+refs/heads/deploy-status:refs/remotes/origin/deploy-status' \
+     && git show origin/deploy-status:deploy-status.json
    ```
+   ⚠️ **The explicit refspec is required, not decoration.** This checkout is cloned
+   single-branch — `git config --get-all remote.origin.fetch` returns only
+   `+refs/heads/main:refs/remotes/origin/main` — so a plain `git fetch origin
+   deploy-status` fetches into FETCH_HEAD and never creates `origin/deploy-status`.
+   The `git show` then fails with "unknown revision", which looks exactly like the
+   workflow not having run. It cost one wasted watcher on 2026-08-20, the same day the
+   branch was introduced.
    `.github/workflows/deploy-report.yml` writes it on the `deployment_status` event —
    the moment Pages finishes publishing — carrying `version`, `state`, `sha` and
    `finished_at`. `state: success` with the version you expect IS the confirmation.
