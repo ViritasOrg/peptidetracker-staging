@@ -1403,10 +1403,53 @@ function _renderSafetyNote(tier){
     '</div></div>';
 }
 function dismissSafety(tier,el){if(typeof _safetyDismissed!=='undefined')_safetyDismissed[tier]=1;var c=(el&&el.closest)?el.closest('[data-safety]'):null;if(c&&c.parentNode)c.parentNode.removeChild(c);}
-function _renderDoseGuide(pepId,currentDose){
+// ── IS THIS GUIDE SCALED PER DOSE, OR PER WEEK? ─────────────────────────────
+// Reported 2026-08-20: "Adding a second 3mg dose on Wednesday doesn't change the dose
+// info, it stuck on 2-4mg." Retatrutide 3 mg on two days is 6 mg/week, which is the
+// OPTIMAL band (4–8) — but the caller passed the PER-DOSE 3, so it matched Therapeutic
+// (2–4) and never moved however many days were added.
+//
+// DOSE_GUIDE's own header says "lo/hi = per-dose numeric bounds", and for 15 of the 22
+// compounds that is true. Three are not: retatrutide, tirzepatide and semaglutide state
+// their bands as a WEEKLY total ("2–4 mg/wk", bounds 2–4) because that is how GLP-1s
+// are prescribed. Comparing a per-injection amount against a weekly band is a category
+// error, and it silently under-reports the tier the user is actually in — the direction
+// that matters, since the tiers carry the risk notes.
+//
+// The distinction is in the tier's own label, so no data migration is needed:
+//   "2–4 mg/wk"        → a weekly TOTAL
+//   "1000 IU × 3/wk"   → a per-dose amount with a frequency, NOT a weekly total
+// The `×` is what separates them. tb500, motsc, nad and hcg all read the second way and
+// keep per-dose comparison, which is what their bounds already assume.
+function _doseGuideIsWeekly(tiers){
+  return (tiers||[]).some(function(t){
+    var d=String((t&&t.d)||'');
+    if(d.indexOf('×')>=0)return false;
+    return /[\d.]\s*(mg|µg|mcg|iu|ml)\s*\/\s*(wk|week)/i.test(d);
+  });
+}
+
+// What the protocol actually delivers in a week: every slot dosed, on every day chosen.
+// Slot doses are summed as written — a peptide mixing units across its own slots would
+// need converting, and none in the catalogue does.
+function _weeklyDoseTotal(p){
+  if(!p)return 0;
+  var days=(p.days&&p.days.length)?p.days.length:0;
+  if(!days)return 0;
+  var perDay=0;
+  (typeof TIME_SLOTS!=='undefined'?TIME_SLOTS:['AM','PM']).forEach(function(t){
+    if(!(p.times&&p.times.indexOf(t)>=0))return;
+    perDay+=parseDec(p['dose_'+_slotKey(t)])||0;
+  });
+  return perDay*days;
+}
+
+function _renderDoseGuide(pepId,currentDose,weeklyDose){
   var tiers=DOSE_GUIDE&&DOSE_GUIDE[pepId];
   if(!tiers||!tiers.length)return'';
-  var dose=typeof currentDose==='number'&&!isNaN(currentDose)?currentDose:0;
+  var _weekly=_doseGuideIsWeekly(tiers);
+  var _val=_weekly?weeklyDose:currentDose;
+  var dose=typeof _val==='number'&&!isNaN(_val)?_val:0;
   var activeTierIdx=-1;
   if(dose>0){
     for(var ti=0;ti<tiers.length;ti++){
@@ -1430,7 +1473,15 @@ function _renderDoseGuide(pepId,currentDose){
   var mods=_dosePersonalization(pepId,profile);
   var modHtml='';
   if(mods.length){var colorMap={adj:'#3b9eff',ok:'#3cffa0',warn:'#f59e0b',info:'#c084fc'};modHtml='<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">'+mods.map(function(m){var c=colorMap[m.type]||'#3b9eff';return'<div style="display:flex;align-items:flex-start;gap:5px;margin-bottom:4px"><span style="color:'+c+';font-size:12px;line-height:1.4;margin-top:1px">●</span><span style="font-size:11px;color:var(--text);line-height:1.4">'+m.text+'</span></div>';}).join('')+'</div>';}else if(!hasProfile){modHtml='<div style="margin-top:6px;font-size:11px;color:var(--muted2);font-style:italic">Add age & weight in Body tab for personalized dosing</div>';}
-  return'<div class="cfg-row" style="display:block"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Recommended Doses</div>'+rows.join('')+modHtml+'</div>'+_renderSafetyNote('peptide');
+  // Say WHICH number is being matched. A highlight that moves when you add a day is
+  // confusing unless the panel admits it is reading a weekly total.
+  var _hdr='Recommended Doses';
+  var _sub=_weekly
+    ? '<div style="font-size:10px;color:var(--muted2);text-transform:none;letter-spacing:0;font-weight:400;margin-bottom:6px">Matched against '+
+      (dose>0?('<b style="color:var(--accent)">'+(Math.round(dose*100)/100)+'</b>/week'):'your weekly total')+
+      ' — dose × days</div>'
+    : '';
+  return'<div class="cfg-row" style="display:block"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">'+_hdr+'</div>'+_sub+rows.join('')+modHtml+'</div>'+_renderSafetyNote('peptide');
 }
 function _renderRampSection(p,pi){
   var hasRamp=!!(p.dose_phases&&p.dose_phases.length);
@@ -1472,7 +1523,7 @@ function wizStepConfig(body,footer){
     html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">';
     DAYS_ORDER.forEach(function(di){var d=DAYS_SHORT[di];html+='<div class="day-chip'+(p.days&&p.days.includes(di)?' sel':'')+'" onclick="wizToggleDay('+pi+','+di+')">'+d+'</div>';});
     html+='</div></div><div class="cfg-row"><div class="cfg-lbl">Note (optional)</div><input class="note-in" type="text" value="'+String(p.note||'')+'" oninput="wizSetNote('+pi+',this.value)" placeholder="e.g. fasted, pre-sleep..."></div>';
-    html+=_renderDoseGuide(p.id,parseDec(_slotFirstDose(p))||0);
+    html+='<div id="pep-guide-'+pi+'">'+_renderDoseGuide(p.id,parseDec(_slotFirstDose(p))||0,_weeklyDoseTotal(p))+'</div>';
     html+=_renderRampSection(p,pi);
     html+='</div>';
   });
@@ -1482,7 +1533,16 @@ function wizStepConfig(body,footer){
 
 function wizToggleTime(pi,t){var p=_wiz.peptides[pi];if(!p)return;if(!p.times)p.times=[];var i=p.times.indexOf(t);if(i===-1)p.times.push(t);else if(p.times.length>1)p.times.splice(i,1);wizStepConfig(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 function wizToggleDay(pi,di){var p=_wiz.peptides[pi];if(!p)return;if(!p.days)p.days=[];var i=p.days.indexOf(di);if(i===-1)p.days.push(di);else if(p.days.length>1)p.days.splice(i,1);wizStepConfig(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
-function wizSetDose(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;p['dose_'+_slotKey(slot)]=val;}
+// Refreshes the guide IN PLACE. A full wizStepConfig() re-render on every keystroke
+// would tear out the input being typed into and take the caret with it — which is why
+// this handler never re-rendered at all, and why the highlight used to sit still until
+// something else redrew the step.
+function wizSetDose(pi,slot,val){
+  var p=_wiz.peptides[pi];if(!p)return;
+  p['dose_'+_slotKey(slot)]=val;
+  var el=document.getElementById('pep-guide-'+pi);
+  if(el)el.innerHTML=_renderDoseGuide(p.id,parseDec(_slotFirstDose(p))||0,_weeklyDoseTotal(p));
+}
 function wizSetUnit(pi,slot,val){var p=_wiz.peptides[pi];if(!p)return;p['unit_'+_slotKey(slot)]=val;}
 function wizSetNote(pi,val){var p=_wiz.peptides[pi];if(!p)return;p.note=val;}
 function wizToggleRamp(pi){

@@ -3761,6 +3761,58 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     G.ENHANCEMENT_COMPOUNDS = _svCat; G._wiz = _svWiz; G._userTier = _svTier;
   }
 
+  // ── The dose guide follows the protocol, not one injection ─────────────────
+  // Henrik, 2026-08-20, on Retatrutide 3 mg with W and S selected: "Adding a second
+  // 3mg dose on Wednesday doesn't change the dose info, it stuck on 2-4mg." 3 mg twice
+  // a week is 6 mg/week, which is OPTIMAL (4–8) — but the guide was comparing the
+  // per-injection 3 against bands written in mg/wk.
+  console.log('\n── Dose guide: weekly vs per-dose ─────────────────────────');
+  {
+    const label = html => (html.match(/<span style="[^"]*color:var\(--accent\)[^"]*text-transform:uppercase[^"]*">([^<]+)<\/span>/g) || [])
+      .map(m => (m.match(/>([^<]+)<\/span>/) || [])[1] || '').map(x => x.trim());
+
+    // ── which guides are weekly ──
+    const G_ = id => (G.DOSE_GUIDE || {})[id];
+    check('retatrutide is a weekly guide', G._doseGuideIsWeekly(G_('retatrutide')) === true);
+    check('  …as are the other GLP-1s',
+      G._doseGuideIsWeekly(G_('tirzepatide')) === true &&
+      G._doseGuideIsWeekly(G_('semaglutide')) === true);
+    check('a "× 3/wk" frequency is NOT a weekly total',
+      G._doseGuideIsWeekly(G_('motsc')) === false &&
+      G._doseGuideIsWeekly(G_('nad')) === false &&
+      G._doseGuideIsWeekly(G_('tb500')) === false);
+    check('  …nor is a plain per-dose guide',
+      G._doseGuideIsWeekly(G_('bpc157')) === false &&
+      G._doseGuideIsWeekly(G_('hgh')) === false);
+
+    // ── the weekly total itself ──
+    const reta = d => ({id:'retatrutide', times:['AM'], dose_am:'3', unit_am:'mg', days:d});
+    check('one day of 3 mg is 3/week', G._weeklyDoseTotal(reta([3])) === 3);
+    check('the reported case: 3 mg on two days is 6/week', G._weeklyDoseTotal(reta([3,0])) === 6);
+    check('no days selected is nothing per week', G._weeklyDoseTotal(reta([])) === 0);
+    check('both slots count toward the day',
+      G._weeklyDoseTotal({id:'retatrutide', times:['AM','PM'], dose_am:'2', dose_pm:'1', days:[1,2]}) === 6);
+
+    // ── and the highlight actually moves ──
+    const one = G._renderDoseGuide('retatrutide', 3, G._weeklyDoseTotal(reta([3])));
+    check('3 mg once a week sits in Therapeutic',
+      label(one).some(l => l.indexOf('Therapeutic') === 0), label(one).join('|'));
+    const two = G._renderDoseGuide('retatrutide', 3, G._weeklyDoseTotal(reta([3,0])));
+    check('THE BUG: adding the second day moves it to Optimal',
+      label(two).some(l => l.indexOf('Optimal') === 0), label(two).join('|'));
+    check('  …and it no longer says Therapeutic',
+      !label(two).some(l => l.indexOf('Therapeutic') === 0), label(two).join('|'));
+    const three = G._renderDoseGuide('retatrutide', 3, G._weeklyDoseTotal(reta([3,0,5])));
+    check('  …a third day reaches Max', label(three).some(l => l.indexOf('Max') === 0), label(three).join('|'));
+    check('the panel says it is reading a weekly total', /dose × days/.test(two));
+
+    // ── a per-dose guide is untouched by day count ──
+    const bpcA = G._renderDoseGuide('bpc157', 500, 500 * 1);
+    const bpcB = G._renderDoseGuide('bpc157', 500, 500 * 7);
+    check('a per-dose guide ignores how many days are selected',
+      label(bpcA).join('|') === label(bpcB).join('|'), label(bpcA).join('|') + ' vs ' + label(bpcB).join('|'));
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -6839,30 +6891,40 @@ console.log('\n── _renderTRTGuide: sex / age personalization modifiers ─�
     return matches.map(function(m){var r=m.match(/>([^<]+)<\/span>/);return r?r[1].trim():'';});
   }
 
-  // Retatrutide at 3 mg → Therapeutic (2–4 mg/wk), NOT Optimal
-  var htmlReta3=G._renderDoseGuide('retatrutide',3);
+  // ── RETATRUTIDE IS SCALED PER WEEK, NOT PER DOSE (2026-08-20) ─────────────
+  // These numbers were always weekly — the tiers read "2–4 mg/wk" — but the guide was
+  // being handed a PER-DOSE amount, so "3" meant 3 mg per injection and matched the
+  // weekly band by coincidence. Reported as: "Adding a second 3mg dose on Wednesday
+  // doesn't change the dose info, it stuck on 2-4mg."
+  //
+  // The weekly total is now the third argument, and these pass it. Note the 5 mg case
+  // below kept PASSING through the bug, because an unmatched value falls back to the
+  // tier flagged b:1 — which is Optimal. A test that passes for the wrong reason is
+  // worse than one that fails.
+  // Retatrutide at 3 mg/week → Therapeutic (2–4 mg/wk), NOT Optimal
+  var htmlReta3=G._renderDoseGuide('retatrutide',0,3);
   check('_renderDoseGuide: reta 3mg highlights Therapeutic tier',
     activeTierLabel(htmlReta3).some(function(l){return l.indexOf('Therapeutic')===0;}));
   check('_renderDoseGuide: reta 3mg does NOT highlight Optimal tier',
     !activeTierLabel(htmlReta3).some(function(l){return l.indexOf('Optimal')===0;}));
 
   // Retatrutide at 5 mg → Optimal (4–8 mg/wk)
-  var htmlReta5=G._renderDoseGuide('retatrutide',5);
+  var htmlReta5=G._renderDoseGuide('retatrutide',0,5);
   check('_renderDoseGuide: reta 5mg highlights Optimal tier',
     activeTierLabel(htmlReta5).some(function(l){return l.indexOf('Optimal')===0;}));
 
   // Retatrutide at 1 mg → Start (0–2 mg/wk)
-  var htmlReta1=G._renderDoseGuide('retatrutide',1);
+  var htmlReta1=G._renderDoseGuide('retatrutide',0,1);
   check('_renderDoseGuide: reta 1mg highlights Start tier',
     activeTierLabel(htmlReta1).some(function(l){return l.indexOf('Start')===0;}));
 
   // Retatrutide at 9 mg → Max (>=8 mg/wk)
-  var htmlReta9=G._renderDoseGuide('retatrutide',9);
+  var htmlReta9=G._renderDoseGuide('retatrutide',0,9);
   check('_renderDoseGuide: reta 9mg highlights Max tier',
     activeTierLabel(htmlReta9).some(function(l){return l.indexOf('Max')===0;}));
 
   // Dose 0 → fall back to b:1 tier (Optimal for retatrutide)
-  var htmlReta0=G._renderDoseGuide('retatrutide',0);
+  var htmlReta0=G._renderDoseGuide('retatrutide',0,0);
   check('_renderDoseGuide: reta dose=0 falls back to b:1 (Optimal)',
     activeTierLabel(htmlReta0).some(function(l){return l.indexOf('Optimal')===0;}));
 
