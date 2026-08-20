@@ -993,8 +993,9 @@ function _tcBlankSimplePlan(){
 // planner UI is removed in Phase 6. A guard that can be read in a single function is
 // also a guard that can be verified in a single test.
 //
-// _tcCreateLoggedInjections is deliberately NOT guarded. It records a dose the user
-// says they already took, which is record entry, not planning — see §3.4 of the plan.
+// Record entry is not planning, and it no longer lives here at all: the Add sheet and
+// _tcCreateLoggedInjections moved to Today's "+ Log a past injection" on 2026-08-20,
+// which enters a run and can mark it already taken. T-Calc draws the curve.
 var _TC_PLANNING_REMOVED = true;
 
 function _tcWritesDisabled(what){
@@ -1584,7 +1585,10 @@ function _tcOpenManualLog() {
     '</div>';
   }
 
-  html += '<button onclick="_tcAddManualEntry()" style="width:100%;background:#0d0d0d;border:1px dashed #2a2a2a;border-radius:10px;color:#555;font-size:13px;font-weight:700;padding:13px;cursor:pointer;font-family:inherit;letter-spacing:0.5px;margin-bottom:20px">+ ADD INJECTION</button>';
+  // The "+ ADD INJECTION" button that stood here called _tcAddManualEntry, removed with
+  // the Add sheet on 2026-08-20. This editor is itself unreachable (see the note above
+  // _tcOpenManualLog); leaving a button pointing at a deleted function would be the
+  // dmWhere shape all over again.
 
   var validLog = _tcCurveLog();
   if (validLog.length > 0) {
@@ -1618,84 +1622,14 @@ var _tcAddSheet = null;
 // that was already taken — the mid-cycle onboarding path — so it survives the planner's
 // removal with its future half closed off: the date cannot be set past today, and the
 // heading says what the sheet is for.
-function _tcAddManualEntry() { _tcShowAddSheet(); }
-function _tcOpenLogPastDose() { _tcShowAddSheet(); }
 
-function _tcShowAddSheet() {
-  if (document.getElementById('tc-add-sheet-overlay')) return;
-  var comps = _tcManualComps();
-  if (!comps.length) return;
-  var defaultComp = comps[0];
-  var defaultDate;
-  var existingDates = (_tcp.manualLog||[]).map(function(e){ return e.date; }).filter(Boolean).sort();
-  if (existingDates.length > 0) {
-    var p = existingDates[existingDates.length - 1].split('-');
-    var next = new Date(+p[0], +p[1] - 1, +p[2] + 1);
-    defaultDate = next.getFullYear() + '-' +
-      String(next.getMonth() + 1).padStart(2, '0') + '-' +
-      String(next.getDate()).padStart(2, '0');
-  } else {
-    defaultDate = new Date().toISOString().slice(0, 10);
-  }
-  _tcAddSheet = {isSeries: false};
-  var iSty = 'background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:11px 13px;color:var(--text);font-size:15px;font-family:inherit;outline:none;width:100%;box-sizing:border-box';
-  var lSty = 'font-size:11px;font-weight:700;letter-spacing:0.8px;color:var(--muted);text-transform:uppercase;margin-bottom:8px;display:block';
-  var compOpts = comps.map(function(id){ var n=_tcCompInfo(id).name; return '<option value="'+_esc(id)+'">'+_esc(n)+'</option>'; }).join('');
-  var ol = document.createElement('div');
-  ol.id = 'tc-add-sheet-overlay';
-  ol.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
-  ol.onclick = function(e){ if(e.target===ol)_tcCloseAddSheet(); };
-  ol.innerHTML =
-    '<div style="background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 36px;max-height:85vh;overflow-y:auto">' +
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
-    '<div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--text)">LOG A DOSE TAKEN</div>' +
-    '<button onclick="_tcCloseAddSheet()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;line-height:1">×</button>' +
-    '</div>' +
-    '<div style="margin-bottom:14px"><label style="'+lSty+'">COMPOUND</label>' +
-    '<select id="tc-as-comp" style="'+iSty+'">'+compOpts+'</select></div>' +
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">' +
-    '<div style="min-width:0"><label style="'+lSty+'">DOSE (mg)</label>' +
-    '<input id="tc-as-dose" type="text" inputmode="decimal" placeholder="e.g. 100" style="'+iSty+'"></div>' +
-    '<div style="min-width:0"><label style="'+lSty+'">DATE</label>' +
-    '<input id="tc-as-date" type="date" max="'+_esc(dateKey(NOW))+'" value="'+_esc(defaultDate)+'" style="'+iSty+'"></div>' +
-    '</div>' +
-    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:14px">' +
-    '<div onclick="_tcAsToggle(false)" style="padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)">' +
-    '<div id="tc-as-r1" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--accent);background:var(--accent);flex-shrink:0"></div>' +
-    '<div><div style="font-size:13px;font-weight:600;color:var(--text)">Single injection</div><div style="font-size:11px;color:var(--muted2)">One entry logged</div></div>' +
-    '</div>' +
-    '<div onclick="_tcAsToggle(true)" style="padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:10px">' +
-    '<div id="tc-as-r2" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--border);flex-shrink:0"></div>' +
-    '<div><div style="font-size:13px;font-weight:600;color:var(--text)">Recurring series</div><div style="font-size:11px;color:var(--muted2)">Log multiple injections at once</div></div>' +
-    '</div>' +
-    '</div>' +
-    '<div id="tc-as-series-opts" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px">' +
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
-    '<div><label style="'+lSty+'">INJECTIONS</label>' +
-    '<input id="tc-as-count" type="number" inputmode="numeric" min="2" max="365" step="1" value="10" style="'+iSty+'"></div>' +
-    '<div><label style="'+lSty+'">EVERY (DAYS)</label>' +
-    '<input id="tc-as-interval" type="number" inputmode="numeric" min="1" max="90" step="1" value="2" style="'+iSty+'"></div>' +
-    '</div></div>' +
-    // A partial write has to be visible in the sheet, not swallowed — back-filling a
-    // long series is several POSTs and any of them can fail.
-    '<div id="tc-as-err" style="font-size:12px;color:#e8a020;line-height:1.5;margin-bottom:8px"></div>' +
-    '<button onclick="_tcConfirmAddSheet()" style="width:100%;background:linear-gradient(135deg,#6688cc,#4466aa);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:800;letter-spacing:0.5px;padding:14px;cursor:pointer;font-family:inherit">ADD</button>' +
-    '</div>';
-  document.body.appendChild(ol);
-}
 
-function _tcAsToggle(isSeries) {
-  var r1=document.getElementById('tc-as-r1'); var r2=document.getElementById('tc-as-r2');
-  var opts=document.getElementById('tc-as-series-opts');
-  if(!r1||!r2||!opts)return;
-  if(isSeries){r1.style.background='';r1.style.borderColor='var(--border)';r2.style.background='var(--accent)';r2.style.borderColor='var(--accent)';opts.style.display='block';}
-  else{r1.style.background='var(--accent)';r1.style.borderColor='var(--accent)';r2.style.background='';r2.style.borderColor='var(--border)';opts.style.display='none';}
-  if(_tcAddSheet)_tcAddSheet.isSeries=isSeries;
-}
 
-function _tcCloseAddSheet() {
-  var ol=document.getElementById('tc-add-sheet-overlay');if(ol)ol.remove();_tcAddSheet=null;
-}
+
+
+
+
+
 
 // Back-fill: turn past-dated additions into REAL logged injection records.
 //
@@ -1713,25 +1647,7 @@ function _tcCloseAddSheet() {
 // the week strip. With no stack bound there is nothing to attach it to and it falls
 // back to 'manual' — the namespace refreshInjectionsCache renders unconditionally and
 // which tab-thist.js already writes for exactly this case.
-async function _tcCreateLoggedInjections(compId, doseMg, dates, seriesId){
-  if (typeof authHeaders !== 'function') return 0;
-  var cd   = _tcCompInfo(compId);
-  var meta = (typeof _injPkMeta === 'function') ? _injPkMeta('trt', compId)
-                                                : {ester:null, half_life_days:null};
-  var cyc  = _tcTargetCycleId() || 'manual';
-  var ok = 0;
-  for (var i = 0; i < dates.length; i++){
-    var body = {cycle_id: cyc, date: dates[i], compound_id: compId,
-                compound_name: cd.name || compId, tier: 'trt',
-                dose: String(doseMg), unit: 'mg', dot: cd.dot || '#e8a020',
-                time_of_day: null, active: true, logged: true, source: 'manual',
-                series_id: seriesId || null,
-                ester: meta.ester, half_life_days: meta.half_life_days, route: null};
-    var r = await injWriteOne(body, 'tcAddInj');
-    if (r && r.ok) ok++;
-  }
-  return ok;
-}
+
 
 
 // RECORD ENTRY SURVIVES; PLANNING DOES NOT (Phase 5).
@@ -1741,84 +1657,7 @@ async function _tcCreateLoggedInjections(compId, doseMg, dates, seriesId){
 // log a past dose — the mid-cycle onboarding path — and §8 of the plan has not yet
 // settled where that lives. So the past half still writes, and the future half is
 // refused, naming where planning went.
-async function _tcConfirmAddSheet() {
 
-  var compEl=document.getElementById('tc-as-comp');
-  var doseEl=document.getElementById('tc-as-dose');
-  var dateEl=document.getElementById('tc-as-date');
-  var countEl=document.getElementById('tc-as-count');
-  var intervalEl=document.getElementById('tc-as-interval');
-  var errEl=document.getElementById('tc-as-err');
-  var compId=compEl?compEl.value:'';
-  var doseMg=doseEl?parseDec(doseEl.value):0;
-  var startDate=dateEl?dateEl.value:'';
-  var isSeries=_tcAddSheet&&_tcAddSheet.isSeries;
-  if(!compId||!startDate||!(doseMg>0)){return;}
-  if(!_tcp.manualLog)_tcp.manualLog=[];
-
-  var dates=[];
-  if(!isSeries){
-    dates.push(startDate);
-  }else{
-    var count=countEl?Math.max(2,parseInt(countEl.value)||10):10;
-    var intervalDays=intervalEl?Math.max(1,parseInt(intervalEl.value)||2):2;
-    var sp=startDate.split('-');
-    for(var i=0;i<count;i++){
-      var sd=new Date(+sp[0],+sp[1]-1,+sp[2]+i*intervalDays);
-      dates.push(sd.getFullYear()+'-'+String(sd.getMonth()+1).padStart(2,'0')+'-'+String(sd.getDate()).padStart(2,'0'));
-    }
-  }
-
-  // A series can straddle today: the dates already taken are records, the ones ahead
-  // are still a plan. Split rather than force the whole series into one of the two.
-  var todayStr=dateKey(NOW);
-  var past=dates.filter(function(d){return d<=todayStr;});
-  var future=dates.filter(function(d){return d>todayStr;});
-
-  // The plan half goes to the protocol now. With nothing in the past there is nothing
-  // to do here at all; with both, the records are written and the rest is named.
-  var refusedFuture=0;
-  if(future.length&&_TC_PLANNING_REMOVED){
-    if(!past.length){ _tcWritesDisabled('Planning future doses'); return; }
-    refusedFuture=future.length;
-    future=[];
-  }
-
-  // One id across the WHOLE run. A series that straddles today is split into records
-  // and plan for storage, but it is still one series the user authored — giving each
-  // half its own id would render it as two unrelated cards.
-  var runId=dates.length>1?Date.now().toString(36):undefined;
-
-  if(past.length){
-    var wrote=await _tcCreateLoggedInjections(compId,doseMg,past,runId);
-    if(wrote<past.length){
-      if(errEl)errEl.textContent='Saved '+wrote+' of '+past.length+' — try again for the rest.';
-      else alert('Saved '+wrote+' of '+past.length+' injections. Try again for the rest.');
-      if(!wrote)return;                       // nothing landed: keep the sheet open
-    }
-  }
-  // The future branch that used to stage drafts here is gone with the planner: `future`
-  // is emptied above, and staging a dose nothing can save is how seven doses came to sit
-  // in a profile looking scheduled (2026-08-14).
-
-  _tcCloseAddSheet();
-  if(refusedFuture&&typeof alert==='function'){
-    alert('Logged ' + past.length + ' dose' + (past.length===1?'':'s') + ' you already took.\n\n' +
-          'The ' + refusedFuture + ' future dose' + (refusedFuture===1?'':'s') +
-          ' were not planned here — schedule those in Plan ▸ Compounds, which is the ' +
-          'only thing that writes a schedule now.');
-  }
-  if(past.length){
-    await _tcFetchHistory(true);                                  // re-read; do not guess
-    if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
-    _tcLoadLogFromStack();
-  }
-  buildTCalc();
-  if(past.length){
-    if(typeof buildToday==='function')buildToday();
-    if(typeof buildWeekStrip==='function')buildWeekStrip();
-  }
-}
 
 function _tcConfirmRemove(idx) {
   var ex = document.getElementById('tc-del-confirm');
@@ -3726,7 +3565,11 @@ function buildTCalc() {
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
   html += '<button onclick="var b=document.getElementById(\'tab-btn-stack\');if(b)b.click();" '
        +  'style="background:linear-gradient(135deg,#6688cc,#4466aa);border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;font-family:inherit">Open Plan ▸ Compounds</button>';
-  html += '<button onclick="_tcOpenLogPastDose()" '
+  // Record entry moved to Today's "+ Log a past injection" sheet on 2026-08-20
+  // (Henrik: "Move Add away from T-calc"), which now also enters a whole run and can
+  // tick it off as already taken. T-Calc keeps a route to it rather than a second
+  // sheet of its own — one place a dose is entered, as with scheduling.
+  html += '<button onclick="if(typeof openPastInjection===\'function\')openPastInjection(\'trt\');" '
        +  'style="background:none;border:1px solid var(--border);border-radius:8px;color:var(--muted2);font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;font-family:inherit">Log a dose already taken</button>';
   html += '</div></div></div>';
 
