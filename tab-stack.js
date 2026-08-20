@@ -2730,8 +2730,64 @@ function _wizAdviseAdd(id){
 }
 // Default selection when a fresh recommendation loads: keep the base, and pre-tick
 // the best addition only if the user hasn't already chosen a non-base compound.
+// ── WHERE THE TESTOSTERONE BASE COMES FROM NOW ──────────────────────────────
+// Since the single Compounds toggle (2026-08-20) the 'trt' step asks for the ester,
+// dose and cadence, and the enhanced half of the flow follows it. Three places still
+// assumed the base lived in _wiz.enhanced.compounds, which is where the wizard used to
+// put it, and they broke in two visible ways:
+//
+//   "Even though I added an T ester in TRT step, recommended enhanced compounds lists
+//    Test E on top, no testosterone esters should show up in this step."
+//   "Error that a test base is required for masteron even though one is already
+//    selected in TRT step"
+//
+// The second was a hard block: the Next button was disabled, so an enhanced cycle could
+// not be finished at all once testosterone moved.
+function _wizTrtHasTesto(){
+  var cs=(typeof _wiz!=='undefined'&&_wiz&&_wiz.trt&&_wiz.trt.enabled)?(_wiz.trt.compounds||[]):[];
+  return cs.length>0;
+}
+// Is this recommendation a testosterone ester? Checked by id against the catalogue
+// rather than by name — "Testoviron Depot" has slipped a name filter before.
+function _wizAdviseIsTesto(entry){
+  var id=entry&&entry.id;
+  if(!id)return false;
+  if(typeof _isTestoCompoundId==='function'&&_isTestoCompoundId(id))return true;
+  var cat=(typeof _COMPOUND_CATALOG!=='undefined'&&_COMPOUND_CATALOG)
+    ? _COMPOUND_CATALOG.find(function(c){return c&&c.id===id;}) : null;
+  return !!(cat&&cat.isTestosterone);
+}
+
+// Put a recommended testosterone base where testosterone lives: _wiz.trt, in the shape
+// editToggleTRTCompound produces, so the 'trt' step and the generator both understand
+// it. Never overwrites an existing choice.
+function _wizSeedTrtBase(id){
+  if(!id)return false;
+  if(!_wiz.trt)_wiz.trt={enabled:false,compounds:[]};
+  if(!_wiz.trt.compounds)_wiz.trt.compounds=[];
+  if(_wiz.trt.compounds.length)return false;
+  var cid=(typeof _canonCompoundId==='function')?_canonCompoundId(id):id;
+  var cat=(typeof TRT_CAT!=='undefined'&&TRT_CAT)
+    ? TRT_CAT.find(function(c){return c&&(c.id===cid||c.id===id);}) : null;
+  if(!cat)return false;
+  _wiz.trt.enabled=true;
+  _wiz.trt.compounds.push({id:cat.id,name:cat.name,dose:cat.defaultDose||'',unit:cat.unit||'mg',
+    freqVal:cat.freqVal||1,freqUnit:cat.freqUnit||'weeks',
+    days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});
+  return true;
+}
+
 function _wizAdviseDefaultSelect(res){
-  if(res.base)_wizAdviseAdd(res.base.id);
+  // Adding res.base here is what put "Test E" at the top of the Enhanced list. When the
+  // TRT step already holds the ester, adding it again would schedule the same molecule
+  // twice — the doubling the whole rewrite exists to end.
+  //
+  // And when it does NOT hold one, the base cannot go into the enhanced list either:
+  // ENHANCEMENT_COMPOUNDS is filtered to non-testosterone since the catalogue merge, so
+  // _wizAdviseAdd's `if(!cat)return;` has been silently swallowing every recommended
+  // base. Third symptom of the same fault, and the only invisible one. It goes where
+  // testosterone actually lives now — the TRT block.
+  if(res.base&&res.base.id&&!_wizTrtHasTesto())_wizSeedTrtBase(res.base.id);
   var hasNonBase=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).some(function(c){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===c.id;});return cat&&cat.cls!=='base';});
   if(!hasNonBase&&res.best_addition)_wizAdviseAdd(res.best_addition.id);
   if(_wiz.enhanced)_wiz.enhanced.enabled=(_wiz.enhanced.compounds||[]).length>0;
@@ -2746,7 +2802,8 @@ function wizApplyAdviseRecommendations(){
   // overwrite manual choices (respects "only fix what was asked").
   if(_wiz.enhanced.compounds.length)return;
   var picks=[];
-  if(res.base&&res.base.id)picks.push(res.base.id);
+  // Not a `pick` — picks go into the enhanced list, which cannot hold testosterone.
+  if(res.base&&res.base.id&&!_wizTrtHasTesto())_wizSeedTrtBase(res.base.id);
   (res.primary||[]).forEach(function(p){if(p&&p.id)picks.push(p.id);});
   picks.forEach(function(id){
     if(_wiz.enhanced.compounds.some(function(c){return c.id===id;}))return;
@@ -2799,8 +2856,27 @@ function wizStepAdvise(body,footer){
     // Selection is live here — tap to add/remove.
     if((res.primary&&res.primary.length)||(res.consider&&res.consider.length)||res.best_addition){
       html+='<div style="font-size:11px;color:var(--muted2);margin-bottom:10px;line-height:1.5;">Tap a compound to add or remove it — ✓ means it\'s in your protocol. Your picks carry to the next step.</div>';}
-    if(res.base){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">Your testosterone base</div>'+_wizAdviseCompoundRow({name:res.base.name,reason:res.base.note},'primary',{selectable:false})+'</div>';}
+    // NO TESTOSTERONE ESTERS IN THIS STEP once the TRT step has one. Henrik: "no
+    // testosterone esters should show up in this step." The base is already chosen and
+    // configured — restating it here reads as a second decision to make, and tapping it
+    // would add the molecule a second time. One line naming what the advice is built on
+    // replaces the selectable card.
+    var _trtBase=_wizTrtHasTesto();
+    if(res.base&&!_trtBase){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">Your testosterone base</div>'+_wizAdviseCompoundRow({name:res.base.name,reason:res.base.note},'primary',{selectable:false})+'</div>';}
+    else if(_trtBase){
+      var _bn=((_wiz.trt&&_wiz.trt.compounds)||[]).map(function(c){return c.name||c.id;}).join(', ');
+      html+='<div style="font-size:11px;color:var(--muted2);margin-bottom:12px;line-height:1.5;">Built on the testosterone you set earlier'+(_bn?' — <b style="color:var(--text)">'+_esc(_bn)+'</b>':'')+'. Everything below is what to add alongside it.</div>';
+    }
     // Best addition (the single top pick), then the rest of primary — all tappable.
+    // Testosterone is filtered out of every list, not just the base row: the backend can
+    // return an ester among the recommendations, and it is not an ADDITION.
+    if(_trtBase){
+      if(res.best_addition&&_wizAdviseIsTesto(res.best_addition))res=Object.assign({},res,{best_addition:null});
+      res=Object.assign({},res,{
+        primary:(res.primary||[]).filter(function(p){return !_wizAdviseIsTesto(p);}),
+        consider:(res.consider||[]).filter(function(p){return !_wizAdviseIsTesto(p);})
+      });
+    }
     var bestId=res.best_addition&&res.best_addition.id;
     var restPrimary=(res.primary||[]).filter(function(p){return p.id!==bestId;});
     if(res.best_addition){html+='<div style="margin-bottom:12px;"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">Best addition</div>'+_wizAdviseCompoundRow(res.best_addition,'best',{selectable:true,selected:selIds.indexOf(bestId)>=0})+'</div>';}
@@ -2890,7 +2966,10 @@ function wizStepEnhanced(body,footer){
       }
     });
   });
-  var hasTest=sel.some(function(c){
+  // A testosterone base is still required — and the TRT step is now where it comes
+  // from. Checking only _wiz.enhanced.compounds left Next DISABLED for anyone who had
+  // set their ester one step earlier, which is everyone since the toggles merged.
+  var hasTest=_wizTrtHasTesto()||sel.some(function(c){
     var cat=ENHANCEMENT_COMPOUNDS.find(function(ec){return ec.id===c.id;});
     return cat&&cat.cls==='base';
   });
