@@ -62,7 +62,15 @@ function _wizFlow(){
   // Testosterone base is chosen first — every enhanced cycle runs on one, and which
   // ester it is changes injection frequency for the whole cycle. Then 'advise' (guided
   // recommendation), then the raw Enhanced compound list.
-  if(hasEnhanced){steps.push('base');steps.push('advise');steps.push('enhanced');}
+  // 'base' picks the testosterone an enhanced cycle runs on. With the single Compounds
+  // toggle both flags are set together, so the 'trt' step above has ALREADY asked for
+  // the ester, dose and cadence — pushing 'base' as well would ask for testosterone
+  // twice in one run and let the two answers disagree. It stays for the path that has
+  // enhanced without TRT, which is how an older draft can still arrive here.
+  if(hasEnhanced){
+    if(!hasTRT)steps.push('base');
+    steps.push('advise');steps.push('enhanced');
+  }
   // VALIDATE when combining 2+ tiers so cross-tier conflicts are caught
   var tierCount=[hasPeps,hasTRT,hasEnhanced].filter(Boolean).length;
   if(tierCount>=2)steps.push('validate');
@@ -1212,50 +1220,72 @@ function wizStepGoals(body,footer){
     html+='<div class="goal-chip '+sel+'" onclick="wizToggleGoal(\''+g.id+'\')">'+g.icon+' '+g.label+'</div>';
   });
   html+='</div><div style="font-size:12px;color:var(--muted2);margin-top:8px;margin-bottom:16px;">Select all that apply — filters the peptide catalogue.</div>';
-  // ── ONE SECTION: COMPOUNDS ────────────────────────────────────────────────
-  // Henrik, 2026-08-20: "Wizard still have the choice between TRT and Enhanced,
-  // this isn't true anymore, just add a heading for Compounds and have a
-  // description mentioning TRT 'and other enhanced compounds'."
+  // ── ONE SECTION, ONE TOGGLE: COMPOUNDS ────────────────────────────────────
+  // Henrik, 2026-08-20: "Wizard still have the choice between TRT and Enhanced, this
+  // isn't true anymore" and then, after I merged only the headings: "Why you ignore
+  // this? TRT and Enhanced should never be separated."
   //
-  // The step used to carry two headings, TRT and ENHANCED CYCLE, which read as two
-  // separate places testosterone could live. The tiers were merged in Phase 4 —
-  // Plan ▸ Compounds holds testosterone beside the 19-nors, orals and GH — so a
-  // heading that splits them describes an app that no longer exists.
+  // He is right, and the headings were the smaller half. Two toggles that grey each
+  // other out ARE the separation — they make the user pick which of two places their
+  // testosterone lives, which is exactly the question Phase 4 removed by merging the
+  // tiers. Plan ▸ Compounds holds testosterone beside the 19-nors, orals and GH; the
+  // wizard now asks the same single question.
   //
-  // The two TOGGLES stay. They are not the same choice as the headings were: they
-  // carry different entitlements (testosterone from tier 2, the enhanced catalogue
-  // from tier 3) and they select different wizard steps. Collapsing them would
-  // either walk a tier-2 user into a steroid catalogue or force a tier-3 user who
-  // wants testosterone alone through the whole enhanced flow.
+  // ONE toggle. On means "this protocol has compounds", and the steps that follow
+  // pick which. Testosterone is chosen in the 'trt' step for everyone; the rest of the
+  // catalogue follows in the 'enhanced' step, locked per tier by the same
+  // _compoundAllowedForTier the Compounds tab uses. Tier is what a compound costs, not
+  // a fork in the flow.
   if(_wizTier()>=2){
+    var compOn = trtOn || enhOn;
     html+='<div class="wiz-section">Compounds</div>';
     html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:12px;">'
-       +  (_wizTier()>=3
-            ? 'TRT and other enhanced compounds. Testosterone, 19-nors, orals and GH all sit together in Plan ▸ Compounds once the protocol is built.'
-            : 'TRT. Testosterone sits with the rest of your compounds in Plan ▸ Compounds once the protocol is built.')
+       +  'TRT and other enhanced compounds. Testosterone, 19-nors, orals and GH all sit '
+       +  'together in Plan ▸ Compounds once the protocol is built.</div>';
+    html+='<div class="trt-toggle" onclick="wizToggleCompounds()"><div class="trt-toggle-label">⚡ Testosterone &amp; enhanced compounds</div><div class="toggle-sw'+(compOn?' on':'')+'"></div></div>';
+    html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">'
+       +  (compOn
+            ? 'Pick the ester, dose and schedule next'+(_wizTier()>=3?', then anything else you are running.':'.')
+            : 'Add Testoviron, Nebido or another ester'+(_wizTier()>=3?', plus any other compound.':' to your protocol.'))
        +  '</div>';
-    if(enhOn){
-      html+='<div class="trt-toggle" style="opacity:0.4;pointer-events:none"><div class="trt-toggle-label">⚡ Testosterone protocol</div><div class="toggle-sw"></div></div>';
-      // Still true, and worth saying plainly rather than as a refusal: every enhanced
-      // cycle runs on a testosterone base, chosen in the enhanced flow's own step.
-      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">Testosterone comes with the enhanced cycle — you pick the ester in the next step.</div>';
-    }else{
-      html+='<div class="trt-toggle" onclick="wizToggleGoalTRT()"><div class="trt-toggle-label">⚡ Testosterone protocol</div><div class="toggle-sw'+(trtOn?' on':'')+'"></div></div>';
-      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">'+(trtOn?'Compound, dose &amp; schedule configured in the next step.':'Add Testoviron, Nebido or another ester to your protocol.')+'</div>';
-    }
-  }
-  if(_wizTier()>=3){
-    if(trtOn){
-      html+='<div class="trt-toggle" style="opacity:0.4;pointer-events:none"><div class="trt-toggle-label">💉 Steroids &amp; prescription compounds</div><div class="toggle-sw"></div></div>';
-      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">Turn off the testosterone protocol above to build a full enhanced cycle instead — it brings its own testosterone base.</div>';
-    }else{
-      html+='<div class="trt-toggle" onclick="wizToggleGoal(\'enhanced\')"><div class="trt-toggle-label">💉 Steroids &amp; prescription compounds</div><div class="toggle-sw'+(enhOn?' on':'')+'"></div></div>';
-      html+='<div style="font-size:12px;color:var(--muted2);margin-top:6px;margin-bottom:16px;">Select and configure enhancement compounds in the next wizard step.</div>';
-    }
   }
   body.innerHTML=html;
   footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
 }
+// ONE toggle for the whole Compounds section (2026-08-20). The old pair set 'trt' and
+// 'enhanced' as MUTUALLY EXCLUSIVE goals — each handler explicitly removed the other and
+// wiped its compounds. That mutual exclusion was the separation Henrik asked to end, so
+// this sets them TOGETHER instead.
+//
+// Both flags stay in the model rather than being replaced by one: they carry the tier
+// entitlement ('enhanced' only from tier 3) and they select the wizard steps, and every
+// downstream reader — _wizFlow, saveWizard, _stackTestoComp — already understands them.
+// A single new flag would have meant rewriting all of that in the same change.
+function wizToggleCompounds(){
+  if(_wizTier()<2)return;
+  var on = !!(_wiz.trt&&_wiz.trt.enabled) || _wiz.goals.indexOf('enhanced')>=0;
+  var eIdx=_wiz.goals.indexOf('enhanced');
+  var tIdx=_wiz.goals.indexOf('trt');
+  if(!_wiz.trt)_wiz.trt={};
+  if(on){
+    // OFF: clear both sides, including the enhanced prefill, so re-enabling starts clean.
+    _wiz.trt.enabled=false; _wiz.trt.compounds=[];
+    if(tIdx!==-1)_wiz.goals.splice(tIdx,1);
+    eIdx=_wiz.goals.indexOf('enhanced');
+    if(eIdx!==-1)_wiz.goals.splice(eIdx,1);
+    if(_wiz.enhanced){_wiz.enhanced.enabled=false;_wiz.enhanced.compounds=[];_wiz.enhanced._prefilled=false;}
+  }else{
+    _wiz.trt.enabled=true;
+    if(!_wiz.trt.compounds)_wiz.trt.compounds=[];
+    if(tIdx===-1)_wiz.goals.push('trt');
+    // The rest of the catalogue is a tier-3 step. A tier-2 user still gets the
+    // testosterone step, which is what their tier holds — the flow is the same shape,
+    // it just ends sooner.
+    if(_wizTier()>=3 && eIdx===-1)_wiz.goals.push('enhanced');
+  }
+  wizStepGoals(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+}
+
 function wizToggleGoalTRT(){
   if(_wizTier()<2)return;
   _wiz.trt.enabled=!_wiz.trt.enabled;
