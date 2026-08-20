@@ -3982,6 +3982,54 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       /tab-btn-stacks/.test(tdSrc) && !/tab-btn-stack['\\]/.test(tdSrc));
   }
 
+  // ── The wizard says it is loading, instead of showing nothing ──────────────
+  // Henrik, 2026-08-20: "The wizard needs a loading spinner between screens, I am
+  // having slow internet and you are sometimes presented with an empty screen for a
+  // while." wizRender handed `body` to the renderer without clearing it, so a step
+  // waiting on the backend left the previous screen — or nothing — on display.
+  console.log('\n── Wizard: loading state between steps ────────────────────');
+  {
+    const _svCat = G.ENHANCEMENT_COMPOUNDS, _svRend = G._WIZ_RENDERERS, _svDoc = G.document.getElementById;
+    const els = {};
+    const el = id => (els[id] = els[id] || {innerHTML:'', textContent:'', scrollTop:0});
+    G.document.getElementById = id => el(id);
+
+    G.initWizard(); G._userTier = 3;
+
+    // A renderer that returns without writing — the slow-step case.
+    G._WIZ_RENDERERS = Object.assign({}, _svRend, {goals: function(){ /* writes nothing */ }});
+    G._wiz.step = 1;
+    G.wizRender();
+    check('a step that has not drawn yet shows the spinner',
+      /today-spinner-dot/.test(el('wiz-body').innerHTML), el('wiz-body').innerHTML.slice(0,80));
+    check('  …and says so in words, not just an animation',
+      /Loading/.test(el('wiz-body').innerHTML));
+    check('  …with Next disabled, so a half-loaded step cannot be walked past',
+      /disabled/.test(el('wiz-footer').innerHTML), el('wiz-footer').innerHTML.slice(0,120));
+
+    // A renderer that writes replaces the spinner in the same tick — no flash.
+    G._WIZ_RENDERERS = Object.assign({}, _svRend, {
+      goals: function(b,f){ b.innerHTML = '<div>real content</div>'; f.innerHTML = '<button>Next</button>'; }});
+    G.wizRender();
+    check('a ready step replaces the spinner outright',
+      el('wiz-body').innerHTML === '<div>real content</div>');
+    check('  …and re-enables its own footer',
+      !/disabled/.test(el('wiz-footer').innerHTML));
+
+    // A throwing renderer must not strand the user on a spinner forever.
+    G._WIZ_RENDERERS = Object.assign({}, _svRend, {
+      goals: function(){ throw new Error('boom'); }});
+    G.wizRender();
+    check('a step that throws shows an error, not an endless spinner',
+      /could not be drawn/.test(el('wiz-body').innerHTML) && !/today-spinner-dot/.test(el('wiz-body').innerHTML));
+    check('  …naming the failure', /boom/.test(el('wiz-body').innerHTML));
+    check('  …and offering a way out', /Try again/.test(el('wiz-body').innerHTML));
+
+    G._WIZ_RENDERERS = _svRend;
+    G.ENHANCEMENT_COMPOUNDS = _svCat;
+    G.document.getElementById = _svDoc;
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
