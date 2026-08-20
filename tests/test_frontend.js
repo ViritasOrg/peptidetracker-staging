@@ -4738,7 +4738,7 @@ console.log('\n── Edit Enhanced tab — stack editor regression ────
     var gBody={innerHTML:''};var gFoot={innerHTML:''};
     G.initWizard();G._wiz.goals=['enhanced'];
     G.wizStepGoals(gBody,gFoot);
-    check('wizStepGoals T3: shows Enhanced Cycle toggle', gBody.innerHTML.includes('Enhanced Cycle'));
+    check('wizStepGoals T3: shows the Enhanced toggle', gBody.innerHTML.includes('Steroids'));
 
     // #637: AM/PM split is user-toggleable on any enhanced compound
     check('editSetEnhAmPm defined', typeof G.editSetEnhAmPm==='function');
@@ -4791,7 +4791,7 @@ console.log('\n── Wizard step render tests ───────────
   check('wizStepGoals T1: body not empty', gB1.innerHTML.length>0);
   check('wizStepGoals T1: contains goal-chip', gB1.innerHTML.includes('goal-chip'));
   check('wizStepGoals T1: no Testosterone toggle (T1 has no TRT access)', !gB1.innerHTML.includes('Testosterone protocol'));
-  check('wizStepGoals T1: no Enhanced Cycle toggle', !gB1.innerHTML.includes('Enhanced Cycle'));
+  check('wizStepGoals T1: no Enhanced toggle', !gB1.innerHTML.includes('Steroids'));
   check('wizStepGoals T1: footer has Next button', gF1.innerHTML.includes('Next'));
 
   // wizStepGoals T2: TRT toggle present, no Enhanced Cycle
@@ -4800,14 +4800,14 @@ console.log('\n── Wizard step render tests ───────────
   var gB2={innerHTML:''};var gF2={innerHTML:''};
   G.wizStepGoals(gB2,gF2);
   check('wizStepGoals T2: has Testosterone protocol toggle', gB2.innerHTML.includes('Testosterone protocol'));
-  check('wizStepGoals T2: no Enhanced Cycle toggle', !gB2.innerHTML.includes('Enhanced Cycle'));
+  check('wizStepGoals T2: no Enhanced toggle', !gB2.innerHTML.includes('Steroids'));
 
   // wizStepGoals T3: Enhanced Cycle section visible + toggleable
   G._userTier=3;
   G.initWizard();
   var gB3={innerHTML:''};var gF3={innerHTML:''};
   G.wizStepGoals(gB3,gF3);
-  check('wizStepGoals T3: shows Enhanced Cycle section', gB3.innerHTML.includes('Enhanced Cycle'));
+  check('wizStepGoals T3: shows the Enhanced toggle', gB3.innerHTML.includes('Steroids'));
   check('wizStepGoals T3: initWizard does not auto-include enhanced in goals', !G._wiz.goals.includes('enhanced'));
   check('wizStepGoals T3: Enhanced toggle starts OFF by default', !gB3.innerHTML.includes('toggle-sw on'));
 
@@ -4964,7 +4964,7 @@ console.log('\n── Wizard step render tests ───────────
   G._wiz.trt.enabled=true;G._wiz.goals=['trt'];
   var gmB2={innerHTML:''};var gmF2={innerHTML:''};
   G.wizStepGoals(gmB2,gmF2);
-  check('wizStepGoals: Enhanced Cycle section visible when TRT is on', gmB2.innerHTML.includes('Enhanced Cycle'));
+  check('wizStepGoals: the Enhanced toggle is still shown when TRT is on', gmB2.innerHTML.includes('Steroids'));
   check('wizStepGoals: Enhanced toggle greyed (pointer-events:none) when TRT is on', gmB2.innerHTML.includes('pointer-events:none'));
 
   // wizStepEnhanced: mandatory Testosterone — Next disabled when no base compound selected
@@ -5133,9 +5133,24 @@ console.log('\n── Source-code structural assertions ────────
   check('source: edit Enhanced branch does NOT call _buildEnhancementCycleSection',
     !(function(){var m=tsJs.match(/editInnerTab===.enhanced.[\s\S]{0,400}_buildEnhancementCycleSection/);return!!m;})());
 
-  // wizStepGoals must show Enhanced Cycle toggle for T3 (restored 2026-06-25)
-  check('source: wizStepGoals shows Enhanced Cycle for T3',
-    (function(){var fn=tsJs.match(/function wizStepGoals\([\s\S]{0,3000}/);return fn&&fn[0].includes('Enhanced Cycle');})());
+  // wizStepGoals must show the Enhanced toggle for T3 (restored 2026-06-25, when it
+  // was removed unasked and users lost per-stack opt-out). These checks used to look
+  // for the heading "Enhanced Cycle"; the headings merged into one "Compounds" section
+  // on 2026-08-20 at Henrik's request, because the tier merge made two headings
+  // describe an app that no longer exists. The TOGGLE is what the 2026-06-25 guard is
+  // actually about, so assert that instead — and the T1/T2 negatives above move with
+  // it, or they would pass for the wrong reason now the heading is gone everywhere.
+  check('source: wizStepGoals still offers the Enhanced toggle for T3',
+    (function(){var fn=tsJs.match(/function wizStepGoals\([\s\S]{0,4000}/);
+      return fn && fn[0].includes("wizToggleGoal(\\'enhanced\\')");})());
+  check('source: the two headings became one Compounds section',
+    (function(){var fn=tsJs.match(/function wizStepGoals\([\s\S]{0,4000}/);
+      return fn && fn[0].includes("wiz-section\">Compounds<") &&
+             !fn[0].includes("wiz-section\">TRT<") &&
+             !fn[0].includes("wiz-section\">Enhanced Cycle<");})());
+  check('  …and the description names TRT and the other enhanced compounds',
+    (function(){var fn=tsJs.match(/function wizStepGoals\([\s\S]{0,4000}/);
+      return fn && /TRT and other enhanced compounds/.test(fn[0]);})());
 
   // #637: TRT injection entries must carry a real AM/PM time_of_day, never hardcoded null
   check('source: TRT injection builder sets time_of_day from c.time (not null)',
