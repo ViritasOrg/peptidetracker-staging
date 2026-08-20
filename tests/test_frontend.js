@@ -4030,6 +4030,76 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     G.document.getElementById = _svDoc;
   }
 
+  // ── The shopping list includes what the protocol is built on ───────────────
+  // Henrik, 2026-08-20: "Test U missing in Shopping list for a new protocol."
+  // The cart read st.peptides and st.enhanced.compounds and never st.trt.compounds,
+  // so testosterone was invisible to it. Hidden while enhanced cycles carried their
+  // base in the ENHANCED block; exposed the moment Phase 4 merged the tiers and
+  // testosterone moved to `trt` for every protocol.
+  console.log('\n── Shopping list: testosterone ────────────────────────────');
+  {
+    const wk = 12;
+    // Nebido: 1000 mg every 12 weeks, ampoule is 1000mg/4ml.
+    const neb = G._calcTrtCartItem({id:'nebido', name:'Nebido', dose:'1000', unit:'mg',
+                                    freqVal:12, freqUnit:'weeks'}, wk);
+    check('Nebido appears at all', !!neb && !neb.noData, JSON.stringify(neb));
+    check('  …one injection in a 12-week cycle, so 1000 mg',
+      neb.totalMg === 1000, JSON.stringify(neb));
+    check('  …which is one ampoule', neb.units === 1 && /ampoule/.test(neb.unitLabel));
+    check('  …with the pack size read from the catalogue',
+      /1000 mg\/4 mL/.test(neb.packDesc), neb.packDesc);
+
+    // Testoviron 125 mg weekly, ampoule is 250mg/ml → 1500 mg → 6 ampoules.
+    const tv = G._calcTrtCartItem({id:'testoviron', name:'Testoviron Depot',
+                                   dose:'125', unit:'mg', freqVal:1, freqUnit:'weeks',
+                                   days:[1]}, wk);
+    check('a weekly ester totals dose × weeks', tv.totalMg === 125 * wk, JSON.stringify(tv));
+    check('  …and rounds ampoules up, never down', tv.units === Math.ceil(1500 / 250), JSON.stringify(tv));
+
+    // KNOWN GAP, pinned deliberately: only nebido and testoviron state a concentration
+    // in TRT_CAT ("1000mg/4ml", "250mg/ml"). enanthate/cypionate/propionate say
+    // "Generic / Jenapharm" and the like, so there is nothing to divide by and no
+    // ampoule count can be given. They still report total mg, which is the part that
+    // matters for ordering. Adding pack sizes for them is Henrik's data to supply —
+    // inventing a concentration would put a wrong number on a shopping list.
+    const ena = G._calcTrtCartItem({id:'enanthate', name:'Testosterone Enanthate',
+                                    dose:'125', unit:'mg', freqVal:1, freqUnit:'weeks',
+                                    days:[1]}, wk);
+    check('an ester with no stated concentration reports total mg and no ampoule count',
+      ena.totalMg === 125 * wk && ena.units === null, JSON.stringify(ena));
+
+    // Twice weekly is twice the total.
+    const twice = G._calcTrtCartItem({id:'enanthate', name:'Testosterone Enanthate',
+                                      dose:'125', unit:'mg', days:[1,4]}, wk);
+    check('two injection days a week doubles the total', twice.totalMg === 125 * 2 * wk, JSON.stringify(twice));
+
+    // A RATE must not be counted as a per-injection amount.
+    const rate = G._calcTrtCartItem({id:'enanthate', name:'Testosterone Enanthate',
+                                     dose:'250', unit:'mg/week', days:[1,4]}, wk);
+    check('a mg/week rate is converted, not multiplied as if it were per injection',
+      rate.totalMg === 250 * wk, JSON.stringify(rate));
+
+    // No dose yet: say so rather than vanishing.
+    const empty = G._calcTrtCartItem({id:'nebido', name:'Nebido', dose:'', unit:'mg',
+                                      freqVal:12, freqUnit:'weeks'}, wk);
+    check('a compound with no dose is listed, not dropped',
+      !!empty && empty.noData === true, JSON.stringify(empty));
+
+    // A compound with no parseable pack still reports its total.
+    const noPack = G._calcTrtCartItem({id:'unknown-ester', name:'Something', dose:'100',
+                                       unit:'mg', days:[1]}, wk);
+    check('an unknown ester still reports total mg',
+      noPack.totalMg === 100 * wk && noPack.units === null, JSON.stringify(noPack));
+
+    // And the renderer actually has a section for it.
+    const idx = fs.readFileSync(path.resolve(htmlPath), 'utf8');
+    check('the cart renders a testosterone section',
+      /Testosterone — source separately/.test(idx));
+    check('  …built from st.trt.compounds', /st\.trt&&st\.trt\.compounds\)\?st\.trt\.compounds\.filter/.test(idx));
+    check('  …and the empty-cart message accounts for it',
+      /!hasItems&&!peptides\.length&&!enhanceCmpds\.length&&!trtCmpds\.length/.test(idx));
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
