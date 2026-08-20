@@ -1703,38 +1703,37 @@ console.log(`\n${'─'.repeat(59)}`);
   // The POST moved into inj-writer.js in Phase 3 (one module owns every write).
   // Same requirement, followed to where it now lives: the add path must reach a
   // real POST /injections, not just mutate manualLog.
+  // MOVED 2026-08-20 (Henrik: "Move Add away from T-calc"). Every requirement below
+  // was written against T-Calc's Add sheet; that sheet is gone and record entry lives
+  // in Today's "+ Log a past injection" (savePastInjection in tab-thist.js), which now
+  // also enters a run and can mark it already taken. The REQUIREMENTS did not move —
+  // only the code they apply to — so they are re-pointed rather than deleted.
+  const thJs = fs.readFileSync(path.join(__dirname, '../tab-thist.js'), 'utf8');
   check('a past-dated add POSTs a real injection record',
-    /async function _tcCreateLoggedInjections\(/.test(tcJs) &&
-    /await injWriteOne\(body, 'tcAddInj'\)/.test(tcJs) &&
+    /await injWriteOne\(body, 'pastInjection'\)/.test(thJs) &&
     /fetch\(AGENT_URL \+ '\/injections', \{\s*\n\s*method:'POST'/.test(injJs));
-  check('  …marked logged, which is what makes it the past',
-    /active: true, logged: true, source: 'manual'/.test(tcJs));
   check('  …carrying the PK snapshot, like the T-History back-fill does',
-    /_injPkMeta\('trt', compId\)/.test(tcJs));
-  check('  …under the bound stack, or manual when there is none',
-    /_tcTargetCycleId\(\) \|\| 'manual'/.test(tcJs));
-  check('a series straddling today splits into records and plan',
-    /var past=dates\.filter\(function\(d\)\{return d<=todayStr;\}\);/.test(tcJs) &&
-    /var future=dates\.filter\(function\(d\)\{return d>todayStr;\}\);/.test(tcJs));
-  // Phase 6: the future half is refused outright rather than synced — planning moved
-  // to the protocol, and the past half is still written as the record it is.
-  check('  …with the future half refused, not staged',
-    /if\(future\.length&&_TC_PLANNING_REMOVED\)/.test(tcJs) &&
-    !/if\(future\.length\)\{[\s\S]{0,400}manualLog\.push/.test(tcJs));
+    /_injPkMeta\(d\.tier, d\.compId\)/.test(thJs));
+  check('  …under cycle_id manual, which is where hand-entered doses live',
+    /cycle_id: 'manual'/.test(thJs));
+  check('  …and the T-Calc sheet it replaced is gone, not merely unlinked',
+    !/function _tcShowAddSheet/.test(tcJs) && !/function _tcCreateLoggedInjections/.test(tcJs) &&
+    !/_tcOpenLogPastDose\(\)/.test(tcJs));
 
-  // ── The plan must be PERSISTED before anything re-reads the record ─────────
-  // Reported 2026-08-08: "If I edit a series it won't save the update. If I add a
-  // new series of 10 injections starting at today's date, only a single injection
-  // is saved." _tcLoadLogFromStack() assigns _tcp.manualLog outright from the record,
-  // so running it BEFORE the sync erased every dose that was still only in the profile.
-  //
-  // The series editor is gone (Phase 6). What remains of this ordering requirement is
-  // on the ADD path, which still writes records: it must persist before it re-reads.
-  var _tcAddFn  = tcJs.slice(tcJs.indexOf('async function _tcConfirmAddSheet()'),
-                             tcJs.indexOf('function _tcConfirmRemove('));
+  // A run straddling today: the past half is the record, the future half is not this
+  // sheet's business. Planning is Plan ▸ Compounds.
+  check('a series straddling today writes only the past half',
+    /_piDates\(d\)\.filter\(function\(x\)\{ return x <= today; \}\)/.test(thJs));
+  check('  …and says how many were dropped rather than dropping them quietly',
+    /fall after today and will not be written/.test(thJs));
+
+  // The write must land before anything re-reads the record.
+  const _saveFn = thJs.slice(thJs.indexOf('async function savePastInjection()'),
+                             thJs.indexOf('async function savePastInjection()') + 6000);
   check('a logged dose is written before the record is re-read',
-    _tcAddFn.indexOf('await _tcFetchHistory(true);') > -1 &&
-    _tcAddFn.indexOf('_tcCreateLoggedInjections') < _tcAddFn.indexOf('await _tcFetchHistory(true);'));
+    _saveFn.indexOf('await _tcFetchHistory(true)') > -1 &&
+    _saveFn.indexOf("injWriteOne(body, 'pastInjection')") < _saveFn.indexOf('await _tcFetchHistory(true)'));
+
   check('  …and the series editor that shared the hazard is gone',
     !/function _tcSaveEditSeries/.test(tcJs));
 
@@ -1797,9 +1796,11 @@ console.log(`\n${'─'.repeat(59)}`);
   hist([]);
   G._injectionsCache = {};
   check('  …and the history re-read after writing, not assumed',
-    /await _tcFetchHistory\(true\);[^\n]*\n\s*if\(typeof refreshInjectionsCache/.test(tcJs));
+    /await _tcFetchHistory\(true\)/.test(thJs) &&
+    thJs.indexOf("injWriteOne(body, 'pastInjection')") < thJs.indexOf('await _tcFetchHistory(true)'));
   check('a partial write is reported rather than swallowed',
-    /Saved '\+wrote\+' of '\+past\.length/.test(tcJs) && /id="tc-as-err"/.test(tcJs));
+    /'Saved ' \+ written\.length \+ ' of ' \+ dates\.length/.test(thJs) &&
+    /id="pi-err"/.test(thJs));
 
   // ── A series is part of the RECORD, not of the profile cache ───────────────
   // Henrik, 2026-08-07: "Make injections.json keep track of injections that are part
@@ -1807,7 +1808,9 @@ console.log(`\n${'─'.repeat(59)}`);
   // to live only in _tcp.manualLog, so nineteen doses read back out of the record
   // came back as nineteen identical rows and a restore could not rebuild the card.
   check('a created past injection carries its series id to the record',
-    /series_id: seriesId \|\| null/.test(tcJs));
+    /series_id: seriesId/.test(thJs));
+  check('  …one id spanning the whole run, so a restore rebuilds one card',
+    /var seriesId = \(dates\.length > 1\)/.test(thJs));
   // The plan sync that also stamped series_id (_tcSyncLogToBackend) is deleted
   // (Phase 8). Record entry is the only path left that writes one, and the check
   // above covers it. Assert the sync is gone rather than that it stamps.
@@ -1817,11 +1820,12 @@ console.log(`\n${'─'.repeat(59)}`);
     /seriesId: e\.series_id \|\| undefined/.test(tcJs));
   check('  …as does a planned row rebuilt from the stack',
     /seriesId:e\.series_id\|\|undefined/.test(tcJs));
+  // Moved to Today 2026-08-20; same rule, same reason.
   check('one id spans the whole run, so a logged run is still one card',
-    /var runId=dates\.length>1\?Date\.now\(\)\.toString\(36\):undefined;/.test(tcJs) &&
-    /_tcCreateLoggedInjections\(compId,doseMg,past,runId\)/.test(tcJs));
+    /var seriesId = \(dates\.length > 1\)/.test(thJs) && /series_id: seriesId/.test(thJs));
   check('  …and a single dose gets no series id at all',
-    !/var runId=dates\.length>0/.test(tcJs));
+    /: null;/.test(thJs.slice(thJs.indexOf('var seriesId = (dates.length > 1)'),
+                              thJs.indexOf('var seriesId = (dates.length > 1)') + 260)));
 
   // End to end: the grouping survives a round trip through the record. The card is
   // rendered inline in buildTCalc (which needs a DOM), so this asserts the input that
@@ -2256,9 +2260,17 @@ console.log('\n── The series editor is gone; its rules moved ─────
     !/function _tcCreatePlannedInjections/.test(_esSrc));
   // Record entry still exists and still means what it says: logged:true, only for dates
   // the user picked, never inferred.
-  check('logging a dose you took is still explicit',
-    /async function _tcCreateLoggedInjections/.test(_esSrc) &&
-    /active: true, logged: true, source: 'manual'/.test(_esSrc));
+  // Moved to Today 2026-08-20. Still explicit, and now explicitly OPTIONAL: the
+  // "Already taken" checkbox decides, defaulting to true because a mid-cycle user is
+  // entering doses they had. Never inferred from the date.
+  {
+    const _thE = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-thist.js'),'utf8');
+    check('logging a dose you took is still explicit',
+      /logged: logged,/.test(_thE) && /var logged = !!d\.logged;/.test(_thE));
+    check('  …and defaults to taken, the mid-cycle case', /logged: true \}/.test(_thE));
+    check('  …with an untaken past dose kept out of the curve, as designed',
+      /Past-dated doses that are never ticked stay OUT of the free-T curve/.test(_thE));
+  }
 }
 
 // The exclusion is behavioural, not just textual: an unticked row in the plan must not
@@ -3379,6 +3391,101 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
   check('  …and record entry still re-reads both the history and the cache',
     /await _tcFetchHistory\(true\);[\s\S]{0,200}refreshInjectionsCache\(\)/.test(_esSrc));
 }
+
+  // ── Log a past injection: a run, and whether it was taken ───────────────────
+  // Henrik, 2026-08-20: "The Add past injections, should instead be able to add a
+  // series of injections as well as have a checkbox if these old injections should
+  // already be checked (most common use case for a mid cycle user)."
+  console.log('\n── Past injection: series + already-taken ─────────────────');
+  {
+    const _svFetch = G.fetch, _svAuth = G.authHeaders, _svDraft = G._piDraft;
+    // The sheet's own DOM is not under test here — the record it produces is. The
+    // harness's element stub has no remove(), so hand these lookups back null and let
+    // the guards in the sheet do their job.
+    const _svGetEl = G.document.getElementById;
+    G.document.getElementById = function(id){
+      if (id === 'pi-overlay' || id === 'pi-err' || id === 'pi-save' || id === 'pi-preview') return null;
+      return _svGetEl.call(G.document, id);
+    };
+    let posted = [];
+    G.authHeaders = function(){ return {}; };
+    G.fetch = function(u, o){
+      const body = o && o.body ? JSON.parse(o.body) : null;
+      if (String(u).indexOf('/injections') > -1 && o && o.method === 'POST') posted.push(body);
+      return Promise.resolve({ok:true, status:200,
+        json:()=>Promise.resolve({entry: Object.assign({id:'x'+posted.length}, body)})});
+    };
+
+    const today = G._thTodayStr();
+    const daysAgo = n => { const p = today.split('-'); const d = new Date(+p[0], +p[1]-1, +p[2] - n);
+      return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+
+    // ── the date maths, before anything is written ──
+    G._piDraft = {tier:'trt', compId:'nebido', dose:'100', unit:'mg', date: daysAgo(10),
+                  time:'', isSeries:true, count:5, intervalDays:2, logged:true};
+    const dates = G._piDates(G._piDraft);
+    check('a series expands to one date per injection', dates.length === 5, dates.join(','));
+    check('  …stepping by the interval, in calendar days',
+      dates[0] === daysAgo(10) && dates[1] === daysAgo(8) && dates[4] === daysAgo(2), dates.join(','));
+    check('a single dose is just its own date',
+      G._piDates({date: daysAgo(3), isSeries:false}).join(',') === daysAgo(3));
+
+    // ── the whole run reaches the record ──
+    posted = [];
+    await G.savePastInjection();
+    check('every dose in the run is written', posted.length === 5, 'posted ' + posted.length);
+    check('  …each marked as taken, because the box was ticked',
+      posted.every(p => p.logged === true));
+    check('  …sharing one series id, so a restore rebuilds one card',
+      posted.every(p => p.series_id && p.series_id === posted[0].series_id));
+    check('  …under cycle_id manual', posted.every(p => p.cycle_id === 'manual'));
+    check('  …carrying the dose and compound asked for',
+      posted.every(p => p.dose === '100' && p.compound_id === 'nebido' && p.unit === 'mg'));
+
+    // ── the checkbox is honoured ──
+    posted = [];
+    G._piDraft = {tier:'trt', compId:'nebido', dose:'100', unit:'mg', date: daysAgo(6),
+                  time:'', isSeries:true, count:3, intervalDays:2, logged:false};
+    await G.savePastInjection();
+    check('unticking "already taken" writes them as NOT taken',
+      posted.length === 3 && posted.every(p => p.logged === false));
+
+    // ── this sheet records the past; it does not plan ──
+    posted = [];
+    G._piDraft = {tier:'trt', compId:'nebido', dose:'100', unit:'mg', date: daysAgo(2),
+                  time:'', isSeries:true, count:6, intervalDays:2, logged:true};
+    await G.savePastInjection();
+    check('a run straddling today writes only the dates that have happened',
+      posted.length === 2, 'posted ' + posted.length + ': ' + posted.map(p=>p.date).join(','));
+    check('  …and never a date in the future',
+      posted.every(p => p.date <= today), posted.map(p=>p.date).join(','));
+
+    // ── a single dose still works, unchanged ──
+    posted = [];
+    G._piDraft = {tier:'trt', compId:'nebido', dose:'250', unit:'mg', date: daysAgo(4),
+                  time:'', isSeries:false, count:5, intervalDays:2, logged:true};
+    await G.savePastInjection();
+    check('one dose still writes exactly one row', posted.length === 1);
+    check('  …with no series id, because there is no series',
+      posted[0] && (posted[0].series_id === null || posted[0].series_id === undefined));
+
+    // ── refusals ──
+    for (const [label, draft] of [
+      ['a run with no count',    {tier:'trt',compId:'nebido',dose:'100',date:daysAgo(5),isSeries:true,count:0,intervalDays:2,logged:true}],
+      ['a run with no interval', {tier:'trt',compId:'nebido',dose:'100',date:daysAgo(5),isSeries:true,count:3,intervalDays:0,logged:true}],
+      ['a dose of zero',         {tier:'trt',compId:'nebido',dose:'0',date:daysAgo(5),isSeries:false,logged:true}],
+      ['a date in the future',   {tier:'trt',compId:'nebido',dose:'100',date:'2099-01-01',isSeries:false,logged:true}],
+      ['an absurd run length',   {tier:'trt',compId:'nebido',dose:'100',date:daysAgo(400),isSeries:true,count:999,intervalDays:1,logged:true}],
+    ]) {
+      posted = [];
+      G._piDraft = draft;
+      await G.savePastInjection();
+      check('refused: ' + label, posted.length === 0, 'wrote ' + posted.length);
+    }
+
+    G.fetch = _svFetch; G.authHeaders = _svAuth; G._piDraft = _svDraft;
+    G.document.getElementById = _svGetEl;
+  }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
@@ -5445,10 +5552,19 @@ console.log('\n── T-Calc simple planner ────────────
   check('T-Calc points at Plan ▸ Compounds instead', /Plan ▸ Compounds/.test(_tcSrc));
   // Record entry is not planning: logging a dose already taken is how a mid-cycle user
   // gets their history in, and it has no other home yet (§8 of the rewrite plan).
-  check('  …while logging a dose already taken survives',
-    /function _tcOpenLogPastDose/.test(_tcSrc) && /LOG A DOSE TAKEN/.test(_tcSrc));
-  check('  …with the date capped at today, so it cannot plan through the back door',
-    /max="'\+_esc\(dateKey\(NOW\)\)\+'"/.test(_tcSrc));
+  // Record entry survived Phase 6 inside T-Calc, then MOVED to Today on 2026-08-20
+  // ("Move Add away from T-calc"). It still survives — it is how a mid-cycle user gets
+  // their history in — but T-Calc now routes to it rather than holding a second sheet.
+  {
+    const _thSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-thist.js'),'utf8');
+    check('  …while logging a dose already taken survives, on Today',
+      /function openPastInjection/.test(_thSrc) && /Log a past injection/.test(_thSrc));
+    check('  …with the date capped at today, so it cannot plan through the back door',
+      /max="'\+_thTodayStr\(\)\+'"/.test(_thSrc) &&
+      /return x <= today;/.test(_thSrc));
+    check('  …and T-Calc keeps only a route to it, not a sheet of its own',
+      /openPastInjection\(/.test(_tcSrc) && !/function _tcShowAddSheet/.test(_tcSrc));
+  }
   // The curve reads stored rows only now — no planner can drive it invisibly.
   check('the curve takes its future from the protocol alone',
     /_add\(_tcProtocolInjections\(\)\);/.test(_tcSrc) &&
@@ -10952,10 +11068,16 @@ console.log('\n── injection deletes: scoped, and never a record ────
     const _srcA = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-tcalc.js'),'utf8');
     check('the after-save hook is gone with the sheet it served',
       !/function _tcAfterSavedToStack/.test(_srcA));
-    const addFn = _srcA.slice(_srcA.indexOf('async function _tcConfirmAddSheet()'),
-                              _srcA.indexOf('function _tcConfirmRemove('));
+    // The add path moved to Today (2026-08-20); the requirement follows it. Rebuilding
+    // manualLog from the record is no longer part of it — savePastInjection appends the
+    // doses it just wrote and re-reads the history, which is the same guarantee without
+    // routing through a profile cache.
+    const _thA = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'tab-thist.js'),'utf8');
+    const addFn = _thA.slice(_thA.indexOf('async function savePastInjection()'),
+                             _thA.indexOf('async function savePastInjection()') + 6000);
     check('logging a dose forces a fresh history read', /_tcFetchHistory\(true\)/.test(addFn));
-    check('  …and rebuilds manualLog from the record', /_tcLoadLogFromStack\(\)/.test(addFn));
+    check('  …and the curve only sees what was actually taken',
+      /tier === 'trt' && logged &&/.test(addFn));
     check('manualLog stores the CANONICAL compound id',
       /compId:_tcCanonCompId\(e\.compound_id\)/.test(_srcA));
   }
