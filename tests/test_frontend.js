@@ -3884,6 +3884,54 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     G.ENHANCEMENT_COMPOUNDS = _svCat; G._wiz = _svWiz; G.document.getElementById = _svDoc;
   }
 
+  // ── The wizard never adds a second testosterone ester ──────────────────────
+  // Henrik, 2026-08-20: "Wizard silently adds Test E by itself even though I choose
+  // Nebido." The wizard holds the chosen ester in TWO places — _wiz.trtPlan.compId
+  // (the TRT step's planner, which a normal run fills in) and _wiz.trt.compounds
+  // (the classic editor). _wizTrtHasTesto only read the second, so after picking
+  // Nebido it answered "no testosterone yet" and the advise step seeded its
+  // recommended base as a second TRT compound. Validate renders both lists, so both
+  // esters appeared.
+  console.log('\n── Wizard: one ester, from either place ───────────────────');
+  {
+    const _svWiz2 = G._wiz, _svTier2 = G._userTier;
+    G.initWizard(); G._userTier = 3;
+
+    // ── the guard sees both representations ──
+    G._wiz.trtPlan = null; G._wiz.trt = {enabled:false, compounds:[]};
+    check('no ester anywhere reads as none', G._wizTrtHasTesto() === false);
+
+    G._wiz.trtPlan = {compId:'nebido', doseMg:'1000', cadenceDays:70, startDate:'2026-08-01'};
+    check('THE BUG: an ester chosen in the TRT planner counts', G._wizTrtHasTesto() === true);
+
+    G._wiz.trtPlan = null; G._wiz.trt = {enabled:true, compounds:[{id:'enanthate', name:'Test E'}]};
+    check('  …and so does one from the classic editor', G._wizTrtHasTesto() === true);
+
+    // ── the seeder refuses once either holds one ──
+    G._wiz.trtPlan = {compId:'nebido', doseMg:'1000', cadenceDays:70, startDate:'2026-08-01'};
+    G._wiz.trt = {enabled:false, compounds:[]};
+    const seeded = G._wizSeedTrtBase('enanthate');
+    check('the advise base is NOT seeded on top of the planner choice', seeded === false);
+    check('  …so the protocol still carries exactly one ester',
+      (G._wiz.trt.compounds || []).length === 0, JSON.stringify(G._wiz.trt.compounds));
+
+    // ── and Validate lists one, not two ──
+    if (typeof G._wizTrtSummaryRows === 'function') {
+      const rows = G._wizTrtSummaryRows();
+      check('Validate shows one testosterone row, the one chosen',
+        rows.length === 1 && rows[0].id === 'nebido',
+        rows.map(r => r.id).join(','));
+    }
+
+    // ── with nothing chosen, seeding still works, which is what it is for ──
+    G._wiz.trtPlan = null; G._wiz.trt = {enabled:false, compounds:[]};
+    check('an empty protocol still accepts the recommended base',
+      G._wizSeedTrtBase('enanthate') === true &&
+      (G._wiz.trt.compounds || []).some(c => c.id === 'enanthate'));
+
+    G._wiz = _svWiz2; G._userTier = _svTier2;
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
