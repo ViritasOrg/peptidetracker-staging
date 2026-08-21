@@ -2004,7 +2004,9 @@ function stackAddAASCompound(){
   var sheet=document.createElement('div');
   sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;';
   // Build grouped compound select from backend catalogue
-  var _grps=['Base','DHT-Derived','19-Nor','GH Axis','Oral'];
+  // Appended, not reordered — a compound whose group is absent from this list renders
+  // nowhere at all, which is why the backend has a test pinning the two in step.
+  var _grps=['Base','DHT-Derived','19-Nor','GH Axis','Oral','Testosterone-Derived','Blends'];
   var selHtml='<select id="aas-name" onchange="stackAASAutoFill(this.value)" style="'+ins+'"><option value="">— Choose compound —</option>';
   _grps.forEach(function(g){var ge=(ENHANCEMENT_COMPOUNDS||[]).filter(function(e){return e.group===g;});if(!ge.length)return;selHtml+='<optgroup label="'+g+'">';ge.forEach(function(e){selHtml+='<option value="'+e.id+'">'+e.name+'</option>';});selHtml+='</optgroup>';});
   selHtml+='</select>';
@@ -2663,7 +2665,7 @@ function _renderEditEnhanced(enh,opts){
 // Every existing handler — editToggleTRTCompound, editSetEnhDose, the cadence editors —
 // keeps working untouched. A rewrite of both editors in the same change as the merge
 // would have made any regression impossible to attribute.
-var COMPOUND_GROUP_ORDER=['DHT-Derived','19-Nor','Oral','GH Axis'];
+var COMPOUND_GROUP_ORDER=['DHT-Derived','19-Nor','Oral','GH Axis','Testosterone-Derived','Blends'];
 
 function _renderEditCompounds(st){
   var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">One protocol, every compound. Testosterone first, then by class.</div>';

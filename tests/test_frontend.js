@@ -6918,14 +6918,17 @@ console.log('\n── Nebido fallback PK vs backend ─────────�
   }
 }
 
-// ── TRT_GUIDE: structural validation (all 6 TRT compounds) ───────────────────
+// ── TRT_GUIDE: structural validation (all 7 TRT compounds) ───────────────────
 console.log('\n── TRT_GUIDE: structural validation ─────────────────────────');
 {
   if(G.TRT_GUIDE&&G.TRT_CAT){
     var trtIds=G.TRT_CAT.map(function(c){return c.id;});
     var trtKeys=Object.keys(G.TRT_GUIDE);
 
-    check('TRT_GUIDE has exactly 6 entries', trtKeys.length===6, 'got '+trtKeys.length);
+    // 7 since 2026-08-21: phenylpropionate was added for the supplier's TPP100.
+    // The count is pinned rather than derived so that adding an ester to TRT_CAT and
+    // forgetting its dose guidance fails here — the parity rule in CLAUDE.md.
+    check('TRT_GUIDE has exactly 7 entries', trtKeys.length===7, 'got '+trtKeys.length);
     check('every TRT_CAT id has a TRT_GUIDE entry',
       trtIds.every(function(id){return!!G.TRT_GUIDE[id];}),
       trtIds.filter(function(id){return!G.TRT_GUIDE[id];}).join(', '));
@@ -13056,4 +13059,43 @@ console.log('\n── Saving a protocol rebuilds the Levels curve ────�
   check('  …and rebuilds the Levels curve from it', _sb.indexOf('buildTCalc') >= 0);
   check('  …guarded, so a save never dies on the Levels tab',
         /typeof\s+buildTCalc\s*===\s*'function'/.test(_sb));
+}
+
+// ── Supplier-list groups render, and the new ester is complete ──────────────
+// Two groups were added to the backend catalogue on 2026-08-21 (Testosterone-Derived
+// for boldenone and Dianabol, Blends for Supertest 450 and Blend 500). The group lists
+// the pickers iterate are HARDCODED in three places — _grps and COMPOUND_GROUP_ORDER
+// here, _cgrps in tab-cycles.js. A compound whose group is missing from one of them is
+// in the catalogue and invisible in that view, with nothing to say it was dropped.
+console.log('\n── Supplier-list groups and the new ester ─────────────────');
+{
+  const _src = require('fs').readFileSync(__dirname + '/../tab-stack.js', 'utf8');
+  const _cyc = require('fs').readFileSync(__dirname + '/../tab-cycles.js', 'utf8');
+  for (const g of ['Testosterone-Derived', 'Blends']) {
+    check("_grps renders " + g, new RegExp("var _grps=\\[[^\\]]*'" + g + "'").test(_src));
+    check("  …COMPOUND_GROUP_ORDER renders " + g,
+          new RegExp("COMPOUND_GROUP_ORDER=\\[[^\\]]*'" + g + "'").test(_src));
+    check("  …_cgrps renders " + g, new RegExp("var _cgrps=\\[[^\\]]*'" + g + "'").test(_cyc));
+  }
+
+  // Testosterone Phenylpropionate (the supplier's TPP100). A TRT_CAT ester with no
+  // TRT_GUIDE entry shows no dose guidance in the add modal or the configure view —
+  // the parity rule that CLAUDE.md calls non-negotiable.
+  const _pp = (G.TRT_CAT || []).filter(c => c.id === 'phenylpropionate')[0];
+  check('phenylpropionate is in TRT_CAT', !!_pp);
+  check('  …at the 100 mg/mL the supplier sells',
+        !!_pp && Array.isArray(_pp.conc) && _pp.conc.indexOf(100) >= 0,
+        _pp && JSON.stringify(_pp.conc));
+  check('  …on an EOD cadence, not a weekly one the ester cannot hold',
+        !!_pp && _pp.freqUnit === 'days' && _pp.freqVal === 2);
+  check('  …with dose guidance, like every other ester',
+        !!(G.TRT_GUIDE && G.TRT_GUIDE.phenylpropionate));
+  check('  …including a half-life the injection writer can stamp',
+        !!(G.TRT_GUIDE && G.TRT_GUIDE.phenylpropionate && G.TRT_GUIDE.phenylpropionate.halfLife));
+
+  // Every TRT_CAT ester must have guidance — asserted over the whole list, not just
+  // the new one, so the next ester added cannot slip through either.
+  (G.TRT_CAT || []).forEach(function(c){
+    check('  …' + c.id + ' has dose guidance', !!(G.TRT_GUIDE && G.TRT_GUIDE[c.id]));
+  });
 }
