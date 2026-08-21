@@ -12973,3 +12973,87 @@ console.log('\n── inj-writer refuses an unscoped delete ──────�
 
   G.fetch = _svFetch; G.authHeaders = _svAuth;
 }
+
+// ── Shortening a cycle prunes the plan it removed ───────────────────────────
+// Reported 2026-08-21: "Levels graph isn't redrawn when I shorten the Cycle."
+// The curve was redrawn — the RECORD had not changed. _genInjBatches only pushed a
+// batch when the compound generated at least one entry, and POST /injections/batch is
+// the only thing that prunes. A compound whose remaining window holds no dose therefore
+// produced no batch, no request, and no prune: every row written by the previous,
+// longer cycle survived, and the plasma curve kept running out to the old end date.
+//
+// An empty entries list is a valid instruction to that endpoint (it clears the range and
+// writes nothing back), so the batch is now always pushed.
+console.log('\n── Shortening a cycle prunes the plan ─────────────────────');
+if (typeof G._genInjBatches === 'function') {
+  const _sn = new Date();   // G.NOW is a script-scope binding, not a sandbox property
+  const _s0 = new Date(_sn.getFullYear(), _sn.getMonth(), _sn.getDate(), 0, 0, 0, 0);
+  const _sd = off => G.dateKey(new Date(_sn.getFullYear(), _sn.getMonth(), _sn.getDate() + off));
+
+  // Nebido every 14 days, cycle running 90 days back. Relative to today the next dose
+  // lands on day +8, so an end date inside the next week leaves nothing to generate.
+  const _shStack = endOff => ({
+    id:'sh1', cycle_start:_sd(-90), end_date:_sd(endOff), peptides:[],
+    trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
+                                   freqVal:14, freqUnit:'days'}]}
+  });
+  const _shBatch = endOff => (G._genInjBatches(_shStack(endOff), 'sh1', _s0) || [])
+                             .filter(b => b.compound_id === 'nebido')[0];
+
+  const _long = _shBatch(60);
+  check('a long cycle generates doses', !!_long && _long.entries.length > 0,
+        _long ? _long.entries.length + ' entries' : 'no batch');
+
+  const _short = _shBatch(3);
+  check('shortening past the next dose leaves nothing to generate',
+        !!_short && _short.entries.length === 0,
+        _short ? _short.entries.length + ' entries' : 'NO BATCH');
+  check('  …but a batch is STILL emitted, so the old rows are pruned', !!_short,
+        _short ? 'batch present' : 'no batch — nothing would prune');
+  check('  …scoped to this compound', !!_short && _short.compound_id === 'nebido');
+  check('  …from today forward, never over-reaching into the past',
+        !!_short && _short.from_date === G.dateKey(_s0), _short && _short.from_date);
+
+  // Ending the cycle in the past is the same case, and the one most likely to strand
+  // a whole forward schedule.
+  const _past = _shBatch(-30);
+  check('a cycle ended in the past still emits its prune', !!_past &&
+        _past.entries.length === 0, _past ? _past.entries.length + ' entries' : 'no batch');
+
+  // Peptides and Enhanced go through the same three push sites.
+  const _pep = (G._genInjBatches({id:'sh2', cycle_start:_sd(-90), end_date:_sd(-30),
+      peptides:[{id:'ipamorelin', name:'Ipamorelin', days:[1,3,5], times:['AM'],
+                 dose_am:'200', unit_am:'mcg'}]}, 'sh2', _s0) || [])
+    .filter(b => b.compound_id === 'ipamorelin')[0];
+  check('a peptide emits its prune too', !!_pep && _pep.entries.length === 0,
+        _pep ? _pep.entries.length + ' entries' : 'no batch');
+
+  const _enh = (G._genInjBatches({id:'sh3', cycle_start:_sd(-90), end_date:_sd(-30),
+      peptides:[],
+      enhanced:{enabled:true, compounds:[{id:'masteron', name:'Masteron', dose:'100',
+                                          unit:'mg', freqVal:2, freqUnit:'days'}]}},
+      'sh3', _s0) || []).filter(b => b.compound_id === 'masteron')[0];
+  check('an enhanced compound emits its prune too', !!_enh && _enh.entries.length === 0,
+        _enh ? _enh.entries.length + ' entries' : 'no batch');
+
+  // The prune must never take a recorded dose with it. That is the backend's job
+  // (batch_upsert filters on `not logged`), but the entries this generator produces
+  // must all be plans — a generated row marked logged would be a fabricated record.
+  check('every generated entry is a plan, never a record',
+        (_long.entries || []).every(e => e.logged === false),
+        JSON.stringify((_long.entries || []).map(e => e.logged)));
+}
+
+// ── Saving a protocol rebuilds Levels ───────────────────────────────────────
+// Same report. Levels reads the forward plan out of _injectionsCache via
+// _tcProtocolInjections; saveEditBuf refreshes that cache and then rebuilt Today, the
+// week strip, the schedule, the store and the timeline — but not the plasma curve. On
+// screen at the time of the save, it kept showing the plan as it was before it.
+console.log('\n── Saving a protocol rebuilds the Levels curve ────────────');
+{
+  const _sb = String(G.saveEditBuf || '');
+  check('saveEditBuf refreshes the injection cache', _sb.indexOf('refreshInjectionsCache') >= 0);
+  check('  …and rebuilds the Levels curve from it', _sb.indexOf('buildTCalc') >= 0);
+  check('  …guarded, so a save never dies on the Levels tab',
+        /typeof\s+buildTCalc\s*===\s*'function'/.test(_sb));
+}
