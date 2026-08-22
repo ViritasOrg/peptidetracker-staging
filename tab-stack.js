@@ -2074,7 +2074,11 @@ function _getDynamicTRTDoses(d,withIds){
     var start=parseLocalDate(st.cycle_start);
     var days=Math.floor((d-start)/86400000);
     if(days<0)return;
-    if(st.cycle_length&&days>=st.cycle_length*7)return;
+    // Against the protocol's real end, not the rounded-up week count — the same overshoot the
+    // card had, which would keep rendering compounds for up to six days past the end date.
+    var _trtEnd=_cycleEndDateStr(st);
+    if(_trtEnd&&d>=parseLocalDate(_trtEnd))return;
+    if(!_trtEnd&&st.cycle_length&&days>=st.cycle_length*7)return;
     (st.trt.compounds||[]).forEach(function(c){
       if(c.end_date&&d>parseLocalDate(c.end_date))return;
       if(c.start_date&&d<parseLocalDate(c.start_date))return;
@@ -2101,7 +2105,9 @@ function _getDynamicEnhancedDoses(d,withIds){
       var start=parseLocalDate(st.cycle_start);
       var daysDiff=Math.floor((d-start)/86400000);
       if(daysDiff<0)return;
-      if(st.cycle_length&&daysDiff>=st.cycle_length*7)return;
+      var _enhEnd=_cycleEndDateStr(st);
+      if(_enhEnd&&d>=parseLocalDate(_enhEnd))return;
+      if(!_enhEnd&&st.cycle_length&&daysDiff>=st.cycle_length*7)return;
     }
     (st.enhanced.compounds||[]).forEach(function(c){
       if(!_enhHitsDay(c,d,st.cycle_start?parseLocalDate(st.cycle_start):null))return;

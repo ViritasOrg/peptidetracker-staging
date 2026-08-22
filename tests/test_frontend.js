@@ -11989,6 +11989,55 @@ console.log('\n── injection deletes: scoped, and never a record ────
   }
 }
 
+
+// ── The card's end date must match the editor's ─────────────────────────────
+// Reported 2026-08-22 (prod v1.294): the Protocol 2 card read "18 May 2026 → 31 Aug 2026"
+// while the editor one tap away read "18 May 2026 → 26 Aug 2026 · 100 days · 15 weeks".
+//
+// Both were reading the same protocol. cycle_length is whole weeks ROUNDED UP — 100 days
+// rounds to 15 — so anything deriving the end from it overshoots by up to six days. The editor
+// used the stored end_date; the card multiplied cycle_length by seven. _cycleEndDateStr already
+// resolved this correctly and simply was not being called.
+console.log('\n── The card and the editor agree on the end date ──────────');
+{
+  const _st = {id:'p1', name:'Protocol 2', cycle_start:'2026-05-18', end_date:'2026-08-26',
+               cycle_length:15, peptides:[]};
+  check('_cycleEndDateStr returns the stored end date, not the rounded week count',
+    G._cycleEndDateStr(_st) === '2026-08-26', G._cycleEndDateStr(_st));
+  check('  …and 15 weeks from the start really would have overshot',
+    G.dateKey(new Date(G.parseLocalDate('2026-05-18').getTime() + 15*7*86400000)) === '2026-08-31');
+  check('  …by the six days that were on screen',
+    Math.round((G.parseLocalDate('2026-08-31') - G.parseLocalDate('2026-08-26'))/86400000) === 5);
+
+  check('with no end date it still derives one from the length',
+    G._cycleEndDateStr({cycle_start:'2026-05-18', cycle_length:15}) === '2026-08-31');
+  check('  …and reports nothing for an open-ended protocol',
+    G._cycleEndDateStr({cycle_start:'2026-05-18'}) === '');
+
+  const _src = require('fs').readFileSync(__dirname + '/../index.html', 'utf8');
+  const _cardIdx = _src.indexOf("' → ongoing<");
+  const _around = _src.slice(Math.max(0, _cardIdx - 1400), _cardIdx + 200);
+  check('the protocol card resolves its end through _cycleEndDateStr',
+    _around.indexOf('_cycleEndDateStr') >= 0);
+  check('  …and no longer multiplies cycle_length by seven itself',
+    _around.indexOf('cycle_length*7*86400000') < 0);
+
+  const _stack = require('fs').readFileSync(__dirname + '/../tab-stack.js', 'utf8');
+  check('the TRT day cutoff honours the end date', _stack.indexOf('_trtEnd') >= 0);
+  check('the Enhanced day cutoff honours it too', _stack.indexOf('_enhEnd') >= 0);
+  check('  …with the rounded-week path kept only as the no-end-date fallback',
+    /!_trtEnd&&st\.cycle_length/.test(_stack) && /!_enhEnd&&st\.cycle_length/.test(_stack));
+
+  const _gen = G._genInjBatches(
+    {id:'g1', cycle_start:'2026-05-18', end_date:'2026-08-26', cycle_length:15, peptides:[],
+     trt:{enabled:true, compounds:[{id:'nebido', name:'Nebido', dose:'100', unit:'mg',
+                                    freqVal:7, freqUnit:'days'}]}}, 'g1', null) || [];
+  const _dates = _gen.reduce((a,b) => a.concat(b.entries.map(e => e.date)), []).sort();
+  check('the generator stops on the end date, like everything else now',
+    _dates.length > 0 && _dates[_dates.length-1] <= '2026-08-26',
+    _dates[_dates.length-1]);
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
