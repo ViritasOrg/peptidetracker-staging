@@ -12038,6 +12038,57 @@ console.log('\n── The card and the editor agree on the end date ────
     _dates[_dates.length-1]);
 }
 
+
+// ── Activating a protocol refreshes the Levels curve ────────────────────────
+// Reported 2026-08-26: "T-calc curve isn't updated when I add a new protocol and set it to
+// active. I had to kill app and restart to get the plot done."
+//
+// A restart worked because it did three things the activation paths did not: it GENERATED the
+// new protocol's injections (loadStacks regenerates when the cache comes back empty), it
+// re-fetched _tcHistory from nothing, and it rebuilt the curve. Inside a running session the
+// session-cached _tcHistory meant even switching to the Levels tab could not pick the change
+// up — only a fresh process could.
+console.log('\n── Activating a protocol refreshes Levels ─────────────────');
+{
+  const _src = require('fs').readFileSync(__dirname + '/../index.html', 'utf8');
+  const _fn = (name) => {
+    const i = _src.indexOf('async function ' + name + '(');
+    if (i < 0) return '';
+    return _src.slice(i, i + 1600);
+  };
+
+  check('there is one shared helper for an active-protocol change',
+    typeof G._afterActiveStackChange === 'function');
+
+  const _h = String(G._afterActiveStackChange || '');
+  check('  …it forces a fresh history read rather than reusing the session cache',
+    /_tcFetchHistory\s*\(\s*true\s*\)/.test(_h),
+    'a plain call returns early when _tcHistory is already set');
+  check('  …it generates injections, so a brand-new protocol has something to plot',
+    _h.indexOf('generateInjectionsForActiveStacks') >= 0);
+  check('  …but only when something is being switched ON',
+    /generateOnActivate\s*&&/.test(_h));
+  check('  …it refreshes the injection cache', _h.indexOf('refreshInjectionsCache') >= 0);
+  check('  …and rebuilds the other four views', ['buildWeekStrip','buildToday','buildSchedule','buildStackStore']
+    .every(f => _h.indexOf(f) >= 0));
+  check('  …and it saves before any of that', _h.indexOf('saveStacksToBackend') >= 0);
+  check('  …with the curve rebuild guarded, so a save never dies on it',
+    /catch\s*\(e\)/.test(_h) && _h.indexOf('activateTCalc') >= 0);
+
+  // ALL THREE activation routes must use it — the conflict path was the worst of them,
+  // refreshing no injection cache at all.
+  ['toggleStack','useStack','_resolveConflict'].forEach(function(name){
+    check(name + ' routes through the shared helper',
+      _fn(name).indexOf('_afterActiveStackChange') >= 0);
+    check('  …and no longer hand-rolls its own refresh list',
+      _fn(name).indexOf('buildStackStore();\n}') < 0 || _fn(name).indexOf('_afterActiveStackChange') >= 0);
+  });
+
+  // Switching the active protocol OFF must not regenerate anything.
+  check('deactivating passes generateOnActivate = false',
+    /_afterActiveStackChange\(_activeStackIndices\.length>0\)/.test(_fn('toggleStack')));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
