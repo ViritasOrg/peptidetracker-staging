@@ -12089,6 +12089,55 @@ console.log('\n── Activating a protocol refreshes Levels ──────�
     /_afterActiveStackChange\(_activeStackIndices\.length>0\)/.test(_fn('toggleStack')));
 }
 
+
+// ── Ancillary groups render, and tier 2 can finally see them ────────────────
+// The backend gained AIs, SERMs, hCG, cabergoline and finasteride on 2026-08-26. Three
+// hardcoded group lists decide what the pickers iterate, so a compound whose group is
+// absent from one is in the catalogue and invisible in that view.
+//
+// The tier-2 lists are the sharper point: _TIER2_EXTRA_IDS and _TIER2_EXTRA_GROUPS were
+// written for compounds that did not exist. Every id (hcg, clomid, clomiphene, nolvadex,
+// tamoxifen) and every group (PCT, Recovery, Post-Cycle, HCG) matched nothing, so tier 2
+// was gated to see ancillaries and saw an empty set.
+console.log('\n── Ancillary groups and tier-2 access ─────────────────────');
+{
+  const _src = require('fs').readFileSync(__dirname + '/../tab-stack.js', 'utf8');
+  const _cyc = require('fs').readFileSync(__dirname + '/../tab-cycles.js', 'utf8');
+  ['Estrogen Control', 'PCT & Recovery', 'Side-Effect Support'].forEach(function(g){
+    check('_grps renders ' + g, new RegExp("var _grps=\\[[^\\]]*'" + g + "'").test(_src));
+    check('  …COMPOUND_GROUP_ORDER renders ' + g,
+          new RegExp("COMPOUND_GROUP_ORDER=\\[[^\\]]*'" + g + "'").test(_src));
+    check('  …_cgrps renders ' + g, new RegExp("var _cgrps=\\[[^\\]]*'" + g + "'").test(_cyc));
+  });
+
+  // Tier gating, driven for real rather than grepped.
+  const _sv = G._userTier;
+  G._userTier = 2;
+  const ai   = {id:'anastrozole', group:'Estrogen Control'};
+  const serm = {id:'tamoxifen',   group:'PCT & Recovery'};
+  const supp = {id:'finasteride', group:'Side-Effect Support'};
+  const tren = {id:'tren_e',      group:'19-Nor'};
+  check('tier 2 may use an aromatase inhibitor', G._compoundAllowedForTier(ai, 2) === true);
+  check('  …a PCT SERM', G._compoundAllowedForTier(serm, 2) === true);
+  check('  …and side-effect support', G._compoundAllowedForTier(supp, 2) === true);
+  check('  …but still not an anabolic', G._compoundAllowedForTier(tren, 2) === false);
+  check('tier 1 sees none of them as usable',
+    G._compoundAllowedForTier(ai, 1) === false && G._compoundAllowedForTier(serm, 1) === false);
+  check('tier 3 may use everything',
+    [ai, serm, supp, tren].every(c => G._compoundAllowedForTier(c, 3) === true));
+
+  // Matching by GROUP must work even for an id the list does not name — that is what
+  // makes the gating survive the next ancillary being added.
+  check('an unlisted id in an ancillary group is still allowed at tier 2',
+    G._compoundAllowedForTier({id:'some_new_ai', group:'Estrogen Control'}, 2) === true);
+  // The pre-existing spellings stay aliases so a stored protocol still resolves.
+  ['hcg','clomid','clomiphene','nolvadex','tamoxifen'].forEach(function(id){
+    check('  …legacy id ' + id + ' still resolves at tier 2',
+      G._compoundAllowedForTier({id:id, group:'whatever'}, 2) === true);
+  });
+  G._userTier = _sv;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after

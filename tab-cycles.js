@@ -342,7 +342,7 @@ function _cwizStep2(){
     h+='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:'+(ec||isCustom?'8':'0')+'px">';
     h+='<select onchange="_cwizSetCmpd('+i+',this.value)" style="'+_ss+'">';
     h+='<option value="">— Choose compound —</option>';
-    var _cgrps=['Base','DHT-Derived','19-Nor','GH Axis','Oral','Testosterone-Derived','Blends'];
+    var _cgrps=['Base','DHT-Derived','19-Nor','GH Axis','Oral','Testosterone-Derived','Blends','Estrogen Control','PCT & Recovery','Side-Effect Support'];
     _cgrps.forEach(function(g){var _ge=ENHANCEMENT_COMPOUNDS.filter(function(e){return e.group===g;});if(!_ge.length)return;h+='<optgroup label="'+g+'">'; _ge.forEach(function(e){h+='<option value="'+e.id+'"'+(ec&&ec.id===e.id?' selected':'')+'>'+e.name+'</option>';});h+='</optgroup>';});
     h+='<option value="__custom__"'+(isCustom?' selected':'')+'>Custom…</option>';
     h+='</select>';
