@@ -2006,7 +2006,7 @@ function stackAddAASCompound(){
   // Build grouped compound select from backend catalogue
   // Appended, not reordered — a compound whose group is absent from this list renders
   // nowhere at all, which is why the backend has a test pinning the two in step.
-  var _grps=['Base','DHT-Derived','19-Nor','GH Axis','Oral','Testosterone-Derived','Blends'];
+  var _grps=['Base','DHT-Derived','19-Nor','GH Axis','Oral','Testosterone-Derived','Blends','Estrogen Control','PCT & Recovery','Side-Effect Support'];
   var selHtml='<select id="aas-name" onchange="stackAASAutoFill(this.value)" style="'+ins+'"><option value="">— Choose compound —</option>';
   _grps.forEach(function(g){var ge=(ENHANCEMENT_COMPOUNDS||[]).filter(function(e){return e.group===g;});if(!ge.length)return;selHtml+='<optgroup label="'+g+'">';ge.forEach(function(e){selHtml+='<option value="'+e.id+'">'+e.name+'</option>';});selHtml+='</optgroup>';});
   selHtml+='</select>';
@@ -2541,9 +2541,18 @@ function _enhDormantNoteHtml(c,stackLike){
 // is itself already filtered to non-testosterone, so in practice everything it holds is
 // locked at tier 2 today — the allowance is written out in full anyway, because the
 // PCT and hCG entries are expected in this catalogue and must not arrive locked.
+// These lists were written for compounds that did not exist. Every id here — hcg,
+// clomid, clomiphene, nolvadex, tamoxifen — and every group — PCT, Recovery, Post-Cycle,
+// HCG — matched nothing in the catalogue, so tier 2 was gated to see ancillaries and saw
+// an empty set. The ancillaries landed on 2026-08-26; the names below are now the real
+// catalogue ids and groups, with the old spellings kept as aliases so a stored protocol
+// referring to one still resolves.
 var _TIER2_EXTRA_IDS = ['hcg','hmg','clomid','clomiphene','enclomiphene','nolvadex',
-                        'tamoxifen','raloxifene','toremifene'];
-var _TIER2_EXTRA_GROUPS = ['PCT','Recovery','Post-Cycle','HCG'];
+                        'tamoxifen','raloxifene','toremifene',
+                        'anastrozole','exemestane','cabergoline','finasteride',
+                        'dutasteride','minoxidil'];
+var _TIER2_EXTRA_GROUPS = ['PCT','Recovery','Post-Cycle','HCG',
+                           'Estrogen Control','PCT & Recovery','Side-Effect Support'];
 
 function _compoundAllowedForTier(c, tier){
   var t = tier || _userTier || 1;
@@ -2671,7 +2680,7 @@ function _renderEditEnhanced(enh,opts){
 // Every existing handler — editToggleTRTCompound, editSetEnhDose, the cadence editors —
 // keeps working untouched. A rewrite of both editors in the same change as the merge
 // would have made any regression impossible to attribute.
-var COMPOUND_GROUP_ORDER=['DHT-Derived','19-Nor','Oral','GH Axis','Testosterone-Derived','Blends'];
+var COMPOUND_GROUP_ORDER=['DHT-Derived','19-Nor','Oral','GH Axis','Testosterone-Derived','Blends','Estrogen Control','PCT & Recovery','Side-Effect Support'];
 
 function _renderEditCompounds(st){
   var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">One protocol, every compound. Testosterone first, then by class.</div>';
