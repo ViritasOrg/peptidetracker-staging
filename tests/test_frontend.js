@@ -4253,6 +4253,127 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       lDates[lDates.length-1] === '2026-09-22', lDates[lDates.length-1]);
   }
 
+
+  // ── Female protocol flow (doc 07 §9) ──────────────────────────────────────
+  // The failure this guards against is the male frame leaking across: an objective
+  // picker that drives nothing, a "best addition" over a risk-ordered list, or a male
+  // dose tier shown to a woman with no marker that it is a male number.
+  {
+    const FEM = {
+      sex:'female',
+      headline:'Female protocols are a different order of magnitude.',
+      compounds:[
+        {id:'topical',name:'Testosterone, transdermal',risk:'low',dose:'~300 mcg/day (patch/cream)',
+         evidence:'clinical',dose_anchor:'community',basis:'route is the evidenced part',
+         dose_note:'not stated in either source',cite:['testosterone-women-meta']},
+        {id:'anavar',name:'Anavar (Oxandrolone)',risk:'moderate',dose:'5–10 mg/day, 4–8 weeks',
+         evidence:'clinical',dose_anchor:'label',basis:'most studied oral in women',
+         dose_note:'inside the label range',cite:['label-oxandrolone']},
+        {id:'npp',name:'NPP (Nandrolone Phenylpropionate)',risk:'high',dose:'25–50 mg/week',
+         evidence:'community',dose_anchor:'trial',basis:'shorter ester clears faster',
+         dose_note:'below doses women received under supervision',cite:['label-nandrolone']},
+      ],
+      avoid_compounds:[{id:'tren_a',name:'Trenbolone Acetate',reason:'avoid outright',cite:['no-tren-human-trial']}],
+      hard_rules:[{rule:'STOP AT THE FIRST SIGN OF VOICE CHANGE.',why:'irreversible',cite:['voice-change-women-review']}],
+      bloodwork:['LH and FSH — HPG axis suppression'],
+      prompts:[{id:'pregnancy',question:'Have you confirmed you are not pregnant?',blocking:true,why:'teratogenic',cite:[]},
+               {id:'voice_baseline',question:'Baseline voice sample recorded?',blocking:false,why:'needs a baseline',cite:[]}],
+      warnings:['Irreversible voice change is a risk of any androgenic compound.'],
+      max_cycle_weeks:8, nudge_weeks:6,
+      evidence_note:'Every dose is labelled with what anchors it.',
+      notes:['no effect on body composition'],
+      base:null, best_addition:null, primary:[], consider:[], save_for_later:[], avoid:[],
+      on_cycle:[], guardrails:[],
+    };
+
+    check('_isFemaleAdvice recognises the female payload', G._isFemaleAdvice(FEM)===true);
+    check('  …and not a male one', G._isFemaleAdvice({sex:'male',primary:[]})===false);
+
+    // Lookup must reach the avoid list too — a ruled-out compound returning null would
+    // render as unremarkable, which is the one case that must never look ordinary.
+    check('_femaleRiskFor finds a listed compound', (G._femaleRiskFor(FEM,'anavar')||{}).risk==='moderate');
+    check('  …and reaches the avoid list', (G._femaleRiskFor(FEM,'tren_a')||{}).risk==='avoid');
+    check('  …and returns null for an unknown id', G._femaleRiskFor(FEM,'nope')===null);
+
+    // TIER PARITY: the TRT tier calls it 'enanthate', the backend calls it 'test_e'.
+    // Without the alias the guard renders on Enhanced and is silently absent on TRT —
+    // the tier a woman is most likely to be configuring testosterone in.
+    (G.TRT_CAT||[]).forEach(function(c){
+      check('  …TRT ester '+c.id+' maps onto a female entry', G._femaleTestoAlias(c.id)!==null);
+    });
+    check('  …and every mapped ester resolves through _femaleRiskFor', (function(){
+      const F=Object.assign({},FEM,{compounds:FEM.compounds.concat([
+        {id:'test_e',name:'Testosterone, injectable',risk:'high',dose:'5–25 mg/week',
+         evidence:'community',dose_anchor:'community',basis:'IM is the higher-vocal-risk route',
+         dose_note:'not anchored to the meta-analysis',cite:['voice-change-women-review']}])});
+      return (G.TRT_CAT||[]).every(function(c){
+        const hit=G._femaleRiskFor(F,c.id); return hit && hit.risk==='high';
+      });
+    })());
+    check('  …but a non-testosterone id is not aliased into one', G._femaleTestoAlias('anavar')===null);
+
+    // Dose-range parsing — the ceiling is what the guard compares against.
+    check('_femaleDoseRange parses a two-ended range', (function(){
+      const r=G._femaleDoseRange({dose:'5–10 mg/day, 4–8 weeks'});
+      return r && r.lo===5 && r.hi===10 && r.unit==='mg/day';
+    })());
+    check('  …a weekly range', (function(){
+      const r=G._femaleDoseRange({dose:'25–50 mg/week'}); return r && r.hi===50 && r.unit==='mg/week';
+    })());
+    check('  …and mcg without collapsing it into mg', (function(){
+      const r=G._femaleDoseRange({dose:'~300 mcg/day (patch/cream)'});
+      return r && r.hi===300 && r.unit==='mcg/day';
+    })());
+    check('  …returning null rather than guessing on an unparseable dose',
+      G._femaleDoseRange({dose:'as directed'})===null);
+
+    // A wrong ceiling is worse than none: it fires on correct doses and teaches the
+    // user to dismiss the warning that matters.
+    check('_femaleDoseCompare stays silent inside the range',
+      G._femaleDoseCompare(FEM.compounds[1],10,'mg/day')===null);
+    check('  …and fires above it', (function(){
+      const c=G._femaleDoseCompare(FEM.compounds[1],50,'mg/day');
+      return c && c.ceiling===10 && c.times===5;
+    })());
+    check('  …but never compares mg/week against a mg/day ceiling',
+      G._femaleDoseCompare(FEM.compounds[1],50,'mg/week')===null);
+
+    check('_femaleDoseWarning names the compound and the multiple', (function(){
+      const w=G._femaleDoseWarning(FEM,'anavar',50,'mg/day');
+      return w.includes('Anavar')&&w.includes('5×')&&w.toLowerCase().includes('voice');
+    })());
+    check('  …and reports an avoid compound as ruled out, not as a dose problem',
+      G._femaleDoseWarning(FEM,'tren_a',1,'mg/week').startsWith('Ruled out for women'));
+
+    // The blocking prompt.
+    G._wiz = G._wiz || {}; G._wiz.femaleAck = {};
+    check('_femBlockingUnanswered blocks on the pregnancy prompt',
+      G._femBlockingUnanswered(FEM).map(p=>p.id).join(',')==='pregnancy');
+    G._wiz.femaleAck = {pregnancy:true};
+    check('  …and clears once it is answered', G._femBlockingUnanswered(FEM).length===0);
+    G._wiz.femaleAck = {};
+
+    // The rendered step.
+    G._wiz.enhanced = {enabled:false,compounds:[]};
+    const html = G._wizAdviseFemaleHtml(FEM);
+    check('female step renders the risk ranking, not an objective ranking',
+      html.includes('Ranked by virilization risk')&&!html.includes('Best addition'));
+    check('  …with the voice warning present', html.toLowerCase().includes('voice change'));
+    check('  …the required pregnancy question', html.includes('REQUIRED')&&html.includes('not pregnant'));
+    check('  …every risk level labelled', html.includes('LOW VIRILIZATION RISK')&&html.includes('HIGH VIRILIZATION RISK'));
+    check('  …the evidence level shown per compound',
+      html.includes('Clinical evidence')&&html.includes('Community practice'));
+    check('  …what anchors each dose', html.includes('Label dose')&&html.includes('Trial dose')&&html.includes('Community practice'));
+    check('  …the avoid list', html.includes('Avoid outright')&&html.includes('Trenbolone Acetate'));
+    check('  …the non-negotiable rules with their reasons',
+      html.includes('Non-negotiable')&&html.includes('STOP AT THE FIRST SIGN'));
+    check('  …and the female bloodwork additions', html.includes('LH and FSH'));
+
+    // A female protocol is never pre-ticked: choosing one compound at a time IS the
+    // harm reduction, so handing the user a selection she did not make defeats it.
+    check('the female step pre-selects nothing', (G._wiz.enhanced.compounds||[]).length===0);
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -5265,7 +5386,7 @@ console.log('\n── dose dedup migration ────────────�
   check('_renderEnhancedGuide renders sides field',
     tabStackJs.includes('cat.sides'));
   check('stackAASAutoFill populates aas-info-block on compound select',
-    tabStackJs.includes('aas-info-block')&&tabStackJs.includes('_renderEnhancedGuide(cat)'));
+    tabStackJs.includes('aas-info-block')&&/infoEl\.innerHTML=_renderEnhancedGuide\(cat,/.test(tabStackJs));
   // E2 management: class-based detection
   check('E2 management uses cls field from ENHANCEMENT_COMPOUNDS catalogue',
     tabStackJs.includes('ec.cls'));
