@@ -2449,6 +2449,414 @@ function _tcFreeTSeries(sorted, hooks) {
            measuredFT: _mftNum, ghAnnot: _ghAnnot, betaAnnot: _betaAnnot, bfAnnot: _bfAnnot, tier: _tier, sorted: sorted };
 }
 
+// ── ESTER TRANSITION SOLVER ──────────────────────────────────────────────────
+// Given the tail of an outgoing ester and a target free-T level, work out the
+// cadence and the per-injection dose of the incoming ester — as a week-by-week
+// ramp — that holds free T at the target while the tail decays.
+//
+// ⚠️ THIS INVERTS THE MODEL, IT DOES NOT INVENT ONE. Every candidate schedule is
+// scored by _tcFreeTSeries — the same function that draws the curve, calibrated
+// from the user's own bloodwork. There is no separate pharmacology here and there
+// must never be: a solver that disagreed with the plotted curve would be telling
+// the user two different things about the same protocol.
+//
+// It solves for the SCHEDULE, never for the TARGET. The user chooses the level;
+// above the healthy-young-male ceiling the app says that is unmeasured territory
+// (FREE_T_REFERENCE.above_ceiling_note) and still computes what was asked.
+//
+// Doses are quantised to whole syringe steps (default 0.1 ml) because that is what
+// can actually be drawn. Quantising CHANGES the result, so every phase is re-scored
+// after snapping and the returned levels are the snapped ones — never the
+// continuous solution the bisection found.
+
+var _TC_SOLVE_STEP_ML   = 0.1;   // what a syringe can actually be drawn to
+var _TC_SOLVE_MAX_ITER  = 40;    // bisection depth; ~1e-6 mg on a 0–2000 bracket
+var _TC_SOLVE_HI_MG     = 2000;  // upper bracket per injection
+var _TC_SOLVE_DAMPING   = 0.5;   // see the note in the iteration loop  // upper bracket per injection
+
+// Candidate cadences, in the shape _genInjBatches actually schedules.
+// days[] for weekday-based dosing, freqVal/freqUnit for interval-based.
+var _TC_CADENCES = [
+  {key:'e2d',  label:'Every 2 days',            freqVal:2, freqUnit:'days', perWeek:3.5},
+  {key:'e3d',  label:'Every 3 days',            freqVal:3, freqUnit:'days', perWeek:7/3},
+  {key:'2xwk', label:'Twice weekly (Mon/Thu)',  days:[1,4],                 perWeek:2},
+  {key:'1xwk', label:'Once weekly (Mon)',       days:[1],                   perWeek:1}
+];
+
+function _tcSolveDayKey(d){
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+// Injection dates for one cadence over [start, start+weeks), as Date objects.
+function _tcSolveDates(cad, startDate, weeks){
+  var out=[], start=new Date(startDate+'T12:00:00');
+  var end=new Date(start.getTime()+weeks*7*86400000);
+  if(cad.days&&cad.days.length){
+    for(var d=new Date(start); d<end; d.setDate(d.getDate()+1))
+      if(cad.days.indexOf(d.getDay())>=0) out.push(new Date(d));
+  }else{
+    var step=cad.freqUnit==='weeks'?cad.freqVal*7:cad.freqVal;
+    for(var t=new Date(start); t<end; t.setDate(t.getDate()+step)) out.push(new Date(t));
+  }
+  return out;
+}
+// Free-T series (pmol/L per day) for a set of injection events.
+function _tcSolveSeries(events){
+  var sorted=events.slice().sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;});
+  if(!sorted.length) return null;
+  var r=_tcFreeTSeries(sorted,{});
+  if(!r) return null;
+  var out=new Float64Array(r.totalDays+1);
+  for(var t=0;t<=r.totalDays;t++) out[t]=r.total[t]*(r.calFT_arr?r.calFT_arr[t]:r.scale);
+  return {ft:out, firstMs:r.firstDate.getTime(), totalDays:r.totalDays, tier:r.tier};
+}
+function _tcSolveDayIndex(ser,dateMs){
+  return Math.max(0, Math.min(ser.totalDays, Math.round((dateMs-ser.firstMs)/86400000)));
+}
+// Mean / peak / trough of the free-T curve over a window.
+function _tcSolveWindowStats(ser,fromMs,toMs){
+  var a=_tcSolveDayIndex(ser,fromMs), b=_tcSolveDayIndex(ser,toMs);
+  if(b<=a)b=a+1;
+  var sum=0,n=0,pk=0,tr=Infinity;
+  for(var t=a;t<=b&&t<=ser.totalDays;t++){
+    var v=ser.ft[t]; sum+=v; n++;
+    if(v>pk)pk=v; if(v<tr)tr=v;
+  }
+  return {mean:n?sum/n:0, peak:pk, trough:isFinite(tr)?tr:0};
+}
+
+// Snap a dose to whole syringe steps — what can actually be drawn up.
+function _tcSolveSnap(mg, stepMg){
+  if(!(stepMg>0)) return Math.round(mg*10)/10;
+  return Math.round(mg/stepMg)*stepMg;
+}
+// ── HOW THE SOLVE WORKS, AND WHY IT IS NOT A BISECTION ─────────────────────
+// Bisecting each week against the model costs ~40 model rebuilds per week per
+// cadence — 2,500+ rebuilds at ~85 ms each, which is four minutes on a phone. It
+// also throws away the one thing that makes this tractable.
+//
+// total[] is EXACTLY linear in the candidate doses: each injection contributes
+// ke*PkConc(dose*bioav*frac, ...), proportional to dose. Free T is then a smooth
+// monotone function of total[]. So two probe runs give a per-week sensitivity
+// (pmol/L per mg per injection) that is accurate enough to drive a fixed-point
+// iteration, and 4-5 further rebuilds converge it. ~7 model calls per cadence
+// instead of 640, and every value still comes from _tcFreeTSeries — the same
+// function that draws the curve.
+//
+// ⚠️ THE CALIBRATION MUST BE PINNED BY HISTORY THAT PRE-DATES THE ANCHOR.
+// TT_base is solved as TT_at_draw * P / total[anchorDay]. If a candidate injection
+// lands on or before the anchor day it moves total[anchorDay], TT_base moves
+// inversely, and the two cancel — the curve comes back pinned to the measurement no
+// matter what dose was proposed, and the solver silently converges on nonsense.
+// Candidates must start strictly AFTER the anchor. _tcSolveAnchorGuard checks it.
+
+// ── WHY THE DOSE SEQUENCE IS CONSTRAINED, NOT JUST FITTED ───────────────────
+// Hitting the target in every week independently is an UNDERSPECIFIED objective. A
+// dose in week 0 is still largely on board in week 1, so "280 mg then 0 mg" hits the
+// target in both weeks and is a perfectly good solution to the arithmetic — and a
+// nonsensical instruction to give a person. The first working version produced
+// exactly that.
+//
+// The physics says more: the outgoing ester's tail rises to a peak and then decays
+// monotonically, so the top-up needed to hold a fixed level FALLS until that peak and
+// RISES from then on. Imposing that shape is not smoothing for looks — it is the
+// missing half of the problem statement.
+//
+// Pool-adjacent-violators gives the least-squares projection onto that shape, so the
+// constraint costs the smallest change to the fitted doses that makes them monotone.
+function _tcPava(v){
+  var val=[], wt=[];
+  for(var i=0;i<v.length;i++){
+    var cv=v[i], cw=1;
+    while(val.length&&val[val.length-1]>cv){
+      var pv=val.pop(), pw=wt.pop();
+      cv=(cv*cw+pv*pw)/(cw+pw); cw+=pw;
+    }
+    val.push(cv); wt.push(cw);
+  }
+  var out=[], k=0;
+  for(var j=0;j<val.length;j++) for(var m=0;m<wt[j];m++) out[k++]=val[j];
+  return out;
+}
+// Project onto "non-increasing up to the tail peak, non-decreasing after it".
+function _tcMonotoneShape(doses, peakWeek){
+  var W=doses.length;
+  var p=Math.max(0,Math.min(W-1,peakWeek|0));
+  var head=doses.slice(0,p+1).reverse();          // reversed => non-decreasing
+  head=_tcPava(head).reverse();
+  var tail=_tcPava(doses.slice(p));
+  var out=head.slice(0,p).concat(tail);
+  return out.map(function(d){return d>0?d:0;});
+}
+
+// Per-week mean free T for a candidate ramp. `doses[w]` is mg per injection in week w.
+function _tcSolveEvaluate(ctx, cad, dates, doses){
+  var startMs=new Date(ctx.startDate+'T12:00:00').getTime();
+  var evts=ctx.history.slice();
+  dates.forEach(function(d){
+    var w=Math.floor((d.getTime()-startMs)/(7*86400000));
+    var mg=doses[w]||0;
+    if(mg>0) evts.push({compId:ctx.incomingId, doseMg:String(mg), date:_tcSolveDayKey(d)});
+  });
+  var ser=_tcSolveSeries(evts);
+  if(!ser) return null;
+  var weekly=[];
+  for(var w2=0; w2<ctx.weeks; w2++){
+    var f=startMs+w2*7*86400000;
+    weekly.push(_tcSolveWindowStats(ser, f, f+7*86400000));
+  }
+  return {weekly:weekly, events:evts, series:ser};
+}
+
+// Solve a whole transition for ONE cadence.
+function _tcSolveForCadence(ctx, cad, opts){
+  opts=opts||{};
+  var stepMg=ctx.concMgPerMl*(ctx.stepMl||_TC_SOLVE_STEP_ML);
+  var dates=_tcSolveDates(cad, ctx.startDate, ctx.weeks);
+  if(!dates.length) return null;
+  var W=ctx.weeks;
+
+  // 1. The tail alone — no new ester at all.
+  var zero=new Array(W).fill(0);
+  var base=_tcSolveEvaluate(ctx, cad, dates, zero);
+  if(!base) return null;
+
+  // 2. One probe at a reference dose, to measure how much a mg is worth each week.
+  var probeMg=Math.max(stepMg, 100);
+  var probe=_tcSolveEvaluate(ctx, cad, dates, new Array(W).fill(probeMg));
+  if(!probe) return null;
+
+  var sens=[];
+  for(var w=0; w<W; w++){
+    var dz=(probe.weekly[w].mean-base.weekly[w].mean)/probeMg;
+    sens.push(dz>1e-9?dz:0);       // 0 = this week is unreachable by dosing
+  }
+  // A week before the first injection has no sensitivity of its own; borrow the first
+  // week that does, so the seed is a number rather than a divide-by-zero.
+  var firstSens=sens.find(function(v){return v>0;})||0;
+
+  // 3. Seed, then iterate. Diagonally dominant — this week's dose dominates this
+  //    week's level — so a handful of passes converges.
+  var doses=[];
+  for(var s0=0; s0<W; s0++){
+    var need=ctx.targetPmol-base.weekly[s0].mean;
+    var k=sens[s0]>0?sens[s0]:firstSens;
+    doses.push(k>0?Math.max(0,need/k):0);
+  }
+  // Where the outgoing ester's own contribution peaks — the pivot of the shape above.
+  var peakWeek=0, peakVal=-Infinity;
+  for(var pw=0; pw<W; pw++){ if(base.weekly[pw].mean>peakVal){peakVal=base.weekly[pw].mean; peakWeek=pw;} }
+  doses=_tcMonotoneShape(doses, peakWeek);
+
+  var evalRes=null;
+  for(var it=0; it<(opts.iters||6); it++){
+    evalRes=_tcSolveEvaluate(ctx, cad, dates, doses);
+    if(!evalRes) return null;
+    var moved=0;
+    for(var w2=0; w2<W; w2++){
+      var k2=sens[w2]>0?sens[w2]:firstSens;
+      if(!(k2>0)) continue;
+      // DAMPED. The per-week sensitivity treats each week as independent, but with a
+      // 4.5-day ester roughly a third of a dose is still on board the following week.
+      // Correcting each week by the full error therefore overshoots, the next pass
+      // overshoots back, and the ramp oscillates instead of converging — the first
+      // run of this produced 280 / 0 / 200 / 120 mg in consecutive weeks. Applying
+      // half the correction per pass converges smoothly on the same answer.
+      var delta=_TC_SOLVE_DAMPING*(ctx.targetPmol-evalRes.weekly[w2].mean)/k2;
+      var next=Math.max(0, doses[w2]+delta);
+      if(next>_TC_SOLVE_HI_MG) next=_TC_SOLVE_HI_MG;
+      moved=Math.max(moved, Math.abs(next-doses[w2]));
+      doses[w2]=next;
+    }
+    // Project back onto the physically admissible shape after every pass, so the
+    // iteration searches inside the constraint set instead of wandering out of it
+    // and being snapped back only at the end.
+    doses=_tcMonotoneShape(doses, peakWeek);
+    if(moved<stepMg*0.25) break;   // finer than a syringe step — stop
+  }
+
+  // 4. SNAP, then re-score. Quantising changes the answer, so the numbers reported
+  //    are the snapped schedule's, never the continuous solution's.
+  var snapped=doses.map(function(d){ return Math.max(0,_tcSolveSnap(d, stepMg)); });
+  // DE-CHATTER. Snapping to syringe steps makes the solution wobble by one step where
+  // the continuous answer sits near a boundary — 0.4 / 0.3 / 0.4 ml in consecutive
+  // weeks. That is quantisation noise, not a dose instruction, and asking someone to
+  // step a dose down and back up for no reason is how a plan stops being followed.
+  // A dip or spike of one step between two EQUAL neighbours is flattened; genuine
+  // shape (two consecutive different values) is left alone.
+  for(var pass=0; pass<2; pass++){
+    for(var ci=1; ci<snapped.length-1; ci++){
+      if(snapped[ci-1]===snapped[ci+1]&&snapped[ci]!==snapped[ci-1]) snapped[ci]=snapped[ci-1];
+    }
+  }
+  var fin=_tcSolveEvaluate(ctx, cad, dates, snapped);
+  if(!fin) return null;
+
+  // 5. Phases: only where the dose CHANGES. dose_phases is a step function, and
+  //    emitting an identical phase every week would bury the two or three real steps.
+  var phases=[], prev=null;
+  for(var p=0;p<W;p++){
+    if(prev===null||Math.abs(snapped[p]-prev)>=stepMg*0.5){
+      phases.push({w:p, mg:snapped[p], ml:Math.round((snapped[p]/ctx.concMgPerMl)*100)/100,
+                   overshoot:(snapped[p]===0&&base.weekly[p].mean>=ctx.targetPmol),
+                   unreachable:(sens[p]===0&&snapped[p]===0&&base.weekly[p].mean<ctx.targetPmol)});
+      prev=snapped[p];
+    }
+  }
+  var weekly=fin.weekly.map(function(s,i){return {week:i, mean:s.mean, peak:s.peak, trough:s.trough, mg:snapped[i]};});
+
+  // Score on the SETTLED tail — the ramp weeks are supposed to move, so scoring
+  // those would punish the ramp for doing its job.
+  var from=Math.max(0,W-4), rp=0,rn=0,err=0,en=0, wLo=Infinity, wHi=0;
+  for(var q=from;q<weekly.length;q++){
+    if(weekly[q].mean>0){ rp+=(weekly[q].peak-weekly[q].trough)/weekly[q].mean; rn++; }
+    err+=Math.abs(weekly[q].mean-ctx.targetPmol); en++;
+    if(weekly[q].mean<wLo) wLo=weekly[q].mean;
+    if(weekly[q].mean>wHi) wHi=weekly[q].mean;
+  }
+  // TWO DIFFERENT KINDS OF UNSTEADINESS, and only one is the cadence's fault.
+  //   ripple — peak-to-trough WITHIN a week. A property of the ester's half-life at
+  //            this interval; shorter intervals flatten it. This is what the user is
+  //            choosing between.
+  //   drift  — how far the weekly MEANS wander across the settled window. Mostly
+  //            quantisation: if one syringe step is a large fraction of the weekly
+  //            requirement, the dose can only overshoot and undershoot around it.
+  // Scoring ripple alone picked a cadence that was smooth inside each week while
+  // sawtoothing +/-15% from week to week, which is not a steady level by any reading.
+  var drift=(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity;
+  // What one syringe step is worth in pmol/L, at the settled end of the plan.
+  var sensTail=0, stn=0;
+  for(var sq=from; sq<W; sq++){ if(sens[sq]>0){ sensTail+=sens[sq]; stn++; } }
+  sensTail=stn?sensTail/stn:0;
+  return {cadence:cad, phases:phases, weekly:weekly, doses:snapped,
+          ripple:rn?rp/rn:Infinity, drift:drift, meanErr:en?err/en:Infinity,
+          stepPmol:sensTail*stepMg,
+          events:fin.events, stepMg:stepMg, baseWeekly:base.weekly};
+}
+
+// The candidate schedule must start after the calibration anchor, or the solve is
+// self-cancelling (see the note above). Returns a warning string, or ''.
+function _tcSolveAnchorGuard(ctx){
+  var hist=ctx.history||[];
+  if(!hist.length) return 'No injection history was supplied, so there is nothing to calibrate the curve against or to model the outgoing ester\'s tail from.';
+  var lastHist=hist.map(function(e){return e.date;}).sort().pop();
+  if(ctx.startDate<=lastHist)
+    return 'The new ester starts on or before the last logged injection ('+lastHist+'). '
+      +'The curve is calibrated at your most recent measurement, and doses at or before that '
+      +'point move the calibration instead of the curve — start the new ester after it.';
+  return '';
+}
+
+// The entry point. Tries every cadence and returns the best, with the rest kept so
+// the user can see WHY it won rather than being handed a number to trust.
+//
+// opts = {history:[{compId,doseMg,date}], incomingId, startDate:'YYYY-MM-DD',
+//         targetPmol, concMgPerMl, stepMl, weeks, cadenceKey?}
+function tcSolveTransition(opts){
+  opts=opts||{};
+  var ctx={
+    history:     (opts.history||[]).slice(),
+    incomingId:  opts.incomingId,
+    startDate:   opts.startDate,
+    targetPmol:  parseDec(opts.targetPmol)||0,
+    concMgPerMl: parseDec(opts.concMgPerMl)||250,
+    stepMl:      parseDec(opts.stepMl)||_TC_SOLVE_STEP_ML,
+    weeks:       parseInt(opts.weeks,10)||12
+  };
+  if(!ctx.incomingId||!ctx.startDate||!(ctx.targetPmol>0)) return null;
+
+  var cands=_TC_CADENCES.filter(function(c){ return !opts.cadenceKey||c.key===opts.cadenceKey; });
+  // Two passes: a cheap one to rank the cadences, then a proper solve for the winner
+  // only. Refining all four to convergence costs four times as long for three answers
+  // that get thrown away.
+  var results=[];
+  cands.forEach(function(c){
+    try{ var r=_tcSolveForCadence(ctx,c,{iters:4}); if(r) results.push(r); }
+    catch(e){ if(typeof _logErr==='function')_logErr('tcSolveTransition',e); }
+  });
+  if(!results.length) return null;
+
+  // RANK ON RIPPLE, NOT ON RESIDUAL ERROR.
+  // Peak-to-trough variation at a given interval is a property of the ESTER and the
+  // cadence — it is the thing the user is choosing between, and it is what "steady
+  // state" actually means. Residual error is mostly a solver artifact: every cadence
+  // can be driven to the target mean, and the cheap ranking pass gives each one only
+  // two iterations, so a slower-converging cadence would be punished for the solver's
+  // budget rather than for anything the user would feel.
+  //
+  // Quantisation is the one way a cadence genuinely cannot hit the target — a weekly
+  // dose needing 12 mg when the syringe step is 25 mg — so the refined residual is
+  // still checked below, and the next-smoothest cadence is tried if it is too far off.
+  results.sort(function(a,b){ return (a.ripple+a.drift)-(b.ripple+b.drift); });
+  var tol=ctx.targetPmol*0.10;
+  var best=null, fallback=null;
+  for(var ri=0; ri<results.length; ri++){
+    var refined;
+    try{ refined=_tcSolveForCadence(ctx,results[ri].cadence,{iters:12}); }
+    catch(e){ if(typeof _logErr==='function')_logErr('tcSolveRefine',e); continue; }
+    if(!refined) continue;
+    results[ri]=refined;
+    if(!fallback||refined.meanErr<fallback.meanErr) fallback=refined;
+    if(refined.meanErr<=tol){ best=refined; break; }
+  }
+  if(!best) best=fallback||results[0];
+  // Report the others as they were ranked, with the winner removed.
+  results=results.filter(function(r){ return r!==best; });
+
+  var notes=[];
+  var guard=_tcSolveAnchorGuard(ctx);
+  if(guard) notes.push(guard);
+  if(best.phases.some(function(p){return p.overshoot;})){
+    notes.push('The outgoing ester alone already puts you at or above '+Math.round(ctx.targetPmol)
+      +' pmol/L in the early weeks, so the ramp starts at zero — no dose of the new ester can '
+      +'bring a level DOWN. Those weeks are the old ester clearing, not a gap in the plan.');
+  }
+  if(best.phases.some(function(p){return p.unreachable;})){
+    notes.push('Some weeks could not reach the target even at the maximum the solver will '
+      +'consider ('+_TC_SOLVE_HI_MG+' mg per injection). Check the concentration and the target.');
+  }
+  // The app's own ceiling copy, not a new opinion. Above the healthy young-male range is
+  // UNMEASURED — not proven harmful, not endorsed — and the solver still computes it.
+  var ceil=(typeof _FT_REF!=='undefined')?_FT_REF:null;
+  if(ceil&&ceil.ceiling_pmol_l&&ctx.targetPmol>ceil.ceiling_pmol_l){
+    notes.push('Target '+Math.round(ctx.targetPmol)+' pmol/L is above the top of the healthy '
+      +'young-male range ('+Math.round(ceil.ceiling_pmol_l)+' pmol/L). '
+      +(ceil.above_ceiling_note||''));
+  }
+  notes.push('Doses are snapped to '+ctx.stepMl+' ml at '+ctx.concMgPerMl
+    +' mg/ml, so each step is '+Math.round(best.stepMg*10)/10+' mg. The levels shown are the '
+    +'SNAPPED schedule, not the exact solution.');
+  // THE CONCENTRATION CAN BE THE LIMITING FACTOR, and it is invisible unless said.
+  // One 0.1 ml step at 250 mg/ml is 25 mg — at every-2-days that is 87 mg/week of
+  // granularity, so the dose can only land above or below the requirement and the
+  // weekly level sawtooths. A thinner vial is a finer dial.
+  if(best.stepPmol>ctx.targetPmol*0.08){
+    var msg='One '+ctx.stepMl+' ml step moves your level by about '
+      +Math.round(best.stepPmol)+' pmol/L ('+Math.round(100*best.stepPmol/ctx.targetPmol)
+      +'% of target), so the dose cannot be set finely enough to hold '+Math.round(ctx.targetPmol)
+      +' steadily — that is the vial, not the schedule.';
+    var alt=null;
+    try{
+      var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(c){return c.id===ctx.incomingId;}):null;
+      (cat&&cat.conc||[]).forEach(function(cc){
+        if(cc<ctx.concMgPerMl&&(alt===null||cc<alt)) alt=cc;
+      });
+    }catch(e){}
+    if(alt) msg+=' A '+alt+' mg/ml vial gives '+Math.round(alt*ctx.stepMl*10)/10
+      +' mg per step instead of '+Math.round(best.stepMg*10)/10+' mg.';
+    notes.push(msg);
+  }
+
+  return {
+    best: best, alternatives: results.slice(1), target: ctx.targetPmol,
+    concMgPerMl: ctx.concMgPerMl, stepMl: ctx.stepMl, weeks: ctx.weeks,
+    incomingId: ctx.incomingId, startDate: ctx.startDate, notes: notes,
+    // dose_phases, in the shape the generator and the ramp editor already consume.
+    dose_phases: best.phases.map(function(p){
+      return {w:p.w, d:String(Math.round(p.mg*10)/10), u:'mg'};
+    })
+  };
+}
+
 // ── Free-T history: the single, explicit writer ──────────────────────────────
 // Persists /plasma-history EXACTLY as the plasma curve is currently displayed
 // (from _tcDrawnFT). This is the ONLY thing in the app that writes free-T history,

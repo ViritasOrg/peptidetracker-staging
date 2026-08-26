@@ -702,19 +702,6 @@ function editToggleTRTCompound(id){
 // The list therefore covers the rate units too, and any unit actually stored is appended
 // if it is still not in the list. A wrong unit the user can SEE is a wrong unit the user
 // can fix; a wrong unit the UI hides is a dose error.
-// ── ESTER TRANSITIONS: per-compound window + dose ramp ──────────────────────
-// Switching esters (Nebido → Test E) means running both for a while: the outgoing
-// ester's tail is still decaying when the incoming one starts, so the incoming dose
-// has to start low and step up as the tail clears. Two esters were already
-// selectable here (the cap is 2), and _genInjBatches already honoured per-compound
-// start_date/end_date — but nothing wrote them, and ramps did not apply to TRT.
-//
-// NO CROSSOVER IS COMPUTED. There is no published undecanoate→enanthate transition
-// protocol to anchor one to, so the app does not propose a date or a taper: it lets
-// the user express one and shows the summed curve. T-Calc already sums mixed esters
-// with each one's own half-life, tmax and testosterone fraction (undecanoate 0.6315
-// vs enanthate 0.7199), so the combined free-T line is the real answer to "does this
-// hold steady" — and it is the user's judgement, on a model they can see.
 // SCOPE, because the wizard and the editor render TRT compounds through two parallel
 // code paths (_wiz.trt vs _editBuf.trt, wizSetTRT* vs the inline editor handlers).
 // Duplicating the transition panel into both is how they drift apart; one renderer that
@@ -782,6 +769,134 @@ function editAddTRTPhase(id){trtAddPhase('edit',id);}
 function editRemoveTRTPhase(id,phi){trtRemovePhase('edit',id,phi);}
 function editSetTRTPhase(id,phi,field,val){trtSetPhase('edit',id,phi,field,val);}
 
+// ── AUTO ON-RAMP ────────────────────────────────────────────────────────────
+// "Both cadence and dose (in 0.1 ml steps) needs to be created by the app" — doing
+// this by hand means inverting a calibrated PK model against a decaying tail, week
+// by week, then rounding to what a syringe can actually draw. That is not a manual
+// task.
+//
+// The solve lives in tab-tcalc.js because T-Calc owns the model (doc 13, SETTLED).
+// This is only the form and the result table: it collects the target and the vial,
+// hands them to tcSolveTransition, and writes the answer into the same dose_phases /
+// days / freqVal fields the generator already reads. Nothing here knows any
+// pharmacology and it must stay that way — a second model would be free to disagree
+// with the curve on screen.
+var _trtSolveState={};
+function _trtSolveSt(id){
+  if(!_trtSolveState[id])_trtSolveState[id]={target:'',conc:'',weeks:16,running:false,result:null,error:''};
+  return _trtSolveState[id];
+}
+function trtSolveSet(scope,id,field,val){
+  var st=_trtSolveSt(id); st[field]=val; st.result=null; st.error='';
+  _trtRerender(scope);
+}
+function _trtDefaultConc(id){
+  var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(c){return c.id===id;}):null;
+  return (cat&&cat.conc&&cat.conc.length)?cat.conc[0]:250;
+}
+async function trtSolveRun(scope,id){
+  var st=_trtSolveSt(id);
+  var comp=_trtComp(scope,id);
+  if(!comp){st.error='Compound not found.';_trtRerender(scope);return;}
+  st.running=true; st.error=''; st.result=null; _trtRerender(scope);
+  try{
+    // The tail must come from LOGGED injections, not from the plan. The question is
+    // where the outgoing ester actually leaves you, and a plan is not a record.
+    if(typeof _tcFetchHistory==='function'&&(typeof _tcHistory==='undefined'||!_tcHistory))
+      await _tcFetchHistory(true);
+    var hist=(typeof _tcHistory!=='undefined'&&_tcHistory)?_tcHistory.slice():[];
+    // YIELD BEFORE THE SOLVE. tcSolveTransition is synchronous and runs the PK model
+    // ~40 times — seconds on a phone, with the main thread blocked throughout. When the
+    // history is already cached there is no await above this point, so the 'Solving…'
+    // state never gets a frame to paint in and the button just appears dead. One turn
+    // of the event loop is enough for the render to land first.
+    await new Promise(function(r){setTimeout(r,0);});
+    var start=comp.start_date||(typeof dateKey==='function'?dateKey(new Date(NOW.getTime()+86400000)):'');
+    var res=(typeof tcSolveTransition==='function')?tcSolveTransition({
+      history:hist, incomingId:(typeof _canonCompoundId==='function'?_canonCompoundId(id):id),
+      startDate:start, targetPmol:st.target,
+      concMgPerMl:parseDec(st.conc)||_trtDefaultConc(id),
+      stepMl:0.1, weeks:parseInt(st.weeks,10)||16
+    }):null;
+    if(!res)st.error='Could not solve — check the target, the start date, and that you have logged injections to model the tail from.';
+    st.result=res;
+  }catch(e){
+    st.error='Solve failed: '+String(e&&e.message||e);
+    if(typeof _logErr==='function')_logErr('trtSolveRun',e);
+  }
+  st.running=false; _trtRerender(scope);
+}
+// Write the solved answer in. CADENCE AND DOSE TOGETHER — a ramp without its cadence
+// is half an instruction, because the same mg on a different interval is a different
+// curve.
+function trtSolveApply(scope,id){
+  var st=_trtSolveSt(id), comp=_trtComp(scope,id);
+  if(!st.result||!comp)return;
+  var cad=st.result.best.cadence;
+  if(cad.days){ comp.days=cad.days.slice(); delete comp.freqVal; delete comp.freqUnit; }
+  else { comp.freqVal=cad.freqVal; comp.freqUnit=cad.freqUnit; comp.days=undefined; }
+  comp.dose_phases=st.result.dose_phases.map(function(p){return {w:p.w,d:p.d,u:p.u};});
+  comp.unit='mg';
+  // Keep the flat dose in step with the maintenance dose, so turning the ramp OFF
+  // later lands on the held dose rather than whatever was in the box beforehand.
+  var lastPh=st.result.dose_phases[st.result.dose_phases.length-1];
+  if(lastPh)comp.dose=String(lastPh.d);
+  st.result=null;
+  _trtRerender(scope);
+}
+function _renderTRTSolve(c,selData,scope){
+  var id=c.id, st=_trtSolveSt(id);
+  var conc=st.conc||String(_trtDefaultConc(id));
+  var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(x){return x.id===id;}):null;
+  var concs=(cat&&cat.conc&&cat.conc.length)?cat.conc:[250,100];
+  var q=function(fn,extra){return fn+"('"+scope+"','"+id+"'"+(extra||'')+")";};
+  var h='<div class="cfg-row" style="display:block;border-top:1px solid var(--border);padding-top:10px;margin-top:4px">'
+    +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--accent);text-transform:uppercase;margin-bottom:6px">Auto on-ramp</div>'
+    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px">Give a target free-T level and the app works out the cadence and the per-injection dose — in 0.1 ml steps — that holds it while the outgoing ester clears. The tail comes from your LOGGED injections.</div>'
+    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
+      +'<span style="font-size:11px;color:var(--muted2);min-width:56px">Target</span>'
+      +'<input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(st.target||''))+'" placeholder="pmol/L" oninput="'+q('trtSolveSet',",'target',this.value")+'" style="width:80px">'
+      +'<span style="font-size:11px;color:var(--muted2)">pmol/L</span></div>'
+    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
+      +'<span style="font-size:11px;color:var(--muted2);min-width:56px">Vial</span>'
+      +'<select class="unit-sel" onchange="'+q('trtSolveSet',",'conc',this.value")+'">'
+      +concs.map(function(cc){return '<option value="'+cc+'"'+(String(cc)===String(conc)?' selected':'')+'>'+cc+' mg/ml</option>';}).join('')
+      +'</select>'
+      +'<span style="font-size:11px;color:var(--muted2);margin-left:6px">Weeks</span>'
+      +'<input class="dose-in" type="number" inputmode="numeric" min="4" max="52" value="'+String(st.weeks||16)+'" oninput="'+q('trtSolveSet',",'weeks',this.value")+'" style="width:52px;text-align:center"></div>'
+    +'<button onclick="'+q('trtSolveRun')+'"'+(st.running?' disabled':'')
+      +' style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.5px;'+(st.running?'opacity:0.6;':'')+'">'
+      +(st.running?'Solving…':'Generate on-ramp')+'</button>';
+  if(st.error)h+='<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:8px 10px;margin-top:8px;font-size:11px;color:#f59e0b;line-height:1.5">'+_esc(st.error)+'</div>';
+  if(st.result&&st.result.best){
+    var r=st.result, b=r.best;
+    h+='<div style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent);border-radius:8px;padding:10px 12px">'
+      +'<div style="font-size:12px;font-weight:700;color:var(--accent);margin-bottom:2px">'+_esc(b.cadence.label)+'</div>'
+      +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px">Within-week swing '
+        +Math.round(b.ripple*100)+'% · week-to-week '+Math.round(b.drift*100)+'%</div>'
+      +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">Ramp</div>'
+      +b.phases.map(function(ph){
+        return '<div style="display:flex;gap:8px;font-size:11px;color:var(--text);line-height:1.7">'
+          +'<span style="color:var(--muted2);min-width:44px">Wk '+ph.w+'</span>'
+          +'<span style="font-weight:700;color:var(--accent);min-width:60px">'+(Math.round(ph.mg*10)/10)+' mg</span>'
+          +'<span style="color:var(--muted2)">'+ph.ml.toFixed(1)+' ml</span></div>';
+      }).join('')
+      +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:8px 0 4px">Predicted free T</div>'
+      +'<div style="display:flex;flex-wrap:wrap;gap:3px">'
+      +b.weekly.map(function(w){
+        var off=r.target>0?Math.abs(w.mean-r.target)/r.target:0;
+        var col=off<0.08?'#4ade80':(off<0.18?'#f59e0b':'#ef4444');
+        return '<div style="font-size:9px;color:'+col+';border:1px solid '+col+';border-radius:4px;padding:1px 4px">w'+w.week+' '+Math.round(w.mean)+'</div>';
+      }).join('')+'</div>'
+      +(r.notes||[]).map(function(n){
+        return '<div style="font-size:10px;color:var(--muted2);line-height:1.5;margin-top:6px">ℹ '+_esc(n)+'</div>';
+      }).join('')
+      +'<button onclick="'+q('trtSolveApply')+'" style="width:100%;margin-top:10px;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">Apply cadence + ramp</button>'
+      +'</div>';
+  }
+  h+='</div>';
+  return h;
+}
 // ── ESTER TRANSITIONS: per-compound window + dose ramp ──────────────────────
 // Switching esters (Nebido → Test E) means running both for a while: the outgoing
 // ester's tail is still decaying when the incoming one starts, so the incoming dose
@@ -841,6 +956,7 @@ function _renderTRTTransition(c,selData,scope){
     }).join('');
     h+='<button onclick="'+q('trtAddPhase')+'" style="font-size:11px;color:var(--accent);background:none;border:1px solid var(--accent);border-radius:6px;padding:3px 10px;cursor:pointer;font-family:inherit;margin-top:2px">+ Add phase</button>';
   }
+  h+=_renderTRTSolve(c,selData,scope);
   h+='</div>';
   return h;
 }
