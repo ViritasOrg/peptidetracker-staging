@@ -2706,29 +2706,49 @@ function _tcSolveForCadence(ctx, cad, opts){
 
   // Score on the SETTLED tail — the ramp weeks are supposed to move, so scoring
   // those would punish the ramp for doing its job.
-  var from=Math.max(0,W-4), rp=0,rn=0,err=0,en=0, wLo=Infinity, wHi=0;
+  // ── SCORE THE WHOLE PLAN, NOT JUST ITS TAIL ────────────────────────────────
+  // This scored only the last four weeks, on the reasoning that "the ramp weeks are
+  // supposed to move, so scoring those would punish the ramp for doing its job".
+  // That reasoning was wrong, and it hid a real defect: it is the DOSE that moves
+  // during a ramp. The LEVEL is the thing being held, and it is supposed to sit on
+  // target throughout. Scoring only the tail meant a plan that sagged 16% below
+  // target in the middle scored identically to one that never moved — the ranking
+  // could not see it, and the headline the user reads reported the tail's 5% while
+  // the plan actually spanned 26% of target.
+  //
+  // Week 0 is excluded: with the first injection on day 0 the incoming ester has not
+  // accumulated yet, so a dip there is physics rather than a bad schedule, and no
+  // dose the solver can pick removes it.
+  var from=(W>1)?1:0, rp=0,rn=0,err=0,en=0, wLo=Infinity, wHi=0;
   for(var q=from;q<weekly.length;q++){
     if(weekly[q].mean>0){ rp+=(weekly[q].peak-weekly[q].trough)/weekly[q].mean; rn++; }
     err+=Math.abs(weekly[q].mean-ctx.targetPmol); en++;
     if(weekly[q].mean<wLo) wLo=weekly[q].mean;
     if(weekly[q].mean>wHi) wHi=weekly[q].mean;
   }
-  // TWO DIFFERENT KINDS OF UNSTEADINESS, and only one is the cadence's fault.
   //   ripple — peak-to-trough WITHIN a week. A property of the ester's half-life at
-  //            this interval; shorter intervals flatten it. This is what the user is
-  //            choosing between.
-  //   drift  — how far the weekly MEANS wander across the settled window. Mostly
-  //            quantisation: if one syringe step is a large fraction of the weekly
-  //            requirement, the dose can only overshoot and undershoot around it.
-  // Scoring ripple alone picked a cadence that was smooth inside each week while
-  // sawtoothing +/-15% from week to week, which is not a steady level by any reading.
+  //            this interval; shorter intervals flatten it.
+  //   drift  — how far the weekly MEANS wander across the plan. Mostly quantisation:
+  //            when one syringe step is a large fraction of the weekly requirement,
+  //            the dose can only straddle the target and the level sags and overshoots.
   var drift=(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity;
+  // Reported separately so the settled figure is still available, but never as the
+  // headline on its own.
+  var sFrom=Math.max(from,W-4), sLo=Infinity, sHi=0, sErr=0, sN=0;
+  for(var sq2=sFrom;sq2<weekly.length;sq2++){
+    if(weekly[sq2].mean<sLo)sLo=weekly[sq2].mean;
+    if(weekly[sq2].mean>sHi)sHi=weekly[sq2].mean;
+    sErr+=Math.abs(weekly[sq2].mean-ctx.targetPmol); sN++;
+  }
   // What one syringe step is worth in pmol/L, at the settled end of the plan.
   var sensTail=0, stn=0;
-  for(var sq=from; sq<W; sq++){ if(sens[sq]>0){ sensTail+=sens[sq]; stn++; } }
+  for(var sq=Math.max(0,W-4); sq<W; sq++){ if(sens[sq]>0){ sensTail+=sens[sq]; stn++; } }
   sensTail=stn?sensTail/stn:0;
   return {cadence:cad, phases:phases, weekly:weekly, doses:snapped,
           ripple:rn?rp/rn:Infinity, drift:drift, meanErr:en?err/en:Infinity,
+          settledDrift:(isFinite(sLo)&&ctx.targetPmol>0)?((sHi-sLo)/ctx.targetPmol):Infinity,
+          settledErr:sN?sErr/sN:Infinity,
+          lowPmol:isFinite(wLo)?wLo:0, highPmol:wHi,
           stepPmol:sensTail*stepMg,
           events:fin.events, stepMg:stepMg, baseWeekly:base.weekly};
 }

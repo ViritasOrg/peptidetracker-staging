@@ -945,8 +945,19 @@ function _renderTRTSolve(c,selData,scope){
     var r=st.result, b=r.best;
     h+='<div style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent);border-radius:8px;padding:10px 12px">'
       +'<div style="font-size:12px;font-weight:700;color:var(--accent);margin-bottom:2px">'+_esc(b.cadence.label)+'</div>'
-      +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px">Within-week swing '
-        +Math.round(b.ripple*100)+'% · week-to-week '+Math.round(b.drift*100)+'%</div>'
+      +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px">'
+        +'Holds '+Math.round(b.lowPmol)+'–'+Math.round(b.highPmol)+' pmol/L across the plan'
+        +' · within-week swing '+Math.round(b.ripple*100)+'%</div>'
+      // A schedule that cannot hold the target is said so up front, not left for the
+      // reader to work out from a table of week numbers. The previous headline quoted
+      // the settled tail only, which read as 5% while the plan actually spanned 26%.
+      +((b.drift>0.12||b.meanErr>r.target*0.08)
+        ? ('<div style="font-size:11px;color:#f59e0b;line-height:1.5;margin-bottom:8px;font-weight:600">'
+           +'⚠ This does not hold '+Math.round(r.target)+' steadily — the level moves about '
+           +Math.round(b.drift*100)+'% of target across the plan'
+           +(b.stepPmol>r.target*0.08?', because one syringe step is bigger than the correction needed. See the vial note below.':'.')
+           +'</div>')
+        : '')
       +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">Ramp</div>'
       +b.phases.map(function(ph){
         return '<div style="display:flex;gap:8px;font-size:11px;color:var(--text);line-height:1.7">'
@@ -1237,7 +1248,9 @@ function wizStep4(body,footer){
   if(_wiz.peptides.length){
     _wiz.peptides.forEach(function(p){
       var dose=_slotDoseSummary(p,'/',false)||'?';
-      var days=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?p.days.length+'× / week':'?';
+      // Was: days[] first, ignoring p.cadence — which mislabels every interval-mode
+      // compound, because switching mode keeps the weekday list on purpose.
+      var days=_cadenceLabel(p,'days')||'?';
       html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+p.name+'</div><div style="font-size:12px;color:var(--muted2)">'+dose+' · '+days+'</div></div>';
     });
   } else {
@@ -4039,8 +4052,10 @@ function _wizTrtSummaryRows(){
   (typeof _trtCompounds==='function'?_trtCompounds(_wiz&&_wiz.trt):[]).forEach(function(c){
     if(c.id&&seen[c.id])return;
     if(c.id)seen[c.id]=true;
-    var days=c.days&&c.days.length===7?'Every day':c.days&&c.days.length?c.days.length+'x/week'
-            :(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'TRT');
+    // TRT's own resolver, so the label matches what _genInjBatches actually schedules.
+    // This read days[] first and ignored c.cadence, so a solved every-3-days plan
+    // rendered as "1x/week" — the summary contradicting the schedule underneath it.
+    var days=c.id||c.cadence||c.days||c.freqVal?_trtCadenceLabel(c):'TRT';
     rows.push({id:c.id||'',name:c.name||nameOf(c.id),dot:c.dot||'var(--accent4)',
                dose:c.dose?c.dose+(c.unit||'mg'):'',cadence:days});
   });
@@ -4105,7 +4120,7 @@ function wizStepReview(body,footer){
   var html='<div class="wiz-section">Protocol Name</div><input class="trt-in" type="text" value="'+_esc(String(_wiz.stackName||''))+'" oninput="wizSetStackName(this.value)" placeholder="e.g. Cutting, Bulk 1, TRT base…">';
   html+='<div class="wiz-section" style="margin-top:16px">Summary</div>';
   var _reviewFlow=_wizFlow();
-  if(_wiz.peptides.length){_wiz.peptides.forEach(function(p){var dose=_slotDoseSummary(p,'/',false)||'?';var days=p.days&&p.days.length===7?'Every day':p.days&&p.days.length?p.days.length+'x/week':'?';html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(p.name)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc(dose+' · '+days)+'</div></div>';});}
+  if(_wiz.peptides.length){_wiz.peptides.forEach(function(p){var dose=_slotDoseSummary(p,'/',false)||'?';var days=_cadenceLabel(p,'days')||'?';html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(p.name)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc(dose+' · '+days)+'</div></div>';});}
   else if(_reviewFlow.includes('peptides')){html+='<div style="color:var(--muted2);font-size:13px;">No peptides selected.</div>';}
   _wizTrtSummaryRows().forEach(function(r){html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+r.dot+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(r.name)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc((r.dose?r.dose+' · ':'')+r.cadence)+'</div></div>';});
   if((_wiz.goals||[]).includes('enhanced')){
@@ -4113,7 +4128,15 @@ function wizStepReview(body,footer){
     if(_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length){
       _wiz.enhanced.compounds.forEach(function(c){
         var days=_enhCadenceLabel(c)||'';
-        var doseLabel=(c.dose?c.dose+(c.unit||'mg'):'')+(days?' · '+days:'');
+        // A SPLIT COMPOUND DOES NOT KEEP ITS DOSE IN c.dose. HGH configured as 3 IU AM
+        // + 3 IU PM stores those in dose_am/dose_pm and leaves c.dose at whatever the
+        // catalogue seeded — which is what reported "2IU/day" for a 6 IU/day protocol.
+        // Same helper the dose guide and the generator already use.
+        var _amPm=c.amPm||((typeof ENHANCEMENT_COMPOUNDS!=='undefined'&&ENHANCEMENT_COMPOUNDS||[])
+                    .find(function(x){return x.id===c.id;})||{}).amPm;
+        var _tot=_amPm?_enhSplitTotal(c):parseDec(c.dose||0);
+        var _unit=(c.unit||'mg').split('/')[0];
+        var doseLabel=(_tot>0?(_tot+_unit+(_amPm?'/day':'')):'')+(days?' · '+days:'');
         html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(c.dot||'var(--accent2)')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+_esc(c.name||c.id)+'</div><div style="font-size:12px;color:var(--muted2)">'+_esc(doseLabel)+'</div></div>';
       });
     }else{html+='<div style="color:var(--muted2);font-size:13px;">No enhancement compounds selected.</div>';}

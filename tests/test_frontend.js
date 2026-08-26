@@ -4592,12 +4592,18 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     })(), sol.best.doses.join(','));
 
     // The vial can be the limiting factor, and it is invisible unless stated.
+    // Re-pin the calibration: this assertion depends on how many pmol/L one syringe
+    // step is worth, and an earlier test mutating _tcp shifts that. It first went in
+    // at 250 mg/ml, where the value landed at 99 against a 104 threshold — passing on
+    // a 5% margin, which is not a test. 400 mg/ml puts it clearly on one side.
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
     const coarse = G.tcSolveTransition({
       history:hist, incomingId:'enanthate', startDate:'2026-08-27',
-      targetPmol:1300, concMgPerMl:250, stepMl:0.1, weeks:12
+      targetPmol:1300, concMgPerMl:400, stepMl:0.1, weeks:12
     });
     check('a coarse vial is reported as the limit, not hidden',
-      (coarse.notes||[]).some(n=>/that is the vial, not the schedule/.test(n)));
+      (coarse.notes||[]).some(n=>/that is the vial, not the schedule/.test(n)),
+      'one step = '+Math.round(coarse.best.stepPmol)+' pmol/L, threshold '+Math.round(1300*0.08));
     check('  …naming the finer concentration the catalogue actually lists',
       (coarse.notes||[]).some(n=>/100 mg\/ml vial/.test(n)));
 
@@ -4759,6 +4765,85 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
           && /function _trtHitsDay/.test(src)
           && (src.match(/function _cadenceHitsMode\(/g)||[]).length===1;
     })());
+  }
+
+
+  // ── The review summary must describe what will actually be injected ───────
+  // Reported 2026-08-26 from a real protocol: the summary read
+  //   "Testosterone Enanthate  75mg · 1x/week"   (it was solved to every 3 days)
+  //   "HGH (Somatropin)        2IU/day · Every day"  (it was configured 3 AM + 3 PM)
+  // Neither matched the schedule underneath. A summary that contradicts the plan is
+  // worse than no summary — it is the screen the user confirms before saving.
+  {
+    // The cadence label read days[] first and ignored .cadence. _cadenceSetMode keeps
+    // the weekday list ON PURPOSE when switching to interval, so every interval-mode
+    // compound carried weekdays and got labelled by them.
+    const solved={id:'enanthate',name:'Test E',dose:'75',unit:'mg',
+                  cadence:'interval',freqVal:3,freqUnit:'days',days:[1]};
+    check('an interval compound is not labelled by its leftover weekdays',
+      G._trtCadenceLabel(solved)==='Every 3 days', G._trtCadenceLabel(solved));
+    check('  …and the generator agrees with that label', (function(){
+      const b=G._genInjBatches({id:'p',cycle_start:'2026-09-01',end_date:'2026-09-22',
+        peptides:[],trt:{enabled:true,compounds:[solved]},enhanced:{}},'c',null)||[];
+      const d=((b[0]&&b[0].entries)||[]).map(e=>e.date);
+      return d.length===8 && d[1]==='2026-09-04';
+    })(), 'label and schedule must not disagree');
+    check('  …while a genuine weekly compound still reads as weekdays',
+      G._trtCadenceLabel({id:'enanthate',cadence:'days',days:[1]})==='M');
+
+    // A split compound keeps its dose in dose_am/dose_pm; c.dose is whatever the
+    // catalogue seeded and is NOT the configured dose.
+    const hgh={id:'hgh',name:'HGH (Somatropin)',amPm:true,dose:'2',unit:'IU/day',
+               times:['AM','PM'],dose_am:'3',dose_pm:'3',days:[0,1,2,3,4,5,6]};
+    check('a split compound totals its per-slot doses', G._enhSplitTotal(hgh)===6,
+      '3 AM + 3 PM = 6, not the catalogue default of 2');
+    check('  …and c.dose is not the configured dose', parseFloat(hgh.dose)!==G._enhSplitTotal(hgh));
+
+    // Peptides had the same label bug.
+    check('a peptide in interval mode is labelled by its interval',
+      G._cadenceLabel({id:'cjc-ipa',cadence:'interval',freqVal:2,freqUnit:'days',days:[1,4]},'days')
+        ==='Every 2 days');
+
+    // End to end through the row builder the review screen actually calls, with the
+    // exact protocol shape that produced the wrong summary.
+    const _wizSave=G._wiz;
+    G._wiz={stackName:'Protocol 4',goals:['enhanced'],peptides:[],
+      trt:{enabled:true,compounds:[solved]},
+      enhanced:{enabled:true,compounds:[hgh]}};
+    const rows=G._wizTrtSummaryRows();
+    check('the review row reads "Every 3 days", not "1x/week"',
+      rows.length===1 && rows[0].cadence==='Every 3 days',
+      rows.length?(rows[0].dose+' · '+rows[0].cadence):'no rows');
+    check('  …and carries the solved dose', rows.length===1 && rows[0].dose==='75mg',
+      rows.length?rows[0].dose:'no rows');
+    G._wiz=_wizSave;
+  }
+
+  // ── The on-ramp headline must describe the whole plan ─────────────────────
+  // It scored only the last four weeks, so a plan sagging 16% below target in the
+  // middle reported the tail's 5% and the ranking could not see the sag at all.
+  {
+    const mk=(n,every,mg,last)=>{const o=[],L=new Date(last+'T12:00:00');
+      for(let i=0;i<n;i++){const d=new Date(L.getTime()-i*every*86400000);
+        o.push({compId:'nebido',doseMg:String(mg),
+          date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+      return o;};
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    const r=G.tcSolveTransition({history:mk(60,2,100,'2026-08-26'),incomingId:'enanthate',
+      startDate:'2026-08-27',targetPmol:1500,concMgPerMl:100,stepMl:0.1,weeks:16});
+    check('the solver reports the range it actually holds', !!(r&&r.best&&r.best.lowPmol>0&&r.best.highPmol>0));
+    check('  …spanning every week from week 1, not just the last four', (function(){
+      const w=r.best.weekly.slice(1).map(x=>x.mean);
+      return Math.abs(r.best.lowPmol-Math.min.apply(null,w))<1
+          && Math.abs(r.best.highPmol-Math.max.apply(null,w))<1;
+    })(), 'low/high must come from the whole plan');
+    check('  …with drift measured over the whole plan, not the settled tail',
+      r.best.drift>=r.best.settledDrift-1e-9,
+      'whole-plan '+Math.round(r.best.drift*100)+'% vs settled '+Math.round(r.best.settledDrift*100)+'%');
+    // Week 0 is excluded on purpose: the incoming ester has not accumulated yet, and
+    // no dose the solver can pick removes that dip.
+    check('  …excluding week 0, which is accumulation rather than a bad schedule',
+      r.best.weekly.length>1);
   }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
