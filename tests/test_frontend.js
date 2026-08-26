@@ -4628,6 +4628,139 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       G._trtSolveState.enanthate.result===null);
   }
 
+
+  // ── Schedule pattern is a setting, not a property of the molecule ─────────
+  // TRT used to hardcode `c.id!=='nebido'`: Nebido got the interval, every other
+  // ester got weekdays and no way to express "every 3 days". Both patterns are now
+  // available on every compound. The risk in that change is silently RESCHEDULING
+  // saved protocols, so the legacy readings are pinned as hard as the new ability.
+  {
+    const P = comp => ({id:'p', cycle_start:'2026-09-01', end_date:'2026-09-22',
+      peptides:[], trt:{enabled:true, compounds:[comp]}, enhanced:{}});
+    const dates = comp => {
+      const b = G._genInjBatches(P(comp),'c',null)||[];
+      return ((b[0]&&b[0].entries)||[]).map(e=>e.date);
+    };
+
+    // The ability that was missing.
+    check('a non-Nebido ester can now use an interval schedule',
+      dates({id:'enanthate',name:'Test E',dose:'50',unit:'mg',
+             cadence:'interval',freqVal:3,freqUnit:'days'})
+        .join(' ')==='2026-09-01 2026-09-04 2026-09-07 2026-09-10 2026-09-13 2026-09-16 2026-09-19 2026-09-22');
+    check('  …and Nebido can now use weekdays', (function(){
+      const d=dates({id:'nebido',name:'Nebido',dose:'250',unit:'mg',cadence:'days',days:[1,4]});
+      return d.length===6 && d[0]==='2026-09-03';
+    })());
+
+    // LEGACY. Nothing on disk carries a `cadence` field, so inference has to
+    // reproduce the old behaviour exactly or every saved protocol reschedules on
+    // upgrade.
+    check('legacy: an ester with weekdays and no cadence field is unchanged',
+      dates({id:'enanthate',name:'Test E',dose:'50',unit:'mg',days:[1,4]}).length===6);
+    check('legacy: Nebido with an interval and no cadence field is unchanged',
+      dates({id:'nebido',name:'Nebido',dose:'1000',unit:'mg',freqVal:1,freqUnit:'weeks'})
+        .join(' ')==='2026-09-01 2026-09-08 2026-09-15 2026-09-22');
+    // The old generator ignored days[] on Nebido outright. An anomalous saved row
+    // carrying both must keep injecting on its interval, not jump to weekdays.
+    check('legacy: Nebido carrying stray weekdays still uses its interval',
+      dates({id:'nebido',name:'Nebido',dose:'1000',unit:'mg',days:[1,4],freqVal:1,freqUnit:'weeks'})
+        .join(' ')==='2026-09-01 2026-09-08 2026-09-15 2026-09-22');
+    check('  …and an explicit cadence field overrides that legacy rule',
+      dates({id:'nebido',name:'Nebido',dose:'1000',unit:'mg',cadence:'days',days:[1,4],
+             freqVal:1,freqUnit:'weeks'}).length===6);
+
+    // The Enhanced tier's own legacy default is the OPPOSITE and must also survive:
+    // no cadence field meant weekday scheduling there even with freqVal set, which is
+    // what makes a 350 mg/week entry divide by 7 rather than by the interval.
+    check('legacy: the Enhanced default stays weekday, not interval',
+      G._cadenceOf({id:'x',freqVal:2,freqUnit:'days'},'days')==='days');
+    check('  …while TRT defaults the other way',
+      G._cadenceOf({id:'x',freqVal:2,freqUnit:'days'},'interval')==='interval');
+    check('  …which is what keeps the weekly-rate conversion at 50 mg',
+      G._enhDosePerInjection({dose:'350',unit:'mg/week',freqVal:2,freqUnit:'days'}).dose==='50');
+
+    // Switching mode must not destroy the other mode's settings.
+    const c={id:'enanthate',days:[1,4],freqVal:3,freqUnit:'days'};
+    G._cadenceSetMode(c,'interval');
+    check('switching to interval keeps the weekday selection',
+      c.cadence==='interval' && (c.days||[]).join(',')==='1,4');
+    G._cadenceSetMode(c,'days');
+    check('  …and switching back keeps the interval',
+      c.cadence==='days' && parseInt(c.freqVal,10)===3);
+    const bare={id:'enanthate'};
+    G._cadenceSetMode(bare,'days');
+    check('  …never leaving zero days selected, which would schedule nothing',
+      (bare.days||[]).length>0);
+
+    // Both TRT surfaces render the same control, each calling its own scope.
+    const eh=G._renderTRTCadence('enanthate',{cadence:'interval',freqVal:3,freqUnit:'days'},'edit');
+    const wh=G._renderTRTCadence('enanthate',{cadence:'interval',freqVal:3,freqUnit:'days'},'wiz');
+    check('the TRT schedule control offers both patterns',
+      /Weekly days/.test(eh) && /Every…/.test(eh));
+    check('  …calling the editor scope from the editor',
+      /trtSetCadence\('edit','enanthate','days'\)/.test(eh) && !/'wiz'/.test(eh));
+    check('  …and the wizard scope from the wizard',
+      /trtSetCadence\('wiz','enanthate','days'\)/.test(wh) && !/'edit'/.test(wh));
+    check('  …showing the interval editor in interval mode',
+      /trtSetFreqVal\('edit','enanthate',this.value\)/.test(eh) && !/trtSetDay\(/.test(eh));
+    check('  …and the weekday chips in weekday mode',
+      /trtSetDay\('edit','enanthate',/.test(
+        G._renderTRTCadence('enanthate',{cadence:'days',days:[1,4]},'edit')));
+
+    // Labels.
+    check('the schedule label reads naturally in both modes',
+      G._trtCadenceLabel({id:'enanthate',cadence:'interval',freqVal:3,freqUnit:'days'})==='Every 3 days' &&
+      G._trtCadenceLabel({id:'nebido',freqVal:10,freqUnit:'weeks'})==='Every 10 weeks');
+
+    // The solver writes the MODE, not just the fields — inference would read a solved
+    // weekday answer on a Nebido row as interval and schedule something else.
+    G._editBuf={trt:{enabled:true,compounds:[{id:'nebido',name:'Nebido',dose:'250',unit:'mg'}]}};
+    if(typeof G._collectEditInputs!=='function')G._collectEditInputs=function(){};
+    if(typeof G.renderStackEditor!=='function')G.renderStackEditor=function(){};
+    G._trtSolveState={nebido:{result:{best:{cadence:{days:[1,4]}},dose_phases:[{w:0,d:'50',u:'mg'}]}}};
+    G.trtSolveApply('edit','nebido');
+    check('applying a solved weekday cadence sets the mode explicitly',
+      G._editBuf.trt.compounds[0].cadence==='days');
+
+    // ── Peptides get the same choice ──────────────────────────────────────
+    // "All compounds should have a ability to swap between these patterns." An EOD
+    // or E3D peptide never fitted a 7-day grid either.
+    const PP = pep => ({id:'p', cycle_start:'2026-09-01', end_date:'2026-09-22',
+      peptides:[pep], trt:{}, enhanced:{}});
+    const pdates = pep => {
+      const b = G._genInjBatches(PP(pep),'c',null)||[];
+      return ((b[0]&&b[0].entries)||[]).map(e=>e.date);
+    };
+    const basePep = {id:'cjc-ipa',name:'CJC/Ipa',dose_am:'100',unit_am:'mcg',times:['AM'],active:true};
+    check('a peptide can be scheduled by interval',
+      pdates(Object.assign({},basePep,{cadence:'interval',freqVal:3,freqUnit:'days'}))
+        .join(' ')==='2026-09-01 2026-09-04 2026-09-07 2026-09-10 2026-09-13 2026-09-16 2026-09-19 2026-09-22');
+    check('legacy: a peptide with weekdays is unchanged',
+      pdates(Object.assign({},basePep,{days:[1,4]})).length===6);
+    // The peptide default was "no days[] means EVERY day" — the one legacy rule that
+    // differs again from both other tiers, and the easiest to lose.
+    check('legacy: a peptide with no days still runs every day',
+      pdates(basePep).length===22);
+
+    const pe=G._renderPepCadence(0,{cadence:'interval',freqVal:3,freqUnit:'days'},'edit');
+    check('the peptide schedule control offers both patterns',
+      /Weekly days/.test(pe)&&/Every…/.test(pe));
+    check('  …addressing peptides by index, not id',
+      /pepSetCadence\('edit','0','days'\)/.test(pe));
+    check('  …and the wizard scope from the wizard',
+      /pepSetCadence\('wiz','0','days'\)/.test(
+        G._renderPepCadence(0,{cadence:'interval',freqVal:3,freqUnit:'days'},'wiz')));
+
+    // ONE implementation across all three tiers — the whole point of the change.
+    // A second "when does this inject" is how the tiers drift apart.
+    check('every tier resolves cadence through the same predicate', (function(){
+      const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+      return /function _enhHitsDay\(c,d,cycleStart\)\{ return _cadenceHitsDay/.test(src)
+          && /function _trtHitsDay/.test(src)
+          && (src.match(/function _cadenceHitsMode\(/g)||[]).length===1;
+    })());
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -6489,9 +6622,10 @@ console.log('\n── Source-code structural assertions ────────
   check('source: _refreshTRTGuide function defined', tsJs.includes('function _refreshTRTGuide('));
   check('source: wizSetTRTFreq calls _refreshTRTGuide', (function(){var m=tsJs.match(/function wizSetTRTFreq\([\s\S]{0,200}/);return m&&m[0].includes('_refreshTRTGuide');})());
   check('source: wizSetTRTFreqUnit calls _refreshTRTGuide', (function(){var m=tsJs.match(/function wizSetTRTFreqUnit\([\s\S]{0,200}/);return m&&m[0].includes('_refreshTRTGuide');})());
-  // Window widened 2026-08-20: _renderEditTRT now opens with the tier-1 locked branch,
-  // which pushed the handler past the old 4000-char slice.
-  check('source: _renderEditTRT freqVal handler calls _refreshTRTGuide', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,6000}/);return m&&m[0].includes('_refreshTRTGuide');})());
+  // The editor's inline freqVal handler moved into trtSetFreqVal when the schedule
+  // control was shared across tiers (2026-08-26), so the guide refresh is asserted
+  // where it now lives rather than by scanning _renderEditTRT's source window.
+  check('source: trtSetFreqVal calls _refreshTRTGuide', (function(){var m=tsJs.match(/function trtSetFreqVal\([\s\S]{0,300}/);return m&&m[0].includes('_refreshTRTGuide');})());
   check('source: wizStepTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function wizStepTRT\([\s\S]{0,5200}/);return m&&m[0].includes("id=\"trt-guide-");})());
   check('source: _renderEditTRT wraps guide in trt-guide-id div', (function(){var m=tsJs.match(/function _renderEditTRT\([\s\S]{0,6000}/);return m&&m[0].includes('trt-guide-');})());
 

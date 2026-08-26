@@ -651,9 +651,7 @@ function _renderEditPep(p,pi){
     html+='</div></div>';
   });
   html+=_renderSlotTimingHint(p.id,p.times);
-  html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">';
-  DAYS_ORDER.forEach(function(di){var d=DAYS_SHORT[di];html+='<div class="day-chip'+(p.days&&p.days.includes(di)?' sel':'')+'" onclick="editToggleDay(this,'+pi+','+di+')">'+d+'</div>';});
-  html+='</div></div>';
+  html+=_renderPepCadence(pi,p,'edit');
   html+='<div class="cfg-row"><div class="cfg-lbl">Note</div>';
   html+='<input id="ed-note-'+pi+'" class="note-in" type="text" value="'+_esc(String(p.note||''))+'" oninput="_editBuf.peptides['+pi+'].note=this.value" placeholder="e.g. fasted, pre-sleep...">';
   html+='</div>';
@@ -724,6 +722,85 @@ function _trtRerender(scope){
   }
   if(typeof _collectEditInputs==='function')_collectEditInputs();
   if(typeof renderStackEditor==='function')renderStackEditor();
+}
+// Schedule-pattern handlers. Switching mode keeps BOTH representations on the
+// compound, so a user comparing weekday against interval and switching back loses
+// nothing — only which one the generator reads changes.
+// TRT's schedule control. Same markup as every other tier, with the scope baked into
+// the handler names and TRT's legacy default ('interval' when a saved compound carries
+// no weekdays) so nothing on disk reschedules itself on upgrade.
+function _renderTRTCadence(id,selData,scope){
+  return _renderCadenceControl(id,selData,{
+    pre:"'"+scope+"',",
+    setMode:'trtSetCadence', setVal:'trtSetFreqVal',
+    setUnit:'trtSetFreqUnit', setDay:'trtSetDay'
+  },'interval',_trtCadenceOf(selData));
+}
+// Peptides are addressed by INDEX, not id — the only structural difference between
+// the tiers here — so these take the index the shared control passes through.
+function _pepComp(scope,pi){
+  var list=(scope==='wiz')?(typeof _wiz!=='undefined'&&_wiz&&_wiz.peptides)
+                          :(typeof _editBuf!=='undefined'&&_editBuf&&_editBuf.peptides);
+  return (list||[])[parseInt(pi,10)];
+}
+function _pepRerender(scope){
+  if(scope==='wiz'){
+    if(typeof wizStepConfig==='function')
+      wizStepConfig(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+    return;
+  }
+  if(typeof _collectEditInputs==='function')_collectEditInputs();
+  if(typeof renderStackEditor==='function')renderStackEditor();
+}
+function pepSetCadence(scope,pi,mode){
+  var p=_pepComp(scope,pi); if(!p)return;
+  _cadenceSetMode(p,mode);
+  _pepRerender(scope);
+}
+function pepSetFreqVal(scope,pi,v){
+  var p=_pepComp(scope,pi); if(p)p.freqVal=Math.max(1,parseInt(v,10)||1);
+}
+function pepSetFreqUnit(scope,pi,v){
+  var p=_pepComp(scope,pi); if(!p)return;
+  p.freqUnit=(v==='weeks')?'weeks':'days';
+  _pepRerender(scope);
+}
+function pepSetDay(scope,pi,di){
+  var p=_pepComp(scope,pi); if(!p)return;
+  if(!p.days)p.days=[];
+  var i=p.days.indexOf(di);
+  if(i===-1)p.days.push(di); else if(p.days.length>1)p.days.splice(i,1);
+  _pepRerender(scope);
+}
+function _renderPepCadence(pi,p,scope){
+  return _renderCadenceControl(pi,p,{
+    pre:"'"+scope+"',",
+    setMode:'pepSetCadence', setVal:'pepSetFreqVal',
+    setUnit:'pepSetFreqUnit', setDay:'pepSetDay'
+  },'days');
+}
+function trtSetCadence(scope,id,mode){
+  var c=_trtComp(scope,id); if(!c)return;
+  _cadenceSetMode(c,mode);
+  _trtRerender(scope);
+}
+function trtSetFreqVal(scope,id,v){
+  var c=_trtComp(scope,id); if(!c)return;
+  c.freqVal=Math.max(1,parseInt(v,10)||1);
+  if(typeof _refreshTRTGuide==='function')_refreshTRTGuide(id,c.freqVal,c.freqUnit,c.dose);
+}
+function trtSetFreqUnit(scope,id,v){
+  var c=_trtComp(scope,id); if(!c)return;
+  c.freqUnit=(v==='weeks')?'weeks':'days';
+  _trtRerender(scope);
+}
+function trtSetDay(scope,id,di){
+  var c=_trtComp(scope,id); if(!c)return;
+  if(!c.days)c.days=[];
+  var i=c.days.indexOf(di);
+  // Never leave zero days selected — that schedules nothing, silently.
+  if(i===-1)c.days.push(di); else if(c.days.length>1)c.days.splice(i,1);
+  _trtRerender(scope);
 }
 function trtSetDate(scope,id,which,val){
   var c=_trtComp(scope,id);if(!c)return;
@@ -833,8 +910,11 @@ function trtSolveApply(scope,id){
   var st=_trtSolveSt(id), comp=_trtComp(scope,id);
   if(!st.result||!comp)return;
   var cad=st.result.best.cadence;
-  if(cad.days){ comp.days=cad.days.slice(); delete comp.freqVal; delete comp.freqUnit; }
-  else { comp.freqVal=cad.freqVal; comp.freqUnit=cad.freqUnit; comp.days=undefined; }
+  // Set the MODE explicitly, not just the fields. Inference would read a solved
+  // weekday answer on a Nebido row as interval (the legacy rule) and schedule
+  // something the solver never proposed.
+  if(cad.days){ comp.cadence='days'; comp.days=cad.days.slice(); }
+  else { comp.cadence='interval'; comp.freqVal=cad.freqVal; comp.freqUnit=cad.freqUnit; }
   comp.dose_phases=st.result.dose_phases.map(function(p){return {w:p.w,d:p.d,u:p.u};});
   comp.unit='mg';
   // Keep the flat dose in step with the maintenance dose, so turning the ramp OFF
@@ -1068,7 +1148,7 @@ function _renderEditTRT(trt){if(!trt)trt={};
     });
     return lockedHtml;
   }
-  var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';if(c.id!=='nebido'){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="editSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqVal=parseInt(x)||1;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)" style="max-width:70px;"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc){cc.freqUnit=x;_refreshTRTGuide(\''+c.id+'\',cc.freqVal,cc.freqUnit,cc.dose);}})(this.value)"><option'+('days'===(selData.freqUnit||'weeks')?' selected':'')+'>days</option><option'+('weeks'===(selData.freqUnit||'weeks')?' selected':'')+'>weeks</option></select></div></div>';}html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+=_renderTRTTransition(c,selData,'edit');html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
+  var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';html+=_renderTRTCadence(c.id,selData,'edit');html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+=_renderTRTTransition(c,selData,'edit');html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
 function editSetTRTTime(id,tm){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.time=(tm==='PM'?'PM':'AM');_collectEditInputs();renderStackEditor();}
 function editAddPeptide(){
   var currentIds=(_editBuf.peptides||[]).map(function(p){return p.id;});
@@ -1398,28 +1478,151 @@ function _slotFirstUnit(p){
 //
 // Back-compat: entries saved before this existed have no `cadence`, so they default to
 // 'days' and behave exactly as before.
-function _enhCadence(c){ return c&&c.cadence==='interval' ? 'interval' : 'days'; }
+// ── ONE CADENCE MODEL FOR EVERY TIER ────────────────────────────────────────
+// Henrik, 2026-08-26: "all test esters need to also have the number of day/weeks
+// injection schedule as Nebido. Today it has the weekday picker from peptides. All
+// compounds should have a ability to swap between these patterns."
+//
+// Two scheduling patterns exist and both are legitimate:
+//   days     — fixed weekdays (Mon/Thu). Aligns to the calendar week.
+//   interval — every N days/weeks. The only way to express EOD, E3D, or Nebido's
+//              every-10-weeks, none of which fit a 7-day grid.
+//
+// The Enhanced tier already had both and a chip to switch. TRT had the choice made
+// FOR it by a hardcoded `c.id!=='nebido'`: Nebido got the interval, every other ester
+// got the weekday picker and no way to say "every 3 days". That is not a property of
+// the molecule — an enanthate user dosing E3D was simply unable to write it down.
+//
+// So the mode becomes a field on the compound, like it already is on Enhanced, and
+// ONE implementation serves all tiers. _enhCadence and friends now delegate here
+// rather than keeping a parallel copy — a second implementation of "when does this
+// inject" is how the tiers drift apart, which is the fault the Phase 4 merge existed
+// to end.
+//
+// ⚠️ INFERENCE KEEPS EVERY SAVED PROTOCOL WORKING. Nothing on disk has a `cadence`
+// field. A compound with weekdays means 'days'; one without means 'interval'. That
+// reproduces the old behaviour exactly, including Nebido (which was written with
+// days:undefined), so no migration runs and nothing reschedules on upgrade.
+// THE TWO TIERS HAD DIFFERENT LEGACY DEFAULTS AND BOTH MUST SURVIVE.
+// Enhanced treated a compound with no `cadence` as weekday-scheduled whatever else it
+// carried — an entry with freqVal:2 and no days[] injected EVERY DAY, and
+// _enhDosePerInjection divided its weekly rate by 7 accordingly. TRT did the opposite:
+// no days[] meant the interval branch. Collapsing both onto one default silently
+// rescheduled saved protocols in whichever tier lost, and turned a 350 mg/week entry
+// into 100 mg per injection instead of 50. So the default is the caller's to state.
+function _cadenceOf(c,dflt){
+  if(c&&c.cadence==='interval')return 'interval';
+  if(c&&c.cadence==='days')return 'days';
+  if(c&&c.days&&c.days.length)return 'days';
+  return (dflt==='interval')?'interval':'days';
+}
+// TRT's legacy reading. Nebido was scheduled by interval unconditionally — the old
+// generator's `c.id!=='nebido'` guard ignored any days[] on it — so an anomalous saved
+// Nebido carrying weekdays must keep injecting on its interval, not silently switch.
+// This is inference for OLD data only; Nebido can now be put in weekday mode like
+// anything else, and an explicit cadence field always wins.
+function _trtCadenceOf(c){
+  if(c&&(c.cadence==='interval'||c.cadence==='days'))return c.cadence;
+  if(c&&c.id==='nebido')return 'interval';
+  return _cadenceOf(c,'interval');
+}
+function _cadenceFreqDays(c){
+  var n=parseInt(c&&c.freqVal,10); if(!(n>0))n=1;
+  return (c&&c.freqUnit==='weeks')?n*7:n;
+}
+// Does this compound inject on this date? The single predicate, for every tier.
+function _cadenceHitsMode(mode,c,d,cycleStart){
+  if(mode==='interval'){
+    var step=_cadenceFreqDays(c);
+    if(!(step>0)||!cycleStart)return false;
+    var since=Math.floor((d-cycleStart)/86400000);
+    return since>=0 && since%step===0;
+  }
+  return !(c&&c.days&&c.days.length) || c.days.includes(d.getDay());
+}
+function _cadenceHitsDay(c,d,cycleStart,dflt){
+  return _cadenceHitsMode(_cadenceOf(c,dflt),c,d,cycleStart);
+}
+// TRT resolves its mode through _trtCadenceOf, which carries the Nebido legacy rule.
+// Going through _cadenceOf instead would read a stray days[] on an old Nebido row as
+// weekday scheduling and silently move every injection.
+function _trtHitsDay(c,d,cycleStart){
+  return _cadenceHitsMode(_trtCadenceOf(c),c,d,cycleStart);
+}
+function _trtCadenceLabel(c){
+  return _cadenceLabelMode(_trtCadenceOf(c),c);
+}
+// Calendar days between consecutive injections — interval states it, weekdays spread
+// n injections over 7 days.
+function _cadenceIntervalDays(c,dflt){
+  if(_cadenceOf(c,dflt)==='interval'){var s=_cadenceFreqDays(c);return s>0?s:1;}
+  var n=(c&&c.days&&c.days.length)?c.days.length:7;
+  return 7/n;
+}
+function _cadenceLabelMode(mode,c){
+  if(mode==='interval'){
+    var n=parseInt(c&&c.freqVal,10); if(!(n>0))n=1;
+    var u=(c&&c.freqUnit==='weeks')?'week':'day';
+    return n===1?('Every '+u):('Every '+n+' '+u+'s');
+  }
+  var ds=(c&&c.days)||[];
+  // All seven selected reads as "Every day", not "M/T/W/T/F/S/S".
+  if(!ds.length||ds.length===7)return 'Every day';
+  return DAYS_ORDER.filter(function(di){return ds.indexOf(di)>=0;})
+                   .map(function(di){return DAYS_SHORT[di];}).join('/');
+}
+function _cadenceLabel(c,dflt){ return _cadenceLabelMode(_cadenceOf(c,dflt),c); }
+// The schedule control: mode chips, then whichever editor the mode calls for.
+// `h` names the handler set ('editSetEnh', 'wizSetEnh', 'trtEdit', 'trtWiz', …) so
+// one piece of markup drives every tier and both surfaces.
+function _renderCadenceControl(id,selData,h,dflt,modeOverride){
+  var mode=modeOverride||_cadenceOf(selData,dflt);
+  // Some tiers' handlers take a leading scope argument ('edit'/'wiz'); most do not.
+  // `h.pre` is spliced in as that first argument so one piece of markup serves both.
+  var a0=h.pre||'';
+  var out='<div class="cfg-row"><div class="cfg-lbl">Schedule</div><div class="time-chips">'
+    +[['days','Weekly days'],['interval','Every…']].map(function(m){
+        return '<div class="time-chip'+(mode===m[0]?' sel':'')+'" onclick="'+h.setMode+'('+a0+'\''+id+'\',\''+m[0]+'\')">'+m[1]+'</div>';
+      }).join('')
+    +'</div></div>';
+  if(mode==='interval'){
+    var n=parseInt(selData.freqVal,10); if(!(n>0))n=1;
+    var u=(selData.freqUnit==='weeks')?'weeks':'days';
+    out+='<div class="cfg-row"><div class="cfg-lbl">Inject every</div><div class="dose-row">'
+      +'<input class="dose-in" type="number" min="1" inputmode="numeric" value="'+n+'" oninput="'+h.setVal+'('+a0+'\''+id+'\',this.value)" style="max-width:70px;">'
+      +'<select class="unit-sel" onchange="'+h.setUnit+'('+a0+'\''+id+'\',this.value)">'
+      +['days','weeks'].map(function(x){return '<option'+(x===u?' selected':'')+'>'+x+'</option>';}).join('')
+      +'</select></div></div>';
+  }else{
+    out+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'
+      +DAYS_ORDER.map(function(di){
+        return '<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="'+h.setDay+'('+a0+'\''+id+'\','+di+')">'+DAYS_SHORT[di]+'</div>';
+      }).join('')
+      +'</div></div>';
+  }
+  return out;
+}
+// Switching mode must not DESTROY the other mode's settings — a user comparing the
+// two and switching back would lose what they had. Both representations are kept on
+// the compound; only which one the generator reads changes.
+function _cadenceSetMode(c,mode){
+  if(!c)return;
+  c.cadence=(mode==='interval')?'interval':'days';
+  if(c.cadence==='interval'&&!(parseInt(c.freqVal,10)>0)){c.freqVal=1;c.freqUnit=c.freqUnit||'days';}
+  if(c.cadence==='days'&&!(c.days&&c.days.length))c.days=[1];
+}
+
+// Enhanced-tier names, kept as the delegating aliases they now are.
+function _enhCadence(c){ return _cadenceOf(c); }
 function _enhFreqDays(c){
   var n=parseInt(c&&c.freqVal,10); if(!(n>0))n=1;
   return (c&&c.freqUnit==='weeks') ? n*7 : n;
 }
 // Does this compound inject on date d? cycleStart anchors interval counting.
-function _enhHitsDay(c,d,cycleStart){
-  if(_enhCadence(c)==='interval'){
-    var step=_enhFreqDays(c);
-    if(!(step>0)||!cycleStart)return false;
-    var since=Math.floor((d-cycleStart)/86400000);
-    return since>=0 && since%step===0;
-  }
-  return !(c.days&&c.days.length) || c.days.includes(d.getDay());
-}
+function _enhHitsDay(c,d,cycleStart){ return _cadenceHitsDay(c,d,cycleStart); }
 // Calendar days between two consecutive injections of an enhanced compound. Interval
 // cadence states it outright; weekday cadence spreads n injections over 7 days.
-function _enhIntervalDays(c){
-  if(_enhCadence(c)==='interval'){var s=_enhFreqDays(c);return s>0?s:1;}
-  var n=(c&&c.days&&c.days.length)?c.days.length:7;
-  return 7/n;
-}
+function _enhIntervalDays(c){ return _cadenceIntervalDays(c); }
 // A configured enhanced dose is a RATE ("350 mg/week"), not the amount in the syringe.
 // An injection record stores an amount, so the rate has to be converted before it is
 // written.
@@ -1527,41 +1730,12 @@ function _unmigratedTestoNote(c){
 // input. `pfx` is 'edit' or 'wiz' so the same markup drives both the stack editor and
 // the wizard — they had duplicate day-chip blocks before this.
 function _renderEnhCadence(c,selData,pfx){
-  var mode=_enhCadence(selData);
-  var h='<div class="cfg-row"><div class="cfg-lbl">Schedule</div><div class="time-chips">'
-    +[['days','Weekly days'],['interval','Every…']].map(function(m){
-        return '<div class="time-chip'+(mode===m[0]?' sel':'')+'" onclick="'+pfx+'SetEnhCadence(\''+c.id+'\',\''+m[0]+'\')">'+m[1]+'</div>';
-      }).join('')
-    +'</div></div>';
-  if(mode==='interval'){
-    var n=parseInt(selData.freqVal,10); if(!(n>0))n=1;
-    var u=(selData.freqUnit==='weeks')?'weeks':'days';
-    h+='<div class="cfg-row"><div class="cfg-lbl">Inject every</div><div class="dose-row">'
-      +'<input class="dose-in" type="number" min="1" inputmode="numeric" value="'+n+'" oninput="'+pfx+'SetEnhFreqVal(\''+c.id+'\',this.value)" style="max-width:70px;">'
-      +'<select class="unit-sel" onchange="'+pfx+'SetEnhFreqUnit(\''+c.id+'\',this.value)">'
-      +['days','weeks'].map(function(x){return '<option'+(x===u?' selected':'')+'>'+x+'</option>';}).join('')
-      +'</select></div></div>';
-  }else{
-    h+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'
-      +DAYS_ORDER.map(function(di){
-        return '<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="'+pfx+'SetEnhDays(\''+c.id+'\','+di+')">'+DAYS_SHORT[di]+'</div>';
-      }).join('')
-      +'</div></div>';
-  }
-  return h;
+  return _renderCadenceControl(c.id,selData,{setMode:pfx+'SetEnhCadence',setVal:pfx+'SetEnhFreqVal',
+                                             setUnit:pfx+'SetEnhFreqUnit',setDay:pfx+'SetEnhDays'});
 }
 // Human-readable schedule, for summaries.
-function _enhCadenceLabel(c){
-  if(_enhCadence(c)==='interval'){
-    var n=parseInt(c.freqVal,10); if(!(n>0))n=1;
-    var u=(c.freqUnit==='weeks')?'week':'day';
-    return n===1 ? ('Every '+u) : ('Every '+n+' '+u+'s');
-  }
-  var ds=c.days||[];
-  if(!ds.length||ds.length===7)return 'Every day';
-  // Keep the existing weekday rendering ("M/Th") — only the interval mode is new.
-  return DAYS_ORDER.filter(function(di){return ds.includes(di);}).map(function(di){return DAYS_SHORT[di];}).join('/');
-}
+function _enhCadenceLabel(c){ return _cadenceLabel(c); }
+
 // Which intra-day slots a split enhanced compound is scheduled in, in chronological
 // order. `amPm` is the legacy field name for "this compound is split across intra-day
 // slots" — kept as-is so existing stored stacks keep working; it now covers three
@@ -1920,9 +2094,8 @@ function wizStepConfig(body,footer){
       html+='<div class="cfg-row"><div class="cfg-lbl">'+_slotLabel(t)+' Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(p['dose_'+k]||'')+'" oninput="wizSetDose('+pi+',\''+k+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetUnit('+pi+',\''+k+'\',this.value)">'+UNITS.map(function(u){return'<option value="'+u+'"'+(u===_canonUnit(p['unit_'+k]||_slotFirstUnit(p)||'mg')?' selected':'')+'>'+(UNIT_LABELS[u]||u)+'</option>';}).join('')+'</select></div></div>';
     });
     html+=_renderSlotTimingHint(p.id,p.times);
-    html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">';
-    DAYS_ORDER.forEach(function(di){var d=DAYS_SHORT[di];html+='<div class="day-chip'+(p.days&&p.days.includes(di)?' sel':'')+'" onclick="wizToggleDay('+pi+','+di+')">'+d+'</div>';});
-    html+='</div></div><div class="cfg-row"><div class="cfg-lbl">Note (optional)</div><input class="note-in" type="text" value="'+String(p.note||'')+'" oninput="wizSetNote('+pi+',this.value)" placeholder="e.g. fasted, pre-sleep..."></div>';
+    html+=_renderPepCadence(pi,p,'wiz');
+    html+='<div class="cfg-row"><div class="cfg-lbl">Note (optional)</div><input class="note-in" type="text" value="'+String(p.note||'')+'" oninput="wizSetNote('+pi+',this.value)" placeholder="e.g. fasted, pre-sleep..."></div>';
     html+='<div id="pep-guide-'+pi+'">'+_renderDoseGuide(p.id,parseDec(_slotFirstDose(p))||0,_weeklyDoseTotal(p))+'</div>';
     html+=_renderRampSection(p,pi);
     html+='</div>';
@@ -2094,7 +2267,7 @@ function _renderTRTViewTab(st){
       html+='<div class="cfg-block" style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">';
       html+='<div style="width:8px;height:8px;border-radius:50%;background:'+dot+';flex-shrink:0;"></div>';
       html+='<div style="font-size:13px;font-weight:600;color:var(--text);">'+_esc(c.name)+'</div>';
-      html+='<div style="font-size:12px;color:var(--muted2);">'+(c.dose?c.dose+(c.unit||'mg')+' ':'')+(c.id!=='nebido'&&c.days&&c.days.length?c.days.map(function(d){return DAYS_SHORT[d];}).join('/'):(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'TRT'))+'</div>';
+      html+='<div style="font-size:12px;color:var(--muted2);">'+(c.dose?c.dose+(c.unit||'mg')+' ':'')+_trtCadenceLabel(c)+'</div>';
       html+='</div>';
     });
   }
@@ -2700,8 +2873,7 @@ function wizStepTRT(body,footer){
       else{var freqDays=(selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1);weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}
       html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';
       html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetTRTDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetTRTUnit(\''+c.id+'\',this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';
-      if(!isNebido){html+='<div class="cfg-row"><div class="cfg-lbl">Days</div><div class="day-chips">'+DAYS_ORDER.map(function(di){var lbl=DAYS_SHORT[di];return'<div class="day-chip'+((selData.days||[]).includes(di)?' sel':'')+'" onclick="wizSetTRTDays(\''+c.id+'\','+di+')">'+lbl+'</div>';}).join('')+'</div></div>';}
-      else{html+='<div class="cfg-row" style="margin-bottom:0"><div class="cfg-lbl">Frequency</div><div class="dose-row"><input class="dose-in" type="number" inputmode="numeric" min="1" value="'+String(selData.freqVal||1)+'" oninput="wizSetTRTFreq(\''+c.id+'\',this.value)" style="max-width:70px;"><select class="unit-sel" onchange="wizSetTRTFreqUnit(\''+c.id+'\',this.value)"><option'+(('days'===(selData.freqUnit||'weeks'))?' selected':'')+'>days</option><option'+(('weeks'===(selData.freqUnit||'weeks'))?' selected':'')+'>weeks</option></select></div></div>';}
+      html+=_renderTRTCadence(c.id,selData,'wiz');
       html+=_renderTRTTransition(c,selData,'wiz');
       html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';
       html+='</div>';
@@ -4055,14 +4227,16 @@ function _genInjBatches(stack,cycleId,fromDate){
   // Peptides
   (stack.peptides||[]).forEach(function(p){
     if(p.active===false)return;
-    var days=p.days||[0,1,2,3,4,5,6];
     var times=p.times||['AM'];
     var dot=p.dot||'#888';
     var pStart=p.start_date?parseLocalDate(p.start_date):cycleStart;
     var pEnd=p.end_date?parseLocalDate(p.end_date):null;
     var compEntries=[];
     for(var d=new Date(genStart);d<=cycleEnd;d=_nextDay(d)){
-      if(!days.includes(d.getDay()))continue;
+      // Peptides can be scheduled by interval too now (an EOD or E3D peptide never
+      // fitted a 7-day grid). Default stays 'days', and an empty days[] still means
+      // every day, so nothing already saved reschedules.
+      if(!_cadenceHitsDay(p,d,cycleStart,'days'))continue;
       if(d<pStart)continue;
       if(pEnd&&d>pEnd)continue;
       var eff=_effectiveDoseAt(p,stack.cycle_start,d);
@@ -4144,8 +4318,11 @@ function _genInjBatches(stack,cycleId,fromDate){
       for(var d=new Date(cStart);d<=cEnd;d=_nextDay(d)){
         var daysSince=Math.floor((d-cycleStart)/86400000);
         var hit=false;
-        if(c.id!=='nebido'&&c.days&&c.days.length){hit=c.days.includes(d.getDay());}
-        else{var freqDays=c.freqUnit==='weeks'?(c.freqVal||1)*7:(c.freqVal||1);hit=freqDays>0&&daysSince%freqDays===0;}
+        // WHICH PATTERN IS A SETTING, NOT A PROPERTY OF THE MOLECULE. This read
+        // `c.id!=='nebido' && c.days...`, so Nebido got the interval and every other
+        // ester got weekdays with no way to say "every 3 days". _trtCadenceOf keeps
+        // that exact reading for saved protocols and lets either be chosen now.
+        hit=_trtHitsDay(c,d,cycleStart);
         if(!hit)continue;
         // ── DOSE RAMPS APPLY TO TESTOSTERONE TOO (ester transitions) ──────────
         // _effectiveDoseAt had exactly one call site — the peptide branch — so a TRT
