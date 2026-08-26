@@ -853,7 +853,7 @@ function editSetTRTPhase(id,phi,field,val){trtSetPhase('edit',id,phi,field,val);
 // with the curve on screen.
 var _trtSolveState={};
 function _trtSolveSt(id){
-  if(!_trtSolveState[id])_trtSolveState[id]={target:'',conc:'',weeks:16,running:false,result:null,error:''};
+  if(!_trtSolveState[id])_trtSolveState[id]={target:'',conc:'',weeks:16,step:'0.05',running:false,result:null,error:''};
   return _trtSolveState[id];
 }
 function trtSolveSet(scope,id,field,val){
@@ -886,7 +886,7 @@ async function trtSolveRun(scope,id){
       history:hist, incomingId:(typeof _canonCompoundId==='function'?_canonCompoundId(id):id),
       startDate:start, targetPmol:st.target,
       concMgPerMl:parseDec(st.conc)||_trtDefaultConc(id),
-      stepMl:0.1, weeks:parseInt(st.weeks,10)||16
+      stepMl:parseDec(st.step)||0.05, weeks:parseInt(st.weeks,10)||16
     }):null;
     if(!res)st.error='Could not solve — check the target, the start date, and that you have logged injections to model the tail from.';
     st.result=res;
@@ -937,6 +937,18 @@ function _renderTRTSolve(c,selData,scope){
       +'</select>'
       +'<span style="font-size:11px;color:var(--muted2);margin-left:6px">Weeks</span>'
       +'<input class="dose-in" type="number" inputmode="numeric" min="4" max="52" value="'+String(st.weeks||16)+'" oninput="'+q('trtSolveSet',",'weeks',this.value")+'" style="width:52px;text-align:center"></div>'
+    // THE STEP IS THE LEVER THAT MATTERS, so it is a control rather than a constant.
+    // At 250 mg/ml — the standard vial — 0.1 ml steps are 25 mg, which is too coarse
+    // to track a decaying tail and is what makes the level sag between steps.
+    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'
+      +'<span style="font-size:11px;color:var(--muted2);min-width:56px">Draw to</span>'
+      +'<select class="unit-sel" onchange="'+q('trtSolveSet',",'step',this.value")+'">'
+      +[['0.1','0.1 ml'],['0.05','0.05 ml'],['0.025','0.025 ml']].map(function(o){
+          return '<option value="'+o[0]+'"'+(String(st.step||'0.05')===o[0]?' selected':'')+'>'+o[1]+'</option>';
+        }).join('')
+      +'</select>'
+      +'<span style="font-size:11px;color:var(--muted2)">= '
+      +(Math.round((parseDec(conc)||250)*(parseDec(st.step)||0.05)*10)/10)+' mg per step</span></div>'
     +'<button onclick="'+q('trtSolveRun')+'"'+(st.running?' disabled':'')
       +' style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.5px;'+(st.running?'opacity:0.6;':'')+'">'
       +(st.running?'Solving…':'Generate on-ramp')+'</button>';

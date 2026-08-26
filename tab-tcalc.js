@@ -2469,7 +2469,14 @@ function _tcFreeTSeries(sorted, hooks) {
 // after snapping and the returned levels are the snapped ones — never the
 // continuous solution the bisection found.
 
-var _TC_SOLVE_STEP_ML   = 0.1;   // what a syringe can actually be drawn to
+// What a 1 ml syringe can actually be drawn to. 0.05 ml is five units on a 100-unit
+// barrel — comfortably readable — and it matters far more than it looks: at 250 mg/ml
+// the difference between 0.1 and 0.05 ml steps is the difference between a dose that
+// sits flat for six weeks while the outgoing tail decays under it, and one that
+// tracks the decay. Measured on the same solve: 0.1 ml holds 1367-1557 with four
+// consecutive falling weeks, 0.05 ml holds 1398-1553, and 0.01 ml holds 1487-1553
+// with no meaningful sag at all. The vial concentration never changed.
+var _TC_SOLVE_STEP_ML   = 0.05;
 var _TC_SOLVE_MAX_ITER  = 40;    // bisection depth; ~1e-6 mg on a 0–2000 bracket
 var _TC_SOLVE_HI_MG     = 2000;  // upper bracket per injection
 var _TC_SOLVE_DAMPING   = 0.5;   // see the note in the iteration loop  // upper bracket per injection
@@ -2849,20 +2856,21 @@ function tcSolveTransition(opts){
   // One 0.1 ml step at 250 mg/ml is 25 mg — at every-2-days that is 87 mg/week of
   // granularity, so the dose can only land above or below the requirement and the
   // weekly level sawtooths. A thinner vial is a finer dial.
+  // THE LEVER IS THE SYRINGE STEP, NOT THE VIAL.
+  // This used to say "that is the vial, not the schedule" and suggest a thinner
+  // concentration. That was wrong, and measurably so: at a fixed 250 mg/ml, going
+  // from 0.1 to 0.05 to 0.01 ml steps takes the same solve from 13% drift to 10% to
+  // 4%. The concentration is usually not the user's to choose — 250 mg/ml is the
+  // standard vial — while the volume they draw is.
   if(best.stepPmol>ctx.targetPmol*0.08){
-    var msg='One '+ctx.stepMl+' ml step moves your level by about '
-      +Math.round(best.stepPmol)+' pmol/L ('+Math.round(100*best.stepPmol/ctx.targetPmol)
-      +'% of target), so the dose cannot be set finely enough to hold '+Math.round(ctx.targetPmol)
-      +' steadily — that is the vial, not the schedule.';
-    var alt=null;
-    try{
-      var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(c){return c.id===ctx.incomingId;}):null;
-      (cat&&cat.conc||[]).forEach(function(cc){
-        if(cc<ctx.concMgPerMl&&(alt===null||cc<alt)) alt=cc;
-      });
-    }catch(e){}
-    if(alt) msg+=' A '+alt+' mg/ml vial gives '+Math.round(alt*ctx.stepMl*10)/10
-      +' mg per step instead of '+Math.round(best.stepMg*10)/10+' mg.';
+    var finer=(ctx.stepMl>0.025)?(ctx.stepMl/2):null;
+    var msg='One '+ctx.stepMl+' ml step ('+Math.round(best.stepMg*10)/10+' mg) moves your level '
+      +'by about '+Math.round(best.stepPmol)+' pmol/L, '
+      +Math.round(100*best.stepPmol/ctx.targetPmol)+'% of target. That is what makes the level '
+      +'sag between dose steps: the dose can only be held flat while the outgoing ester '
+      +'keeps decaying under it.';
+    if(finer) msg+=' Drawing to '+finer+' ml instead ('+Math.round(ctx.concMgPerMl*finer*10)/10
+      +' mg per step at this concentration) roughly halves that.';
     notes.push(msg);
   }
 

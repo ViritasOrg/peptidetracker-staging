@@ -4601,11 +4601,39 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       history:hist, incomingId:'enanthate', startDate:'2026-08-27',
       targetPmol:1300, concMgPerMl:400, stepMl:0.1, weeks:12
     });
-    check('a coarse vial is reported as the limit, not hidden',
-      (coarse.notes||[]).some(n=>/that is the vial, not the schedule/.test(n)),
+    check('a coarse syringe step is reported as the limit, not hidden',
+      (coarse.notes||[]).some(n=>/moves your level by about/.test(n)),
       'one step = '+Math.round(coarse.best.stepPmol)+' pmol/L, threshold '+Math.round(1300*0.08));
-    check('  …naming the finer concentration the catalogue actually lists',
-      (coarse.notes||[]).some(n=>/100 mg\/ml vial/.test(n)));
+    // THE LEVER IS THE DRAW VOLUME, NOT THE VIAL. This originally advised a thinner
+    // concentration, which is both unhelpful (250 mg/ml is the standard vial, and not
+    // usually the user's to choose) and wrong: at a fixed 250 mg/ml, going 0.1 -> 0.05
+    // -> 0.01 ml takes the same solve from 13% drift to 10% to 4%.
+    check('  …and points at the draw volume, which is what the user controls',
+      (coarse.notes||[]).some(n=>/ml instead/.test(n)));
+    check('  …not at buying a different vial',
+      !(coarse.notes||[]).some(n=>/mg\/ml vial/.test(n)));
+
+    // The measurement behind that claim, run as a test so the ordering cannot silently
+    // invert: at ONE concentration, a finer step must hold the target more tightly.
+    const byStep=[0.1,0.05,0.01].map(function(stepMl){
+      G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+      const rr=G.tcSolveTransition({history:hist,incomingId:'enanthate',startDate:'2026-08-27',
+        targetPmol:1500,concMgPerMl:250,stepMl:stepMl,weeks:16});
+      return {stepMl:stepMl, drift:rr.best.drift, err:rr.best.meanErr};
+    });
+    // Only the claim the product actually rests on: halving the draw volume at a FIXED
+    // concentration holds the target at least as tightly. Deliberately not asserting
+    // that finer is monotonically better all the way down — it is not. Measured under
+    // one calibration the three steps give 13/10/4%, and under another 20/13/15%,
+    // where 0.01 ml is WORSE than 0.05. The solve is calibration-dependent, and at very
+    // fine granularity the monotone projection and the fixed-point iteration can fight
+    // each other. 0.05 ml beat 0.1 ml under both, which is the change being made here.
+    check('halving the draw volume holds the target at least as tightly',
+      byStep[1].drift<=byStep[0].drift+1e-9,
+      byStep.map(x=>x.stepMl+'ml:'+Math.round(x.drift*100)+'%').join(' '));
+    check('  …and lowers the mean error too',
+      byStep[1].err<=byStep[0].err+1e-9,
+      byStep.map(x=>x.stepMl+'ml err '+Math.round(x.err)).join(' '));
 
     // Above the healthy young-male ceiling the app already has copy for this, and the
     // solver still computes what was asked. It solves for the SCHEDULE, never the TARGET.
