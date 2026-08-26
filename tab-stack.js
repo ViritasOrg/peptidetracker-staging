@@ -669,13 +669,6 @@ function editToggleTime(pi,t){
   if(i===-1)p.times.push(t);else if(p.times.length>1)p.times.splice(i,1);
   renderStackEditor();
 }
-function editToggleDay(el,pi,di){
-  var p=_editBuf.peptides[pi];if(!p)return;
-  if(!p.days)p.days=[];
-  var i=p.days.indexOf(di);
-  if(i===-1){p.days.push(di);el.classList.add('sel');}
-  else if(p.days.length>1){p.days.splice(i,1);el.classList.remove('sel');}
-}
 function editRemovePeptide(pi){_editBuf.peptides.splice(pi,1);renderStackEditor();}
 // Same defence in depth as editToggleEnhancedCompound: the locked cards do not call
 // these, but rendering is presentation and these are what change the protocol. Turning
@@ -2105,7 +2098,6 @@ function wizStepConfig(body,footer){
 }
 
 function wizToggleTime(pi,t){var p=_wiz.peptides[pi];if(!p)return;if(!p.times)p.times=[];var i=p.times.indexOf(t);if(i===-1)p.times.push(t);else if(p.times.length>1)p.times.splice(i,1);wizStepConfig(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
-function wizToggleDay(pi,di){var p=_wiz.peptides[pi];if(!p)return;if(!p.days)p.days=[];var i=p.days.indexOf(di);if(i===-1)p.days.push(di);else if(p.days.length>1)p.days.splice(i,1);wizStepConfig(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 // Refreshes the guide IN PLACE. A full wizStepConfig() re-render on every keystroke
 // would tear out the input being typed into and take the caret with it — which is why
 // this handler never re-rendered at all, and why the highlight used to sit still until
@@ -2901,10 +2893,6 @@ function wizToggleTRTCompound(id){
 }
 function wizSetTRTDose(id,v){var c=(_wiz.trt.compounds||[]).find(function(c){return c.id===id;});if(c)c.dose=v;}
 function wizSetTRTUnit(id,v){var c=(_wiz.trt.compounds||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
-function wizSetTRTFreq(id,v){var c=(_wiz.trt.compounds||[]).find(function(c){return c.id===id;});if(c){c.freqVal=parseInt(v)||1;_refreshTRTGuide(id,c.freqVal,c.freqUnit,c.dose);}}
-function wizSetTRTFreqUnit(id,v){var c=(_wiz.trt.compounds||[]).find(function(c){return c.id===id;});if(c){c.freqUnit=v;_refreshTRTGuide(id,c.freqVal,c.freqUnit,c.dose);}}
-function wizSetTRTDays(id,di){var c=(_wiz.trt.compounds||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1)c.days.splice(idx,1);else c.days.push(di);c.days.sort(function(a,b){return a-b;});wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
-function editSetTRTDays(id,di){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1)c.days.splice(idx,1);else c.days.push(di);c.days.sort(function(a,b){return a-b;});_collectEditInputs();renderStackEditor();}
 function editToggleEnhancedCompound(id){
   // The gate is enforced HERE as well as in the rendering, because the rendering is a
   // presentation and this is the thing that changes the protocol. The locked cards do

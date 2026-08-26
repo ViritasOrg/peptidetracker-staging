@@ -6620,8 +6620,21 @@ console.log('\n── Source-code structural assertions ────────
 
   // _refreshTRTGuide: TRT guide highlight updates when frequency changes
   check('source: _refreshTRTGuide function defined', tsJs.includes('function _refreshTRTGuide('));
-  check('source: wizSetTRTFreq calls _refreshTRTGuide', (function(){var m=tsJs.match(/function wizSetTRTFreq\([\s\S]{0,200}/);return m&&m[0].includes('_refreshTRTGuide');})());
-  check('source: wizSetTRTFreqUnit calls _refreshTRTGuide', (function(){var m=tsJs.match(/function wizSetTRTFreqUnit\([\s\S]{0,200}/);return m&&m[0].includes('_refreshTRTGuide');})());
+  // The per-tier day/frequency handlers the shared control replaced. Verified dead
+  // before removal — no dynamic dispatch anywhere in the app, and none of the 16
+  // rendered schedule surfaces emitted them. Pinned so they cannot come back as
+  // orphans if someone reintroduces a per-tier picker without wiring it up.
+  ['editToggleDay','wizToggleDay','editSetTRTDays','wizSetTRTDays','wizSetTRTFreq','wizSetTRTFreqUnit']
+    .forEach(function(fn){
+      check('  …'+fn+' is gone, not orphaned', !tsJs.includes('function '+fn+'('));
+    });
+  // wizSetTRTFreq / wizSetTRTFreqUnit were removed once the shared schedule control
+  // replaced the per-tier handlers (2026-08-26). Both surfaces now go through
+  // trtSetFreqVal / trtSetFreqUnit, asserted below — trtSetFreqVal refreshes the guide
+  // in place (it must not re-render, or the input being typed into loses its caret),
+  // while trtSetFreqUnit re-renders the whole panel and the guide comes with it.
+  check('source: trtSetFreqUnit re-renders rather than refreshing in place',
+    (function(){var m=tsJs.match(/function trtSetFreqUnit\([\s\S]{0,300}/);return m&&m[0].includes('_trtRerender');})());
   // The editor's inline freqVal handler moved into trtSetFreqVal when the schedule
   // control was shared across tiers (2026-08-26), so the guide refresh is asserted
   // where it now lives rather than by scanning _renderEditTRT's source window.
