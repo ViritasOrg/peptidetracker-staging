@@ -4374,6 +4374,135 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     check('the female step pre-selects nothing', (G._wiz.enhanced.compounds||[]).length===0);
   }
 
+
+  // ── Ester transitions: two esters, per-compound windows, TRT dose ramps ────
+  // Switching Nebido → Test E means running both for a while. The PK engine already
+  // summed mixed esters and _genInjBatches already read per-compound start/end dates;
+  // what was missing was that ramps did not apply to TRT, so a tapered incoming ester
+  // generated its FLAT dose and the taper was silently ignored.
+  {
+    const transProto = () => ({
+      id:'p-trans', cycle_start:'2026-09-01', end_date:'2026-11-24', peptides:[],
+      trt:{enabled:true,compounds:[
+        {id:'nebido',name:'Nebido',dose:'1000',unit:'mg',freqVal:14,freqUnit:'days',
+         end_date:'2026-09-15'},
+        {id:'enanthate',name:'Testosterone Enanthate',dose:'100',unit:'mg',days:[1,4],
+         start_date:'2026-09-29',
+         dose_phases:[{w:4,d:'40',u:'mg'},{w:6,d:'70',u:'mg'},{w:8,d:'100',u:'mg'}]},
+      ]}, enhanced:{}
+    });
+    const byId = (bs,id) => (bs.find(b=>b.compound_id===id)||{entries:[]}).entries;
+    const B = G._genInjBatches(transProto(),'c1',null)||[];
+
+    // Both esters generate. The generator dedups by MOLECULE, so two different esters
+    // must not suppress each other — that guard exists to stop ONE molecule being
+    // scheduled twice, not to stop a transition.
+    check('two esters both generate in one protocol',
+      byId(B,'nebido').length>0 && byId(B,'enanthate').length>0);
+
+    // The outgoing ester stops at its own end date, before the protocol's.
+    check('  …the outgoing ester stops at its own end_date',
+      byId(B,'nebido').every(e=>e.date<='2026-09-15'));
+    check('  …and not at the protocol end date',
+      byId(B,'nebido').every(e=>e.date<'2026-11-24'));
+
+    // The incoming ester waits for its own start date.
+    check('  …the incoming ester waits for its own start_date',
+      byId(B,'enanthate').every(e=>e.date>='2026-09-29'));
+
+    // The ramp actually steps. Week is counted from PROTOCOL start, which is what the
+    // UI copy tells the user.
+    const enh = byId(B,'enanthate');
+    check('  …and the incoming dose ramps rather than starting flat',
+      enh[0].dose==='40' && enh[enh.length-1].dose==='100');
+    check('  …stepping at the weeks configured', (function(){
+      const at = d => (enh.find(e=>e.date===d)||{}).dose;
+      return at('2026-10-01')==='40' && at('2026-10-15')==='70' && at('2026-10-29')==='100';
+    })());
+
+    // WITHOUT dose_phases nothing changes — the flat dose still generates. A ramp that
+    // is off must be indistinguishable from one that never existed.
+    const flat = transProto();
+    delete flat.trt.compounds[1].dose_phases;
+    check('  …while a compound with no ramp keeps its flat dose',
+      byId(G._genInjBatches(flat,'c1',null)||[],'enanthate').every(e=>e.dose==='100'));
+
+    // A RAMP PHASE MAY BE A RATE, exactly like the flat dose field. Converting one and
+    // not the other would make the ramp silently mean something different from the
+    // field above it — the 2026-08-19 "100mg every 2 days generated 28mg" class of bug.
+    const rate = transProto();
+    rate.trt.compounds[1].unit='mg/week';
+    rate.trt.compounds[1].dose_phases=[{w:4,d:'140',u:'mg/week'}];
+    const rEnh = byId(G._genInjBatches(rate,'c1',null)||[],'enanthate');
+    check('  …and a ramp phase written as a RATE is converted per injection',
+      rEnh.length>0 && rEnh.every(e=>e.unit==='mg' && e.dose!=='140'));
+
+    // An inverted window generates nothing. The editor warns; the generator must not
+    // invent entries to paper over it.
+    const inv = transProto();
+    inv.trt.compounds[1].start_date='2026-11-01';
+    inv.trt.compounds[1].end_date='2026-10-01';
+    check('  …and an inverted window generates nothing rather than guessing',
+      byId(G._genInjBatches(inv,'c1',null)||[],'enanthate').length===0);
+
+    // The editor handlers.
+    G._editBuf = {trt:{enabled:true,compounds:[{id:'enanthate',name:'Test E',dose:'100',unit:'mg'}]}};
+    if(typeof G._collectEditInputs!=='function')G._collectEditInputs=function(){};
+    if(typeof G.renderStackEditor!=='function')G.renderStackEditor=function(){};
+    G.editToggleTRTRamp('enanthate');
+    check('editToggleTRTRamp seeds week 0 from the flat dose', (function(){
+      const ph=G._editBuf.trt.compounds[0].dose_phases;
+      return ph && ph.length===1 && ph[0].w===0 && ph[0].d==='100' && ph[0].u==='mg';
+    })(), 'a ramp must not silently change what is already scheduled');
+    G.editAddTRTPhase('enanthate');
+    check('  …and adding a phase advances the week',
+      G._editBuf.trt.compounds[0].dose_phases[1].w===2);
+    G.editToggleTRTRamp('enanthate');
+    check('  …toggling off removes the ramp entirely',
+      G._editBuf.trt.compounds[0].dose_phases===undefined);
+    G.editSetTRTDate('enanthate','start_date','2026-09-29');
+    check('editSetTRTDate writes the window', G._editBuf.trt.compounds[0].start_date==='2026-09-29');
+    G.editSetTRTDate('enanthate','start_date','');
+    check('  …and clearing it removes the key rather than storing an empty string',
+      !('start_date' in G._editBuf.trt.compounds[0]));
+
+    // SCOPE. The wizard and the editor render TRT compounds through two parallel code
+    // paths; one renderer emitting the right handler names for each is what stops them
+    // drifting apart. Each surface's markup must call ITS OWN scope, never the other's.
+    const comp={id:'enanthate',name:'Test E',dose:'100',unit:'mg',
+                start_date:'2026-09-29',dose_phases:[{w:4,d:'40',u:'mg'}]};
+    const eHtml=G._renderTRTTransition({id:'enanthate'},comp,'edit');
+    const wHtml=G._renderTRTTransition({id:'enanthate'},comp,'wiz');
+    check('the transition panel renders for the editor scope', /trtSetDate\('edit'/.test(eHtml));
+    check('  …and for the wizard scope',                        /trtSetDate\('wiz'/.test(wHtml));
+    check('  …with neither leaking the other\'s scope',
+      !/'wiz'/.test(eHtml) && !/'edit'/.test(wHtml));
+    check('  …both offering the window and the ramp',
+      ['Transition window','Dose ramp','trtToggleRamp','trtAddPhase','trtRemovePhase','trtSetPhase']
+        .every(k=>eHtml.includes(k)&&wHtml.includes(k)));
+
+    // The flat Dose field is IGNORED while a ramp is on. Saying so is the whole guard
+    // against editing Dose and seeing nothing change.
+    check('  …and stating that the ramp overrides the Dose field',
+      /overrides the Dose field/.test(eHtml)&&/overrides the Dose field/.test(wHtml));
+
+    // An inverted window warns in the UI as well as generating nothing.
+    check('  …warning on an inverted window',
+      /End is before start/.test(G._renderTRTTransition({id:'x'},
+        {start_date:'2026-11-01',end_date:'2026-10-01'},'edit')));
+    check('  …and staying quiet on a valid one',
+      !/End is before start/.test(G._renderTRTTransition({id:'x'},
+        {start_date:'2026-10-01',end_date:'2026-11-01'},'edit')));
+
+    // The wizard scope writes to _wiz.trt, not _editBuf.trt.
+    G._wiz=G._wiz||{}; G._wiz.trt={enabled:true,compounds:[{id:'nebido',name:'Nebido',dose:'1000',unit:'mg'}]};
+    G.trtSetDate('wiz','nebido','end_date','2026-09-15');
+    check('the wizard scope writes to the wizard buffer',
+      G._wiz.trt.compounds[0].end_date==='2026-09-15');
+    check('  …and leaves the editor buffer alone',
+      !('end_date' in G._editBuf.trt.compounds[0]));
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -11247,7 +11376,8 @@ console.log('\n── Dose inputs: numeric keypad ──────────
   check('every text dose input declares inputmode="decimal"', _textDose.length===0,
     _textDose.length+' dose input(s) missing inputmode');
   const _withMode = _stackSrc.match(/class="dose-in" type="text" inputmode="decimal"/g) || [];
-  check('all 9 dose inputs are covered', _withMode.length===9, 'found '+_withMode.length);
+  // 10 since the TRT dose-ramp phase input (ester transitions) was added.
+  check('all 10 dose inputs are covered', _withMode.length===10, 'found '+_withMode.length);
 
   // The enhanced tier is where HGH actually lives, so pin its rendered markup directly.
   // ENHANCEMENT_COMPOUNDS is backend-fetched, so seed the HGH entry the editor looks up.
