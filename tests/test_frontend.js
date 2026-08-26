@@ -4503,6 +4503,131 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       !('end_date' in G._editBuf.trt.compounds[0]));
   }
 
+
+  // ── Auto on-ramp solver ───────────────────────────────────────────────────
+  // Generating a transition by hand means inverting a calibrated PK model against a
+  // decaying tail, week by week, then rounding to what a syringe can draw. These pin
+  // the parts that are easy to get subtly wrong and impossible to eyeball.
+  {
+    const mkHist = (n, everyDays, mg, lastDate) => {
+      const out=[], last=new Date(lastDate+'T12:00:00');
+      for(let i=0;i<n;i++){
+        const d=new Date(last.getTime()-i*everyDays*86400000);
+        out.push({compId:'nebido', doseMg:String(mg),
+          date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});
+      }
+      return out;
+    };
+
+    // Syringe quantisation. A dose the user cannot draw is not an instruction.
+    check('_tcSolveSnap rounds to whole syringe steps',
+      G._tcSolveSnap(37, 25)===25 && G._tcSolveSnap(38, 25)===50 && G._tcSolveSnap(0, 25)===0);
+    check('  …and falls back to 0.1 mg when no step is given',
+      G._tcSolveSnap(37.44, 0)===37.4);
+
+    // Cadence expansion has to match how _genInjBatches actually schedules: weekday
+    // sets for day-based dosing, fixed intervals otherwise.
+    const wk = G._tcSolveDates({days:[1,4]}, '2026-09-01', 2);
+    check('_tcSolveDates expands a weekday cadence', wk.length===4,
+      'twice weekly over 2 weeks = 4');
+    check('  …on the requested weekdays only', wk.every(d=>d.getDay()===1||d.getDay()===4));
+    const iv = G._tcSolveDates({freqVal:2,freqUnit:'days'}, '2026-09-01', 2);
+    check('  …and an interval cadence steps by its interval',
+      iv.length===7 && (iv[1]-iv[0])===2*86400000);
+
+    // THE CALIBRATION GUARD. TT_base is solved as TT_at_draw * P / total[anchorDay],
+    // so a candidate injection at or before the anchor moves the calibration instead
+    // of the curve and the solve silently converges on nonsense. This is the single
+    // most dangerous way for the feature to be wrong, because it LOOKS like it worked.
+    const hist = mkHist(60, 2, 100, '2026-08-26');
+    check('the solver refuses to start on or before the last logged injection',
+      /start the new ester after it/.test(
+        G._tcSolveAnchorGuard({history:hist, startDate:'2026-08-20'})));
+    check('  …and is quiet when the new ester starts after it',
+      G._tcSolveAnchorGuard({history:hist, startDate:'2026-08-27'})==='');
+    check('  …and says so when there is no history to calibrate against',
+      /nothing to calibrate/.test(G._tcSolveAnchorGuard({history:[], startDate:'2026-08-27'})));
+
+    // A real solve, calibrated the way the app would be.
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    const sol = G.tcSolveTransition({
+      history:hist, incomingId:'enanthate', startDate:'2026-08-27',
+      targetPmol:1300, concMgPerMl:100, stepMl:0.1, weeks:12
+    });
+    check('tcSolveTransition returns a schedule', !!(sol && sol.best && sol.dose_phases.length));
+    check('  …choosing a cadence the generator can actually schedule', (function(){
+      const c=sol.best.cadence;
+      return !!((c.days&&c.days.length) || (c.freqVal>0&&c.freqUnit));
+    })());
+    check('  …with every dose landing on a whole 0.1 ml step', (function(){
+      const step=100*0.1;
+      return sol.best.doses.every(d=>Math.abs(d/step-Math.round(d/step))<1e-6);
+    })());
+    check('  …holding the target it was given', (function(){
+      const tail=sol.best.weekly.slice(-4);
+      return tail.every(w=>Math.abs(w.mean-1300)/1300 < 0.15);
+    })(), 'settled weeks: '+sol.best.weekly.slice(-4).map(w=>Math.round(w.mean)).join(','));
+
+    // The ramp must RISE as the outgoing tail decays — that is the whole mechanism.
+    check('  …ramping up as the outgoing ester clears',
+      sol.dose_phases.length>1 &&
+      parseFloat(sol.dose_phases[sol.dose_phases.length-1].d) > parseFloat(sol.dose_phases[0].d),
+      sol.dose_phases.map(p=>'w'+p.w+':'+p.d).join(' '));
+
+    // Phases are a STEP FUNCTION: one entry per change, never one per week, or the two
+    // or three real steps are buried in a wall of identical rows.
+    check('  …emitting a phase only where the dose changes', (function(){
+      for(let i=1;i<sol.dose_phases.length;i++)
+        if(sol.dose_phases[i].d===sol.dose_phases[i-1].d) return false;
+      return true;
+    })());
+
+    // De-chatter: snapping makes the answer wobble one step where the continuous
+    // solution sits near a boundary. Stepping a dose down and back up for no reason is
+    // how a plan stops being followed.
+    check('  …with no one-step down-and-back-up chatter', (function(){
+      const d=sol.best.doses;
+      for(let i=1;i<d.length-1;i++) if(d[i-1]===d[i+1]&&d[i]!==d[i-1]) return false;
+      return true;
+    })(), sol.best.doses.join(','));
+
+    // The vial can be the limiting factor, and it is invisible unless stated.
+    const coarse = G.tcSolveTransition({
+      history:hist, incomingId:'enanthate', startDate:'2026-08-27',
+      targetPmol:1300, concMgPerMl:250, stepMl:0.1, weeks:12
+    });
+    check('a coarse vial is reported as the limit, not hidden',
+      (coarse.notes||[]).some(n=>/that is the vial, not the schedule/.test(n)));
+    check('  …naming the finer concentration the catalogue actually lists',
+      (coarse.notes||[]).some(n=>/100 mg\/ml vial/.test(n)));
+
+    // Above the healthy young-male ceiling the app already has copy for this, and the
+    // solver still computes what was asked. It solves for the SCHEDULE, never the TARGET.
+    G._FT_REF={ceiling_pmol_l:804, above_ceiling_note:'No trial has measured anyone at this level.'};
+    const high = G.tcSolveTransition({
+      history:hist, incomingId:'enanthate', startDate:'2026-08-27',
+      targetPmol:1300, concMgPerMl:100, stepMl:0.1, weeks:8
+    });
+    check('a target above the reference ceiling is flagged, not refused',
+      !!high.best && (high.notes||[]).some(n=>/above the top of the healthy/.test(n)));
+
+    // Applying the answer must write CADENCE AND DOSE — the same mg on a different
+    // interval is a different curve, so a ramp without its cadence is half an answer.
+    G._editBuf={trt:{enabled:true,compounds:[{id:'enanthate',name:'Test E',dose:'100',unit:'mg'}]}};
+    if(typeof G._collectEditInputs!=='function')G._collectEditInputs=function(){};
+    if(typeof G.renderStackEditor!=='function')G.renderStackEditor=function(){};
+    G._trtSolveState={enanthate:{target:'1300',conc:'100',weeks:12,running:false,result:sol,error:''}};
+    G.trtSolveApply('edit','enanthate');
+    const applied=G._editBuf.trt.compounds[0];
+    check('trtSolveApply writes the ramp', !!(applied.dose_phases&&applied.dose_phases.length));
+    check('  …and the cadence alongside it',
+      !!((applied.days&&applied.days.length)||(applied.freqVal>0)));
+    check('  …leaving the flat dose on the maintenance dose, not the old value',
+      applied.dose===sol.dose_phases[sol.dose_phases.length-1].d, applied.dose);
+    check('  …and clearing the result so the panel does not offer a stale apply',
+      G._trtSolveState.enanthate.result===null);
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -11376,8 +11501,9 @@ console.log('\n── Dose inputs: numeric keypad ──────────
   check('every text dose input declares inputmode="decimal"', _textDose.length===0,
     _textDose.length+' dose input(s) missing inputmode');
   const _withMode = _stackSrc.match(/class="dose-in" type="text" inputmode="decimal"/g) || [];
-  // 10 since the TRT dose-ramp phase input (ester transitions) was added.
-  check('all 10 dose inputs are covered', _withMode.length===10, 'found '+_withMode.length);
+  // 11: +1 for the TRT dose-ramp phase input and +1 for the auto on-ramp target
+  // field, both added with ester transitions.
+  check('all 11 dose inputs are covered', _withMode.length===11, 'found '+_withMode.length);
 
   // The enhanced tier is where HGH actually lives, so pin its rendered markup directly.
   // ENHANCEMENT_COMPOUNDS is backend-fetched, so seed the HGH entry the editor looks up.
