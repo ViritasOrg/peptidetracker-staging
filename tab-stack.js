@@ -705,6 +705,12 @@ function _trtComps(scope){
 function _trtComp(scope,id){
   return _trtComps(scope).find(function(c){return c&&c.id===id;});
 }
+// The protocol's own start, for whichever surface is being edited.
+function _scopeCycleStart(scope){
+  var box=(scope==='wiz')?(typeof _wiz!=='undefined'&&_wiz)
+                         :(typeof _editBuf!=='undefined'&&_editBuf);
+  return (box&&box.cycle_start)||'';
+}
 // Re-render whichever surface asked. The editor also has to re-collect its DOM inputs
 // first or an in-progress dose edit is lost by the redraw.
 function _trtRerender(scope){
@@ -979,8 +985,30 @@ function trtSolveApply(scope,id,which){
                 if(p.pattern&&p.pattern.length)e.pattern=p.pattern.slice();
                 return e;
               });
+  // ⚠️ TRANSLATE THE RAMP INTO THE PROTOCOL'S WEEK NUMBERING.
+  // dose_phases are read by the generator as weeks from the PROTOCOL's cycle_start —
+  // that is the established contract and what the ramp editor's copy tells the user.
+  // The solver numbers its phases from the ESTER's own start date, because that is the
+  // only origin the transition means anything in. For a compound added partway through
+  // a running protocol those differ, and the ramp lands at the wrong offset.
+  //
+  // Measured on the reported transition — protocol running since 26 Jun, Test E starting
+  // 28 Aug, a nine-week gap:
+  //   intended  188 188 188 188 188 200 225 225 238 250 263 275 275 275 288 288
+  //   actual    250 263 275 275 275 288 288 288 288 288 288 288 288 288 288 288
+  // The ramp was spent in five weeks and then pinned at its maximum, so it opened above
+  // target and had nothing left to rise with when the outgoing ester cleared — the level
+  // decayed for the rest of the plan instead of holding.
+  var _csRaw=_scopeCycleStart(scope);
+  var _offW=0;
+  if(_csRaw&&comp.start_date){
+    var _cs=parseLocalDate(_csRaw), _sd=parseLocalDate(comp.start_date);
+    if(_cs&&_sd&&!isNaN(_cs.getTime())&&!isNaN(_sd.getTime()))
+      _offW=Math.round((_sd-_cs)/604800000);
+    if(!(_offW>0))_offW=0;
+  }
   comp.dose_phases=phases.map(function(p){
-    var e={w:p.w,d:p.d,u:p.u};
+    var e={w:(p.w||0)+_offW,d:p.d,u:p.u};
     if(p.iv>0)e.iv=p.iv;      // per-phase interval survives the round trip
     if(p.pattern&&p.pattern.length)e.pattern=p.pattern.slice();   // and the day pattern
     return e;
