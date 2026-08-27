@@ -5168,6 +5168,95 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     })());
   }
 
+  // ── THE OUTGOING ESTER'S STILL-SCHEDULED DOSES ARE PART OF THE PROBLEM ─────
+  // Reported from the field: an on-ramp to a 1400 pmol/L target produced a plasma curve
+  // that ran to 2463 pmol/L and then fell away. The solver modelled the outgoing ester
+  // as a tail decaying from the LOGGED history alone, so it never saw that the protocol
+  // still had Nebido booked in every two days. It sized Test E for a gap that never
+  // opened; the curve — which does read the scheduled rows — stacked both.
+  // Measured before the fix: plotted weekly means 1231-2315, exposure peak 2326.
+  {
+    const mk=(n,every,mg,last,id)=>{const o=[],L=new Date(last+'T12:00:00');
+      for(let i=0;i<n;i++){const d=new Date(L.getTime()-i*every*86400000);
+        o.push({compId:id||'nebido',doseMg:String(mg),
+          date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+      return o;};
+    const fwd=(n,every,mg,first,id)=>{const o=[],F=new Date(first+'T12:00:00');
+      for(let i=0;i<n;i++){const d=new Date(F.getTime()+i*every*86400000);
+        o.push({compId:id||'nebido',doseMg:String(mg),
+          date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+      return o;};
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='915'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    // Calibrate off a real draw, as the reporting profile is. Without a bloodwork anchor
+    // the curve falls back to a day-0 anchor and the solve is poorly conditioned for
+    // reasons that have nothing to do with the scheduled doses under test here.
+    const _bwSave=G._tcBwEntries;
+    G._tcBwEntries=[{date:'2026-08-18',free_t:'915',total_t:'32',shbg:'25',unit:'pmol/L'}];
+    const hist=mk(33,2,100,'2026-08-26');
+    const opts={incomingId:'enanthate',startDate:'2026-08-28',targetPmol:1400,
+                concMgPerMl:250,stepMl:0.05,weeks:16};
+    const bare  = G.tcSolveTransition(Object.assign({history:hist},opts));
+    const withSched = G.tcSolveTransition(Object.assign(
+      {history:hist, scheduled:fwd(35,2,100,'2026-08-28')},opts));
+
+    check('a solve with the outgoing ester still scheduled still returns a plan',
+      !!(withSched && withSched.best && withSched.dose_phases.length));
+    // The whole point: knowing more drug is coming, it asks for LESS.
+    const mgOf=r=>r.best.phases.reduce((a,p)=>a+p.perWeek,0)/r.best.phases.length;
+    check('  …and it asks for less new ester than when it assumes the old one stopped',
+      mgOf(withSched) < mgOf(bare),
+      'withSched='+Math.round(mgOf(withSched))+' bare='+Math.round(mgOf(bare)));
+    // And the level it predicts actually holds the target, rather than stacking on top.
+    // Measured: once the incoming ester has loaded, every week sits inside ±5% of 1400.
+    // Before the fix the same inputs plotted 1231-2315 with a 2326 peak.
+    check('  …holding the target instead of stacking on top of the scheduled doses',
+      (function(){
+        const w=withSched.best.weekly.slice(withSched.best.settleWeeks).map(x=>x.mean);
+        return Math.max.apply(null,w) < 1400*1.05 && Math.min.apply(null,w) > 1400*0.95;
+      })(), withSched.best.weekly.map(x=>Math.round(x.mean)).join(' '));
+    // Scheduled rows are FUTURE-dated. Merging them into `history` would push the last
+    // history date past the start date and the anchor guard would refuse every solve.
+    check('  …and future scheduled rows do not trip the anchor guard',
+      !(withSched.notes||[]).some(n=>/starts on or before the last logged injection/.test(n)));
+    // Absent the field, nothing changes for everyone who has genuinely stopped.
+    check('  …while a solve with no scheduled doses is unchanged',
+      JSON.stringify(bare.dose_phases)===JSON.stringify(
+        G.tcSolveTransition(Object.assign({history:hist,scheduled:[]},opts)).dose_phases));
+
+    // ── AN OVERSHOOT INSIDE THE SETTLING WINDOW IS STILL THE SCHEDULE'S FAULT ──
+    // The settling weeks were skipped entirely, which also excused every overshoot in
+    // them. Undershoot there is unavoidable — the incoming ester has not accumulated.
+    // Overshoot never is: dosing less is always available. The reported plan peaked
+    // ~13% over target in week 1 and reported `worst` 6%.
+    check('the headline counts an overshoot during the settling weeks', (function(){
+      const b=withSched.best, sw=b.settleWeeks;
+      if(!(sw>=1)) return false;
+      let over=0;
+      for(let i=0;i<sw;i++){const d=b.weekly[i].peak-1400; if(d>over)over=d;}
+      return over<=0 || b.worst >= (over/1400)-1e-6;
+    })(), 'worst='+Math.round(withSched.best.worst*100)+'% settleWeeks='+withSched.best.settleWeeks);
+    // …but it must NOT count the unavoidable undershoot there, or the settling-window
+    // change would undo the thing it was introduced for.
+    check('  …but not the unavoidable undershoot in those same weeks', (function(){
+      const b=bare.best, sw=b.settleWeeks;
+      let under=0;
+      for(let i=0;i<sw;i++){const d=1400-b.weekly[i].trough; if(d>under)under=d;}
+      return under<=0 || b.worst < (under/1400)-1e-6;
+    })(), 'worst='+Math.round(bare.best.worst*100)+'%');
+    G._tcBwEntries=_bwSave;
+  }
+
+  // The on-ramp must read the scheduled doses from the same place the curve does, and
+  // must exclude the compound it is solving for — those rows are the plan it replaces.
+  {
+    const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+    const m=src.match(/async function trtSolveRun[\s\S]*?\n\}/);
+    check('trtSolveRun feeds the solver the protocol’s scheduled injections',
+      !!(m && /_tcProtocolInjections\(\)/.test(m[0]) && /scheduled:sched/.test(m[0])));
+    check('  …skipping the compound being solved for',
+      !!(m && /if\(eid===_inc\)return;/.test(m[0])));
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });

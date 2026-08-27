@@ -902,8 +902,29 @@ async function trtSolveRun(scope,id){
     // of the event loop is enough for the render to land first.
     await new Promise(function(r){setTimeout(r,0);});
     var start=comp.start_date||(typeof dateKey==='function'?dateKey(new Date(NOW.getTime()+86400000)):'');
+    var _inc=(typeof _canonCompoundId==='function')?_canonCompoundId(id):id;
+    // ── AND WHAT IS STILL SCHEDULED OF THE OUTGOING ESTER ────────────────────
+    // The tail above is the logged past. It is not the whole picture: if the protocol
+    // still has the outgoing ester booked in — "more Nebido to come" — that drug is
+    // going in whatever the solve says, and the ramp has to be sized on top of it.
+    // Without this the solver sized Test E for a gap the continuing Nebido never left
+    // open, and the plotted curve ran to 2326 pmol/L against a 1400 target.
+    //
+    // Everything EXCEPT the compound being solved for: its own currently-scheduled rows
+    // are the plan this solve is about to replace, so counting them would have the ramp
+    // stack on top of itself. Same source the plasma curve reads, so the solve and the
+    // chart it is checked against finally see the same future.
+    var sched=[];
+    if(typeof _tcProtocolInjections==='function'){
+      (_tcProtocolInjections()||[]).forEach(function(e){
+        if(!e||!e.date||!(parseDec(e.doseMg)>0))return;
+        var eid=(typeof _tcCanonCompId==='function')?_tcCanonCompId(e.compId):e.compId;
+        if(eid===_inc)return;
+        sched.push({compId:eid,doseMg:String(e.doseMg),date:e.date});
+      });
+    }
     var res=(typeof tcSolveTransition==='function')?tcSolveTransition({
-      history:hist, incomingId:(typeof _canonCompoundId==='function'?_canonCompoundId(id):id),
+      history:hist, scheduled:sched, incomingId:_inc,
       startDate:start, targetPmol:st.target,
       concMgPerMl:parseDec(st.conc)||_trtDefaultConc(id),
       stepMl:parseDec(st.step)||0.05, weeks:parseInt(st.weeks,10)||16
