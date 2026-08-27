@@ -2595,10 +2595,20 @@ function _tcMonotoneShape(doses, peakWeek){
   return out.map(function(d){return d>0?d:0;});
 }
 
+// Everything already on board or already committed, before this candidate ramp adds
+// anything: the logged past plus whatever the protocol still has scheduled for the
+// OTHER testosterone compounds. Every evaluator starts from this, so all three model
+// the same world.
+function _tcSolveBaseEvents(ctx){
+  return (ctx.scheduled && ctx.scheduled.length)
+    ? ctx.history.concat(ctx.scheduled)
+    : ctx.history;
+}
+
 // Per-week mean free T for a candidate ramp. `doses[w]` is mg per injection in week w.
 function _tcSolveEvaluate(ctx, cad, dates, doses){
   var startMs=new Date(ctx.startDate+'T12:00:00').getTime();
-  var evts=ctx.history.slice();
+  var evts=_tcSolveBaseEvents(ctx).slice();
   dates.forEach(function(d){
     var w=Math.floor((d.getTime()-startMs)/(7*86400000));
     var mg=doses[w]||0;
@@ -2719,7 +2729,7 @@ function _tcSolveDatesPhased(startDate, weeks, ivByWeek){
 }
 function _tcSolveEvaluatePhased(ctx, sched, mgByWeek){
   var startMs=new Date(ctx.startDate+'T12:00:00').getTime();
-  var evts=ctx.history.slice();
+  var evts=_tcSolveBaseEvents(ctx).slice();
   sched.forEach(function(s){
     var wk=Math.floor((s.d.getTime()-startMs)/(7*86400000));
     var mg=mgByWeek[wk]||0;
@@ -2824,16 +2834,32 @@ function _tcSolveVariable(ctx, opts){
   }
   var weekly=fin.weekly.map(function(x,i){return {week:i,mean:x.mean,peak:x.peak,trough:x.trough,
                                                  mg:mgWk[i], iv:ivWk[i]};});
-  var from=(W>1)?1:0, rp=0,rn=0,err=0,en=0,wLo=Infinity,wHi=0,worst=0;
+  // ⚠️ ALL THREE SOLVERS MUST SCORE ON THE SAME WINDOW.
+  // This skipped week 0 only, while the fixed and daily paths skip a settling window
+  // derived from the incoming ester (three weeks for enanthate). `worst` was therefore
+  // measured over a different span for each solver — and the three are ranked directly
+  // against each other on it, so the variable path was carrying two extra of the
+  // hardest weeks and losing for it. The window is a property of the ester, not of
+  // which solver happened to produce the plan.
+  var _vi=_tcCompInfo(ctx.incomingId);
+  var settleWeeks=Math.min(W-1, Math.max(1, Math.ceil(4*(_vi.halfLifeDays||3)/7)));
+  var from=(W>1)?settleWeeks:0, rp=0,rn=0,err=0,en=0,wLo=Infinity,wHi=0,worst=0;
   for(var z=from;z<weekly.length;z++){
     if(weekly[z].mean>0){ rp+=(weekly[z].peak-weekly[z].trough)/weekly[z].mean; rn++; }
     err+=Math.abs(weekly[z].mean-ctx.targetPmol); en++;
     if(weekly[z].mean<wLo)wLo=weekly[z].mean;
     if(weekly[z].mean>wHi)wHi=weekly[z].mean;
-    var dh=Math.abs(weekly[z].peak-ctx.targetPmol), dl=Math.abs(weekly[z].trough-ctx.targetPmol);
-    if((dh>dl?dh:dl)>worst)worst=(dh>dl?dh:dl);
+    var dh=weekly[z].peak-ctx.targetPmol, dl=ctx.targetPmol-weekly[z].trough;
+    var dv=(dh>dl?dh:dl);
+    if(dv>worst)worst=dv;
   }
-  return {cadence:{key:'variable', label:'Variable interval', variable:true},
+  // …and, as in the other two, an overshoot inside the settling window is scored even
+  // though the undershoot there is not.
+  for(var zv=0;zv<from&&zv<weekly.length;zv++){
+    var ov=weekly[zv].peak-ctx.targetPmol;
+    if(ov>worst)worst=ov;
+  }
+  return {cadence:{key:'variable', label:'Variable interval', variable:true}, settleWeeks:settleWeeks,
           phases:phases, weekly:weekly, doses:mgWk, intervals:ivWk,
           ripple:rn?rp/rn:Infinity,
           drift:(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity,
@@ -2850,7 +2876,7 @@ function _tcSolveVariable(ctx, opts){
 // the real model and won, making the guard look broken.
 function _tcSolveEvaluateDaily(ctx, days, mgByDay){
   var startMs=new Date(ctx.startDate+'T12:00:00').getTime();
-  var evts=ctx.history.slice();
+  var evts=_tcSolveBaseEvents(ctx).slice();
   for(var k=0;k<days.length;k++){
     if(mgByDay[k]>0) evts.push({compId:ctx.incomingId, doseMg:String(mgByDay[k]), date:_tcSolveDayKey(days[k])});
   }
@@ -2983,8 +3009,15 @@ function _tcSolveDailyDither(ctx, opts){
     if(x.mean>0){ rp+=(x.peak-x.trough)/x.mean; rn++; }
     err+=Math.abs(x.mean-ctx.targetPmol); en++;
     if(x.mean<wLo)wLo=x.mean; if(x.mean>wHi)wHi=x.mean;
-    var dh=Math.abs(x.peak-ctx.targetPmol), dl=Math.abs(x.trough-ctx.targetPmol);
-    if((dh>dl?dh:dl)>worst)worst=(dh>dl?dh:dl);
+    var dh=x.peak-ctx.targetPmol, dl=ctx.targetPmol-x.trough;
+    var dd=(dh>dl?dh:dl);
+    if(dd>worst)worst=dd;
+  }
+  // Same rule as the fixed scorer: an overshoot inside the settling window is a real
+  // defect of the schedule, so it is scored even though the weeks below target are not.
+  for(var zo=0;zo<from&&zo<fin.weekly.length;zo++){
+    var over=fin.weekly[zo].peak-ctx.targetPmol;
+    if(over>worst)worst=over;
   }
   return {cadence:{key:'daily-dither', label:'Daily, dose varies by day', dithered:true, days:null, freqVal:1, freqUnit:'days'},
           phases:phases, weekly:fin.weekly.map(function(x,i){return {week:i,mean:x.mean,peak:x.peak,trough:x.trough,mg:mg[i*7]};}),
@@ -3151,11 +3184,19 @@ function _tcSolveForCadence(ctx, cad, opts){
   // from target, peaks and troughs included, as a fraction of target. Ranking on it
   // stops the sum of two partial metrics from picking a cadence that is smooth in each
   // half and wrong overall.
+  // ⚠️ THE SETTLING WINDOW FORGIVES UNDERSHOOT ONLY.
+  // Excluding the settling weeks outright also excluded every OVERSHOOT in them, and
+  // those are not the same kind of event. An undershoot at the start is unavoidable —
+  // the incoming ester has not accumulated yet, and no schedule can conjure a level it
+  // has not built. An overshoot never is: dosing less is always available. Forgiving
+  // both is what let the ramp sit ~11%% above a 1400 target for its first three weeks
+  // and still score as a good fit, which is the "overshoots target badly" report.
+  // Above target during the settling window therefore counts in full; below it does not.
   var worst=0;
-  for(var wq=from; wq<weekly.length; wq++){
-    var dHi=Math.abs(weekly[wq].peak-ctx.targetPmol);
-    var dLo=Math.abs(weekly[wq].trough-ctx.targetPmol);
-    var d=(dHi>dLo?dHi:dLo);
+  for(var wq=0; wq<weekly.length; wq++){
+    var dHi=weekly[wq].peak-ctx.targetPmol;      // >0 when above target
+    var dLo=ctx.targetPmol-weekly[wq].trough;    // >0 when below target
+    var d=(wq<from)?dHi:(dHi>dLo?dHi:dLo);
     if(d>worst)worst=d;
   }
   worst=ctx.targetPmol>0?(worst/ctx.targetPmol):Infinity;
@@ -3202,6 +3243,23 @@ function tcSolveTransition(opts){
   opts=opts||{};
   var ctx={
     history:     (opts.history||[]).slice(),
+    // ── WHAT IS STILL SCHEDULED OF THE OUTGOING ESTER IS PART OF THE PROBLEM ──
+    // `history` is the LOGGED past, and it is right that a plan cannot masquerade as a
+    // record there. But the solve is about the FUTURE, and for the future a scheduled
+    // dose is the only information there is. Modelling the outgoing ester as a tail
+    // that decays to nothing, while the protocol goes on injecting it, solves against a
+    // fiction: the ramp is sized for a gap that never opens.
+    //
+    // Measured on the reported case — Nebido 100 mg E2D still scheduled, Test E ramped
+    // to a 1400 pmol/L target — the plotted curve ran 1662-2315 against a solve that
+    // predicted 1400, peaking at 2326, then fell away when the scheduled Nebido ran
+    // out. That is exactly the "overshoots badly and then still drops" shape.
+    //
+    // Kept SEPARATE from history rather than merged into it, because _tcSolveAnchorGuard
+    // reads the last history date to check the new ester starts after the calibration
+    // anchor. Merging future rows in would move that date into the future and refuse
+    // every solve.
+    scheduled:   (opts.scheduled||[]).slice(),
     incomingId:  opts.incomingId,
     startDate:   opts.startDate,
     targetPmol:  parseDec(opts.targetPmol)||0,
