@@ -899,20 +899,34 @@ async function trtSolveRun(scope,id){
 // Write the solved answer in. CADENCE AND DOSE TOGETHER — a ramp without its cadence
 // is half an instruction, because the same mg on a different interval is a different
 // curve.
-function trtSolveApply(scope,id){
+// Apply ANY of the solved options, not only the auto-pick. "Cadence and draw are both
+// variables you need to use" — so the alternatives are shown with their numbers and each
+// one is applicable, rather than the app silently choosing and hiding the trade-off.
+// The trade-off is real and has no single right answer: shorter intervals cut the
+// within-week swing, longer ones give finer control of the WEEKLY milligrams (one
+// syringe step is spread over fewer injections), which is what tracks a decaying tail.
+function trtSolveApply(scope,id,which){
   var st=_trtSolveSt(id), comp=_trtComp(scope,id);
   if(!st.result||!comp)return;
-  var cad=st.result.best.cadence;
+  var pick=st.result.best;
+  if(which!=null&&which!=='best'){
+    var alt=(st.result.alternatives||[])[parseInt(which,10)];
+    if(alt)pick=alt;
+  }
+  var cad=pick.cadence;
+  st._applied=pick;
   // Set the MODE explicitly, not just the fields. Inference would read a solved
   // weekday answer on a Nebido row as interval (the legacy rule) and schedule
   // something the solver never proposed.
   if(cad.days){ comp.cadence='days'; comp.days=cad.days.slice(); }
   else { comp.cadence='interval'; comp.freqVal=cad.freqVal; comp.freqUnit=cad.freqUnit; }
-  comp.dose_phases=st.result.dose_phases.map(function(p){return {w:p.w,d:p.d,u:p.u};});
+  var phases=(pick===st.result.best)?st.result.dose_phases
+            :pick.phases.map(function(p){return {w:p.w,d:String(Math.round(p.mg*10)/10),u:'mg'};});
+  comp.dose_phases=phases.map(function(p){return {w:p.w,d:p.d,u:p.u};});
   comp.unit='mg';
   // Keep the flat dose in step with the maintenance dose, so turning the ramp OFF
   // later lands on the held dose rather than whatever was in the box beforehand.
-  var lastPh=st.result.dose_phases[st.result.dose_phases.length-1];
+  var lastPh=phases[phases.length-1];
   if(lastPh)comp.dose=String(lastPh.d);
   st.result=null;
   _trtRerender(scope);
@@ -953,7 +967,11 @@ function _renderTRTSolve(c,selData,scope){
       +' style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.5px;'+(st.running?'opacity:0.6;':'')+'">'
       +(st.running?'Solving…':'Generate on-ramp')+'</button>';
   if(st.error)h+='<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:8px 10px;margin-top:8px;font-size:11px;color:#f59e0b;line-height:1.5">'+_esc(st.error)+'</div>';
-  if(st.result&&st.result.best){
+  if(st.result&&st.result.degenerate&&!st.result.best){
+    h+='<div style="margin-top:10px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.5);border-radius:8px;padding:10px 12px;font-size:11px;color:#f59e0b;line-height:1.55">'
+      +(st.result.notes||[]).map(_esc).join('<br><br>')+'</div>';
+  }
+  else if(st.result&&st.result.best){
     var r=st.result, b=r.best;
     h+='<div style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent);border-radius:8px;padding:10px 12px">'
       +'<div style="font-size:12px;font-weight:700;color:var(--accent);margin-bottom:2px">'+_esc(b.cadence.label)+'</div>'
@@ -971,12 +989,23 @@ function _renderTRTSolve(c,selData,scope){
            +'</div>')
         : '')
       +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:4px">Ramp</div>'
-      +b.phases.map(function(ph){
-        return '<div style="display:flex;gap:8px;font-size:11px;color:var(--text);line-height:1.7">'
-          +'<span style="color:var(--muted2);min-width:44px">Wk '+ph.w+'</span>'
-          +'<span style="font-weight:700;color:var(--accent);min-width:60px">'+(Math.round(ph.mg*10)/10)+' mg</span>'
-          +'<span style="color:var(--muted2)">'+ph.ml.toFixed(1)+' ml</span></div>';
-      }).join('')
+      +(function(){
+        // WEEKLY MILLIGRAMS IS THE NUMBER THE USER REASONS IN. Per-injection mg alone
+        // hides that the same dose means a different weekly load at a different cadence,
+        // which is exactly the pair of variables being traded off here.
+        var ivd=(typeof _cadenceIntervalDays==='function')
+          ? _cadenceIntervalDays(b.cadence.days?{cadence:'days',days:b.cadence.days}
+                                                :{cadence:'interval',freqVal:b.cadence.freqVal,freqUnit:b.cadence.freqUnit})
+          : 1;
+        return b.phases.map(function(ph){
+          var perWk=ivd>0?(ph.mg*7/ivd):0;
+          return '<div style="display:flex;gap:8px;font-size:11px;color:var(--text);line-height:1.7">'
+            +'<span style="color:var(--muted2);min-width:44px">Wk '+ph.w+'</span>'
+            +'<span style="font-weight:700;color:var(--accent);min-width:56px">'+(Math.round(ph.mg*10)/10)+' mg</span>'
+            +'<span style="color:var(--muted2);min-width:52px">'+ph.ml.toFixed(2)+' ml</span>'
+            +'<span style="color:var(--muted2)">'+Math.round(perWk)+' mg/wk</span></div>';
+        }).join('');
+      })()
       +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:8px 0 4px">Predicted free T</div>'
       +'<div style="display:flex;flex-wrap:wrap;gap:3px">'
       +b.weekly.map(function(w){
@@ -987,8 +1016,27 @@ function _renderTRTSolve(c,selData,scope){
       +(r.notes||[]).map(function(n){
         return '<div style="font-size:10px;color:var(--muted2);line-height:1.5;margin-top:6px">ℹ '+_esc(n)+'</div>';
       }).join('')
-      +'<button onclick="'+q('trtSolveApply')+'" style="width:100%;margin-top:10px;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">Apply cadence + ramp</button>'
+      +'<button onclick="'+q('trtSolveApply',",'best'")+'" style="width:100%;margin-top:10px;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">Apply cadence + ramp</button>'
       +'</div>';
+    // THE TRADE-OFF IS THE USER'S TO MAKE. A shorter interval cuts the within-week
+    // swing; a longer one gives finer control of the weekly milligrams, because one
+    // syringe step is spread over fewer injections — and that is what tracks a decaying
+    // tail. There is no single right answer, so the others are shown with their numbers
+    // and each is applicable rather than hidden behind the auto-pick.
+    if((r.alternatives||[]).length){
+      h+='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:12px 0 4px">Other cadences</div>'
+        +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:6px">Shorter interval = steadier within the week. Longer interval = finer weekly-mg control, which tracks the outgoing ester better.</div>'
+        +r.alternatives.map(function(a,i){
+          return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:6px">'
+            +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+            +'<span style="font-size:12px;font-weight:700;color:var(--text)">'+_esc(a.cadence.label)+'</span>'
+            +'<span style="font-size:10px;color:var(--muted2)">worst '+Math.round(a.worst*100)+'% off · swing '+Math.round(a.ripple*100)+'%</span>'
+            +'</div>'
+            +'<div style="font-size:10px;color:var(--muted2);margin-top:3px">holds '+Math.round(a.lowPmol)+'–'+Math.round(a.highPmol)+' pmol/L</div>'
+            +'<button onclick="'+q('trtSolveApply',","+i)+'" style="margin-top:6px;background:none;border:1px solid var(--accent);color:var(--accent);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">Use this instead</button>'
+            +'</div>';
+        }).join('');
+    }
   }
   h+='</div>';
   return h;
