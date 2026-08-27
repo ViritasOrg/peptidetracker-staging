@@ -5115,6 +5115,59 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     })(), longEster&&longEster.best?longEster.best.cadence.label:'refused');
   }
 
+
+  // ── Typing must not tear out the field being typed into ───────────────────
+  // Reported 2026-08-27: "entering a target level hides the keyboard for each
+  // character entered". trtSolveSet re-rendered the whole panel from the input's
+  // oninput handler, which destroys the <input> and takes focus — and therefore the
+  // iOS keyboard — with it. wizSetDose already carries this exact lesson.
+  {
+    const realRerender=G._trtRerender;
+    let rendered=0; G._trtRerender=function(){ rendered++; };
+    G._trtSolveState={enanthate:{target:'',conc:'',weeks:16,step:'0.05',
+                                 running:false,result:null,error:''}};
+    '1400'.split('').forEach((ch,i)=>G.trtSolveSet('edit','enanthate','target','1400'.slice(0,i+1)));
+    check('typing a target does not re-render the panel', rendered===0, rendered+' re-renders');
+    check('  …and still stores what was typed', G._trtSolveState.enanthate.target==='1400');
+    G.trtSolveSet('edit','enanthate','weeks','12');
+    check('  …nor does typing a week count', rendered===0, rendered+' re-renders');
+
+    // The selects DO re-render — they change the "= N mg per step" line, and a select
+    // has already dismissed the keyboard by the time it fires.
+    G.trtSolveSet('edit','enanthate','conc','100');
+    check('a select still re-renders, to update the mg-per-step line', rendered===1, rendered);
+    G.trtSolveSet('edit','enanthate','step','0.025');
+    check('  …and so does the draw-volume select', rendered===2, rendered);
+    G._trtRerender=realRerender;
+
+    // A stale result is dropped through its own container, so the input survives.
+    const withRes={target:'1400',conc:'250',weeks:16,step:'0.05',running:false,error:'',
+      result:{target:1400,notes:[],alternatives:[],
+        best:{cadence:{label:'Every 2 days'},phases:[],weekly:[],ripple:0,drift:0,worst:0,
+              lowPmol:1300,highPmol:1500,stepPmol:0,stepMg:12.5}}};
+    G._trtSolveState={enanthate:withRes};
+    const html=G._renderTRTSolve({id:'enanthate'},{},'edit');
+    check('the result lives in a container that can be emptied in place',
+      /id="trt-solve-res-enanthate"/.test(html));
+    check('  …and the markup stays balanced with a result present', (function(){
+      const o=(html.match(/<div/g)||[]).length, c=(html.match(/<\/div>/g)||[]).length;
+      return o===c;
+    })());
+    check('  …and without one', (function(){
+      G._trtSolveState={enanthate:{target:'',conc:'',weeks:16,step:'0.05',running:false,result:null,error:''}};
+      const h2=G._renderTRTSolve({id:'enanthate'},{},'edit');
+      const o=(h2.match(/<div/g)||[]).length, c=(h2.match(/<\/div>/g)||[]).length;
+      return o===c && /id="trt-solve-res-enanthate"/.test(h2);
+    })());
+
+    // The step size is a control now, so the blurb must not name one.
+    check('the on-ramp blurb does not hardcode a step size', (function(){
+      const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+      const m=src.match(/Give a target free-T level[\s\S]{0,240}/);
+      return m && !/0\.1 ml steps/.test(m[0]);
+    })());
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
