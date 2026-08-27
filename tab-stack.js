@@ -918,11 +918,27 @@ function trtSolveApply(scope,id,which){
   // Set the MODE explicitly, not just the fields. Inference would read a solved
   // weekday answer on a Nebido row as interval (the legacy rule) and schedule
   // something the solver never proposed.
-  if(cad.days){ comp.cadence='days'; comp.days=cad.days.slice(); }
+  if(cad.variable){
+    // A variable-interval answer has no single cadence — each phase carries its own
+    // `iv`. The compound still needs a base cadence for any date the phases do not
+    // cover (and for the summary line), so it takes the first phase's interval.
+    comp.cadence='interval';
+    comp.freqVal=(pick.phases&&pick.phases[0]&&pick.phases[0].iv)||2;
+    comp.freqUnit='days';
+  }
+  else if(cad.days){ comp.cadence='days'; comp.days=cad.days.slice(); }
   else { comp.cadence='interval'; comp.freqVal=cad.freqVal; comp.freqUnit=cad.freqUnit; }
   var phases=(pick===st.result.best)?st.result.dose_phases
-            :pick.phases.map(function(p){return {w:p.w,d:String(Math.round(p.mg*10)/10),u:'mg'};});
-  comp.dose_phases=phases.map(function(p){return {w:p.w,d:p.d,u:p.u};});
+            :pick.phases.map(function(p){
+                var e={w:p.w,d:String(Math.round(p.mg*10)/10),u:'mg'};
+                if(p.iv>0)e.iv=p.iv;
+                return e;
+              });
+  comp.dose_phases=phases.map(function(p){
+    var e={w:p.w,d:p.d,u:p.u};
+    if(p.iv>0)e.iv=p.iv;      // per-phase interval survives the round trip
+    return e;
+  });
   comp.unit='mg';
   // Keep the flat dose in step with the maintenance dose, so turning the ramp OFF
   // later lands on the held dose rather than whatever was in the box beforehand.
@@ -998,9 +1014,13 @@ function _renderTRTSolve(c,selData,scope){
                                                 :{cadence:'interval',freqVal:b.cadence.freqVal,freqUnit:b.cadence.freqUnit})
           : 1;
         return b.phases.map(function(ph){
-          var perWk=ivd>0?(ph.mg*7/ivd):0;
-          return '<div style="display:flex;gap:8px;font-size:11px;color:var(--text);line-height:1.7">'
+          // A phase may carry its OWN interval now, so the row has to state it — the
+          // card's cadence line is only the default when a phase does not override it.
+          var iv=ph.iv>0?ph.iv:ivd;
+          var perWk=iv>0?(ph.mg*7/iv):0;
+          return '<div style="display:flex;gap:8px;font-size:11px;color:var(--text);line-height:1.7;flex-wrap:wrap">'
             +'<span style="color:var(--muted2);min-width:44px">Wk '+ph.w+'</span>'
+            +(ph.iv>0?('<span style="color:var(--accent2,#8ab4f8);min-width:40px">'+(ph.iv===1?'daily':'E'+ph.iv+'D')+'</span>'):'')
             +'<span style="font-weight:700;color:var(--accent);min-width:56px">'+(Math.round(ph.mg*10)/10)+' mg</span>'
             +'<span style="color:var(--muted2);min-width:52px">'+ph.ml.toFixed(2)+' ml</span>'
             +'<span style="color:var(--muted2)">'+Math.round(perWk)+' mg/wk</span></div>';
@@ -4255,15 +4275,60 @@ function _getProtocolCompoundIds(stack){
   return ids;
 }
 
-function _effectiveDoseAt(p,cycleStart,targetDate){
+// ── THE INJECTION INTERVAL IS NOT FIXED FOR A WHOLE PROTOCOL ────────────────
+// Henrik, 2026-08-27: "cadence doesn't have to be static for the period. If it makes
+// sense to start with very small daily injections for 6 days and then e2d up to e7d,
+// that is totally fine AND should probably mostly be due to ester used and also to
+// minimise unnecessary fluctuations in free T (since high peaks drives sides)."
+//
+// He is right and the single-cadence-per-compound rule was a limitation of this data
+// model, not of the pharmacology. Weekly load is dose ÷ interval, so the interval is
+// the second half of the dosing decision: a small weekly requirement needs a LONGER
+// interval for the per-injection dose to be drawable at all, and a large one needs a
+// SHORTER interval to keep the peak down — and peaks are what drive side effects.
+//
+// A phase may therefore carry `iv`, its own injection interval in days. Phases without
+// it fall back to the compound's own cadence, so nothing already saved changes.
+//
+// ⚠️ AN INTERVAL NEEDS AN ORIGIN, AND IT IS THE PHASE'S OWN START — not the cycle
+// start. Counting every interval from the cycle start would make a phase boundary
+// silently skip or double an injection whenever the new interval did not divide the
+// offset, which is a dose error produced by arithmetic the user never sees.
+// cycleStart arrives as a STRING from the dose-ramp callers and as a DATE from the
+// generator's hit test, which already parsed it. Accepting both is cheaper than making
+// every call site agree, and getting it wrong throws inside the day loop.
+function _cycleStartDate(cs){
+  return (cs instanceof Date)?cs:parseLocalDate(cs);
+}
+function _phaseAt(p,cycleStart,targetDate){
   if(!p||!p.dose_phases||!p.dose_phases.length||!cycleStart)return null;
-  var sd=parseLocalDate(cycleStart);
+  var sd=_cycleStartDate(cycleStart);
   var wk=Math.floor((targetDate-sd)/604800000);
   if(wk<0)wk=0;
-  var phases=p.dose_phases.slice().sort(function(a,b){return a.w-b.w;});
-  var cur=phases[0];
-  for(var i=1;i<phases.length;i++){if(wk>=phases[i].w)cur=phases[i];}
-  return cur?{dose:cur.d,unit:cur.u}:null;
+  var phases=p.dose_phases.slice().sort(function(a,b){return (a.w||0)-(b.w||0);});
+  var cur=phases[0], idx=0;
+  for(var i=1;i<phases.length;i++){if(wk>=phases[i].w){cur=phases[i];idx=i;}}
+  return cur?{phase:cur,index:idx,startWeek:cur.w||0}:null;
+}
+function _effectiveDoseAt(p,cycleStart,targetDate){
+  var a=_phaseAt(p,cycleStart,targetDate);
+  return a?{dose:a.phase.d,unit:a.phase.u}:null;
+}
+// Interval in days for the phase covering this date, or null to use the compound's
+// own cadence.
+function _effectiveIntervalAt(p,cycleStart,targetDate){
+  var a=_phaseAt(p,cycleStart,targetDate);
+  var iv=a&&parseDec(a.phase.iv);
+  return (iv>0)?{days:iv,startWeek:a.startWeek}:null;
+}
+// Does this compound inject on this date, honouring a per-phase interval when the
+// active phase declares one?
+function _phasedHitsDay(c,d,cycleStart,fallback){
+  var pi=_effectiveIntervalAt(c,cycleStart,d);
+  if(!pi)return fallback(c,d,cycleStart);
+  var phaseStart=new Date(_cycleStartDate(cycleStart).getTime()+pi.startWeek*7*86400000);
+  var since=Math.round((d-phaseStart)/86400000);
+  return since>=0 && since%pi.days===0;
 }
 
 // STEP IN CALENDAR DAYS, NEVER IN MILLISECONDS.
@@ -4307,7 +4372,7 @@ function _genInjBatches(stack,cycleId,fromDate){
       // Peptides can be scheduled by interval too now (an EOD or E3D peptide never
       // fitted a 7-day grid). Default stays 'days', and an empty days[] still means
       // every day, so nothing already saved reschedules.
-      if(!_cadenceHitsDay(p,d,cycleStart,'days'))continue;
+      if(!_phasedHitsDay(p,d,cycleStart,function(x,dd,cs){return _cadenceHitsDay(x,dd,cs,'days');}))continue;
       if(d<pStart)continue;
       if(pEnd&&d>pEnd)continue;
       var eff=_effectiveDoseAt(p,stack.cycle_start,d);
@@ -4393,7 +4458,7 @@ function _genInjBatches(stack,cycleId,fromDate){
         // `c.id!=='nebido' && c.days...`, so Nebido got the interval and every other
         // ester got weekdays with no way to say "every 3 days". _trtCadenceOf keeps
         // that exact reading for saved protocols and lets either be chosen now.
-        hit=_trtHitsDay(c,d,cycleStart);
+        hit=_phasedHitsDay(c,d,cycleStart,_trtHitsDay);
         if(!hit)continue;
         // ── DOSE RAMPS APPLY TO TESTOSTERONE TOO (ester transitions) ──────────
         // _effectiveDoseAt had exactly one call site — the peptide branch — so a TRT
@@ -4440,7 +4505,7 @@ function _genInjBatches(stack,cycleId,fromDate){
       var baseUnit=c.unit?(c.unit.split('/')[0]):'';
       var compEntries=[];
       for(var d=new Date(genStart);d<=cycleEnd;d=_nextDay(d)){
-        if(!_enhHitsDay(c,d,cycleStart))continue;
+        if(!_phasedHitsDay(c,d,cycleStart,_enhHitsDay))continue;
         var dk=dateKey(d);
         if(isAmPm){
           _enhTimes(c).forEach(function(t){var k=_slotKey(t);

@@ -2614,6 +2614,236 @@ function _tcSolveEvaluate(ctx, cad, dates, doses){
   return {weekly:weekly, events:evts, series:ser};
 }
 
+// ── CHOOSING THE INTERVAL, PER PHASE ────────────────────────────────────────
+// The interval is the other half of the dosing decision, and it does not have to be
+// constant across a transition. Weekly load = dose ÷ interval, so for a given weekly
+// requirement:
+//
+//   too LONG  and the per-injection dose is large -> a high peak, and peaks are what
+//             drive side effects
+//   too SHORT and the per-injection dose falls below one syringe step, so it cannot be
+//             drawn at all, or lands on a step so coarse the weekly load is wrong
+//
+// Both bite hardest at the two ends of an ester transition: the first weeks need a
+// tiny top-up (the outgoing tail is still high) and the last weeks need a full
+// replacement dose. A single interval cannot serve both, which is why the level sagged
+// between dose steps.
+//
+// The rule: take the SHORTEST interval that still puts the per-injection dose at or
+// above the resolution floor. Shortest keeps the peak lowest, which is the stated
+// priority; the floor is what stops it asking for an undrawable dose. Ties go to the
+// interval whose quantised dose lands closest to the weekly requirement.
+var _TC_IV_CANDIDATES = [1, 2, 3, 4, 5, 7, 10, 14];
+// A dose below this many syringe steps cannot be set accurately enough to be worth
+// scheduling — two steps means a ±½-step rounding error is ≤25% of the dose.
+var _TC_IV_MIN_STEPS = 2;
+
+// TWO PRESSURES PULL THE INTERVAL IN OPPOSITE DIRECTIONS, and neither wins outright:
+//
+//   shorter -> lower peak (peaks drive sides), but COARSER weekly resolution, because
+//              one syringe step is spread over more injections. At 12.5 mg steps, daily
+//              dosing moves the weekly load 87.5 mg at a time.
+//   longer  -> finer weekly resolution and a drawable dose when the requirement is
+//              small, but a higher peak.
+//
+// The first attempt at this picked, per week, whichever interval hit the weekly load
+// most accurately. That let accuracy outrank everything and the interval chattered
+// — 5,5,5,5,5,5,3,3,3,1,4,3,3,2,2,3 — which is both unusable and worse on the metric
+// (31% worst against 11% for a plain fixed E2D).
+//
+// So the interval is not chosen by a formula. A few coherent STRATEGIES are generated,
+// each keeping the per-injection dose inside a band of syringe steps with hysteresis so
+// it changes only when it has to, and each is scored by the same model as everything
+// else. Whichever actually holds the target best wins. That is the same principle the
+// rest of this solver runs on: propose, measure, rank — never assert.
+function _tcIvForLoad(weeklyMg, stepMg, maxIv, curIv, loSteps, hiSteps){
+  if(!(weeklyMg>0)||!(stepMg>0)) return curIv||maxIv;
+  var stepsAt=function(iv){ return Math.round((weeklyMg*iv/7)/stepMg); };
+  // Keep the current interval while it still lands inside the band — that is the
+  // hysteresis, and it is what stops one-week wobbles rewriting the schedule.
+  if(curIv){
+    var st=stepsAt(curIv);
+    if(st>=loSteps&&st<=hiSteps&&curIv<=maxIv) return curIv;
+  }
+  // Otherwise take the SHORTEST interval that reaches the floor — shortest keeps the
+  // peak down, which is the stated priority — and only lengthen when nothing else does.
+  for(var i=0;i<_TC_IV_CANDIDATES.length;i++){
+    var iv=_TC_IV_CANDIDATES[i];
+    if(maxIv&&iv>maxIv) continue;
+    var st2=stepsAt(iv);
+    if(st2>=loSteps&&st2<=hiSteps) return iv;
+  }
+  for(var j=0;j<_TC_IV_CANDIDATES.length;j++){
+    var iv2=_TC_IV_CANDIDATES[j];
+    if(maxIv&&iv2>maxIv) continue;
+    if(stepsAt(iv2)>=loSteps) return iv2;
+  }
+  return maxIv||_TC_IV_CANDIDATES[_TC_IV_CANDIDATES.length-1];
+}
+// Build a whole interval schedule for one band, walking forward so hysteresis applies.
+function _tcIvSchedule(loadWk, stepMg, maxIv, loSteps, hiSteps){
+  var out=[], cur=null;
+  for(var w=0;w<loadWk.length;w++){
+    cur=_tcIvForLoad(loadWk[w], stepMg, maxIv, cur, loSteps, hiSteps);
+    out.push(cur);
+  }
+  return out;
+}
+// The bands tried. Narrow-and-low favours short intervals and low peaks; wide-and-high
+// favours fewer, larger injections and finer weekly control.
+var _TC_IV_BANDS = [[2,4],[2,6],[3,8],[4,12],[6,20]];
+
+// ── VARIABLE-CADENCE SOLVE ──────────────────────────────────────────────────
+// Solves the weekly LOAD first, then expresses each week as (interval, dose). The
+// fixed-interval path solves per-injection mg directly, which silently fixes the
+// weekly load to a multiple of stepMg×7/interval — the granularity that made the level
+// sag between steps. Working in weekly mg removes that: the interval is free to change
+// so the load can land where it needs to.
+//
+// Scored by the same _tcSolveEvaluate as everything else, on a schedule built from the
+// per-week intervals, so the number reported is the number the model produces.
+function _tcSolveDatesPhased(startDate, weeks, ivByWeek){
+  var out=[], start=new Date(startDate+'T12:00:00');
+  var w=0;
+  while(w<weeks){
+    var iv=ivByWeek[w]||1;
+    // Run this interval until the week it changes, counting from THIS phase's start —
+    // the same origin the generator uses, or the preview would not match the schedule.
+    var wEnd=w; while(wEnd<weeks && (ivByWeek[wEnd]||1)===iv) wEnd++;
+    var segStart=new Date(start.getTime()+w*7*86400000);
+    var segEnd=new Date(start.getTime()+wEnd*7*86400000);
+    for(var t=new Date(segStart); t<segEnd; t.setDate(t.getDate()+iv)) out.push({d:new Date(t), w:w, iv:iv});
+    w=wEnd;
+  }
+  return out;
+}
+function _tcSolveEvaluatePhased(ctx, sched, mgByWeek){
+  var startMs=new Date(ctx.startDate+'T12:00:00').getTime();
+  var evts=ctx.history.slice();
+  sched.forEach(function(s){
+    var wk=Math.floor((s.d.getTime()-startMs)/(7*86400000));
+    var mg=mgByWeek[wk]||0;
+    if(mg>0) evts.push({compId:ctx.incomingId, doseMg:String(mg), date:_tcSolveDayKey(s.d)});
+  });
+  var ser=_tcSolveSeries(evts);
+  if(!ser) return null;
+  var weekly=[];
+  for(var w2=0; w2<ctx.weeks; w2++){
+    var f=startMs+w2*7*86400000;
+    weekly.push(_tcSolveWindowStats(ser, f, f+7*86400000));
+  }
+  return {weekly:weekly, events:evts};
+}
+function _tcSolveVariable(ctx, opts){
+  opts=opts||{};
+  var stepMg=ctx.concMgPerMl*(ctx.stepMl||_TC_SOLVE_STEP_ML);
+  var W=ctx.weeks;
+  var cd=_tcCompInfo(ctx.incomingId);
+  // Cap the interval at roughly the ester's half-life. Beyond that the peak-to-trough
+  // swing climbs fast, and the user's priority is explicitly to hold peaks down.
+  var maxIv=Math.max(1, Math.round((cd.halfLifeDays||3)));
+
+  // Reference pass at a fixed short interval, purely to learn the weekly LOAD needed.
+  var refIv=Math.max(1,Math.min(2,maxIv));
+  var refSched=_tcSolveDatesPhased(ctx.startDate,W,new Array(W).fill(refIv));
+  var base=_tcSolveEvaluatePhased(ctx, refSched, new Array(W).fill(0));
+  var probeMg=Math.max(stepMg,50);
+  var probe=_tcSolveEvaluatePhased(ctx, refSched, new Array(W).fill(probeMg));
+  if(!base||!probe) return null;
+  var sens=[], neg=0;
+  for(var w=0;w<W;w++){
+    var dz=(probe.weekly[w].mean-base.weekly[w].mean)/probeMg;
+    if(dz<-1e-9)neg++;
+    sens.push(dz>1e-9?dz:0);
+  }
+  if(neg>0) return {degenerate:true, negWeeks:neg};
+  var firstSens=sens.find(function(v){return v>0;})||0;
+
+  // Weekly mg per reference injection -> weekly load.
+  var perWkRef=7/refIv;
+  var loadWk=[];
+  for(var s0=0;s0<W;s0++){
+    var k=sens[s0]>0?sens[s0]:firstSens;
+    var perInj=k>0?Math.max(0,(ctx.targetPmol-base.weekly[s0].mean)/k):0;
+    loadWk.push(perInj*perWkRef);
+  }
+  // Same shape constraint and damping as the fixed path — the tail decays monotonically
+  // once past its peak, so the required LOAD does too.
+  var peakWeek=0,peakVal=-Infinity;
+  for(var pw=0;pw<W;pw++){ if(base.weekly[pw].mean>peakVal){peakVal=base.weekly[pw].mean;peakWeek=pw;} }
+  loadWk=_tcMonotoneShape(loadWk,peakWeek);
+
+  var ivWk=[], mgWk=[], evalRes=null;
+  for(var it=0; it<(opts.iters||6); it++){
+    // Try every band on the current load profile and keep the one the MODEL says
+    // holds the target best, rather than trusting any single heuristic.
+    var bestBand=null;
+    for(var bi=0; bi<_TC_IV_BANDS.length; bi++){
+      var iv2=_tcIvSchedule(loadWk, stepMg, maxIv, _TC_IV_BANDS[bi][0], _TC_IV_BANDS[bi][1]);
+      var mg2=[];
+      for(var q2=0;q2<W;q2++){
+        var per=loadWk[q2]*iv2[q2]/7;
+        mg2.push(loadWk[q2]>0?Math.max(0,Math.round(per/stepMg)*stepMg):0);
+      }
+      var sc=_tcSolveEvaluatePhased(ctx,_tcSolveDatesPhased(ctx.startDate,W,iv2),mg2);
+      if(!sc) continue;
+      var wst=0;
+      for(var z2=(W>1?1:0);z2<sc.weekly.length;z2++){
+        var a1=Math.abs(sc.weekly[z2].peak-ctx.targetPmol), a2=Math.abs(sc.weekly[z2].trough-ctx.targetPmol);
+        if((a1>a2?a1:a2)>wst)wst=(a1>a2?a1:a2);
+      }
+      if(!bestBand||wst<bestBand.wst) bestBand={iv:iv2, mg:mg2, sc:sc, wst:wst};
+    }
+    if(!bestBand) return null;
+    ivWk=bestBand.iv; mgWk=bestBand.mg; evalRes=bestBand.sc;
+    var moved=0;
+    for(var w2=0;w2<W;w2++){
+      var k2=sens[w2]>0?sens[w2]:firstSens;
+      if(!(k2>0)) continue;
+      var deltaPerInj=_TC_SOLVE_DAMPING*(ctx.targetPmol-evalRes.weekly[w2].mean)/k2;
+      var next=Math.max(0, loadWk[w2]+deltaPerInj*perWkRef);
+      moved=Math.max(moved,Math.abs(next-loadWk[w2]));
+      loadWk[w2]=next;
+    }
+    loadWk=_tcMonotoneShape(loadWk,peakWeek);
+    if(moved<stepMg*0.1) break;
+  }
+  var finalSched=_tcSolveDatesPhased(ctx.startDate,W,ivWk);
+  var fin=_tcSolveEvaluatePhased(ctx, finalSched, mgWk);
+  if(!fin) return null;
+
+  // Phases: a new one wherever the interval OR the dose changes.
+  var phases=[], prevIv=null, prevMg=null;
+  for(var pz=0;pz<W;pz++){
+    if(prevIv===null||ivWk[pz]!==prevIv||Math.abs(mgWk[pz]-prevMg)>=stepMg*0.5){
+      phases.push({w:pz, mg:mgWk[pz], iv:ivWk[pz],
+                   ml:Math.round((mgWk[pz]/ctx.concMgPerMl)*100)/100,
+                   perWeek:Math.round(mgWk[pz]*7/ivWk[pz])});
+      prevIv=ivWk[pz]; prevMg=mgWk[pz];
+    }
+  }
+  var weekly=fin.weekly.map(function(x,i){return {week:i,mean:x.mean,peak:x.peak,trough:x.trough,
+                                                 mg:mgWk[i], iv:ivWk[i]};});
+  var from=(W>1)?1:0, rp=0,rn=0,err=0,en=0,wLo=Infinity,wHi=0,worst=0;
+  for(var z=from;z<weekly.length;z++){
+    if(weekly[z].mean>0){ rp+=(weekly[z].peak-weekly[z].trough)/weekly[z].mean; rn++; }
+    err+=Math.abs(weekly[z].mean-ctx.targetPmol); en++;
+    if(weekly[z].mean<wLo)wLo=weekly[z].mean;
+    if(weekly[z].mean>wHi)wHi=weekly[z].mean;
+    var dh=Math.abs(weekly[z].peak-ctx.targetPmol), dl=Math.abs(weekly[z].trough-ctx.targetPmol);
+    if((dh>dl?dh:dl)>worst)worst=(dh>dl?dh:dl);
+  }
+  return {cadence:{key:'variable', label:'Variable interval', variable:true},
+          phases:phases, weekly:weekly, doses:mgWk, intervals:ivWk,
+          ripple:rn?rp/rn:Infinity,
+          drift:(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity,
+          worst:ctx.targetPmol>0?worst/ctx.targetPmol:Infinity,
+          meanErr:en?err/en:Infinity,
+          lowPmol:isFinite(wLo)?wLo:0, highPmol:wHi,
+          settledDrift:0, settledErr:0, stepPmol:0, stepMg:stepMg,
+          events:fin.events, baseWeekly:base.weekly};
+}
+
 // Solve a whole transition for ONE cadence.
 function _tcSolveForCadence(ctx, cad, opts){
   opts=opts||{};
@@ -2840,6 +3070,16 @@ function tcSolveTransition(opts){
   // Quantisation is the one way a cadence genuinely cannot hit the target — a weekly
   // dose needing 12 mg when the syringe step is 25 mg — so the refined residual is
   // still checked below, and the next-smoothest cadence is tried if it is too far off.
+  // The variable-interval solve competes on the same footing as the fixed ones. It
+  // usually wins on `worst` because it can move the weekly load without being limited
+  // to multiples of one syringe step at a fixed interval — but not always, and a fixed
+  // interval is simpler to follow, so it is ranked rather than preferred.
+  if(!opts.cadenceKey){
+    // Same refinement budget as the fixed path gets, or the comparison is decided by
+    // iteration count rather than by which schedule is actually better.
+    try{ var vr=_tcSolveVariable(ctx,{iters:12}); if(vr) results.push(vr); }
+    catch(e){ if(typeof _logErr==='function')_logErr('tcSolveVariable',e); }
+  }
   var degenerate=results.filter(function(r){return r.degenerate;});
   results=results.filter(function(r){return !r.degenerate;});
   if(!results.length){
@@ -2855,6 +3095,13 @@ function tcSolveTransition(opts){
   var best=null, fallback=null;
   for(var ri=0; ri<results.length; ri++){
     var refined;
+    if(results[ri].cadence&&results[ri].cadence.variable){ 
+      // Already solved at full iteration count; the fixed-cadence refiner cannot
+      // express it and would silently collapse it back to one interval.
+      if(!fallback||results[ri].meanErr<fallback.meanErr) fallback=results[ri];
+      if(results[ri].meanErr<=tol){ best=results[ri]; break; }
+      continue;
+    }
     try{ refined=_tcSolveForCadence(ctx,results[ri].cadence,{iters:12}); }
     catch(e){ if(typeof _logErr==='function')_logErr('tcSolveRefine',e); continue; }
     // A refine pass can come back degenerate even when the cheap pass did not — keep
@@ -2916,12 +3163,17 @@ function tcSolveTransition(opts){
   }
 
   return {
-    best: best, alternatives: results.slice(1), target: ctx.targetPmol,
+    // results already has `best` removed above — slicing again silently dropped the
+    // next-ranked option, which is how the variable-interval solve came 2nd and was
+    // never shown.
+    best: best, alternatives: results, target: ctx.targetPmol,
     concMgPerMl: ctx.concMgPerMl, stepMl: ctx.stepMl, weeks: ctx.weeks,
     incomingId: ctx.incomingId, startDate: ctx.startDate, notes: notes,
     // dose_phases, in the shape the generator and the ramp editor already consume.
     dose_phases: best.phases.map(function(p){
-      return {w:p.w, d:String(Math.round(p.mg*10)/10), u:'mg'};
+      var e={w:p.w, d:String(Math.round(p.mg*10)/10), u:'mg'};
+      if(p.iv>0)e.iv=p.iv;    // per-phase interval; absent means "use the compound's cadence"
+      return e;
     })
   };
 }

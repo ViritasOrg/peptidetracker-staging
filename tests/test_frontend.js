@@ -4561,8 +4561,12 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     check('tcSolveTransition returns a schedule', !!(sol && sol.best && sol.dose_phases.length));
     check('  …choosing a cadence the generator can actually schedule', (function(){
       const c=sol.best.cadence;
+      // A variable-interval answer carries no single cadence — the interval lives on
+      // each phase as `iv`, which _phasedHitsDay honours. It is schedulable, just not
+      // describable by one freqVal, so it is a third valid shape rather than a failure.
+      if(c.variable) return sol.best.phases.every(p=>p.iv>0);
       return !!((c.days&&c.days.length) || (c.freqVal>0&&c.freqUnit));
-    })());
+    })(), sol.best.cadence.label);
     check('  …with every dose landing on a whole 0.1 ml step', (function(){
       const step=100*0.1;
       return sol.best.doses.every(d=>Math.abs(d/step-Math.round(d/step))<1e-6);
@@ -4657,8 +4661,12 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     // a test that reproduces it through the public API passes or fails on unrelated
     // state. The guard's own logic is what needs pinning, and this pins it exactly.
     {
-      const realEval=G._tcSolveEvaluate;
-      G._tcSolveEvaluate=function(cx,cad,dates,doses){
+      // BOTH evaluators, because the fixed-cadence and variable-interval paths use
+      // different ones. Stubbing only the fixed evaluator let the variable path see the
+      // real model, produce a good schedule and win — so the guard looked broken when
+      // it was the test that was half-applied.
+      const realEval=G._tcSolveEvaluate, realPhased=G._tcSolveEvaluatePhased;
+      const fake=function(cx,doses){
         const W=cx.weeks, out=[];
         const load=(doses||[]).reduce((a,b)=>a+(b||0),0);
         for(let i=0;i<W;i++){
@@ -4667,10 +4675,12 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
         }
         return {weekly:out, events:[], series:null};
       };
+      G._tcSolveEvaluate=function(cx,cad,dates,doses){ return fake(cx,doses); };
+      G._tcSolveEvaluatePhased=function(cx,sched,mgByWeek){ return fake(cx,mgByWeek); };
       const degen=G.tcSolveTransition({history:[{compId:'nebido',doseMg:'100',date:'2026-08-20'}],
         incomingId:'enanthate', startDate:'2026-08-27', targetPmol:1400,
         concMgPerMl:250, stepMl:0.05, weeks:16});
-      G._tcSolveEvaluate=realEval;
+      G._tcSolveEvaluate=realEval; G._tcSolveEvaluatePhased=realPhased;
       check('a curve that falls when dose rises is refused, not answered',
         !!(degen&&degen.degenerate&&!degen.best),
         degen&&degen.best?('emitted '+Math.round(degen.best.doses[0])+' mg'):'refused');
@@ -4915,6 +4925,87 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     // no dose the solver can pick removes that dip.
     check('  …excluding week 0, which is accumulation rather than a bad schedule',
       r.best.weekly.length>1);
+  }
+
+
+  // ── The injection interval is not fixed for a whole protocol ──────────────
+  // "Cadence doesn't have to be static for the period. If it makes sense to start with
+  // very small daily injections for 6 days and then e2d up to e7d, that is totally
+  // fine." A single cadence per compound was a limit of this data model, not of the
+  // pharmacology, and it is what forced the weekly load onto multiples of one syringe
+  // step at one interval.
+  {
+    const P = comp => ({id:'p', cycle_start:'2026-09-01', end_date:'2026-09-28',
+      peptides:[], trt:{enabled:true, compounds:[comp]}, enhanced:{}});
+    const gen = comp => (((G._genInjBatches(P(comp),'c',null)||[])[0]||{}).entries||[]);
+
+    const varying = {id:'enanthate',name:'Test E',dose:'50',unit:'mg',
+      cadence:'interval',freqVal:2,freqUnit:'days',
+      dose_phases:[{w:0,d:'10',u:'mg',iv:1},{w:1,d:'25',u:'mg',iv:2},{w:3,d:'90',u:'mg',iv:7}]};
+    const es = gen(varying);
+    const on = d => es.some(e=>e.date===d);
+    check('a phase can carry its own injection interval', es.length>0);
+    check('  …daily in week 0', on('2026-09-01')&&on('2026-09-02')&&on('2026-09-03'));
+    check('  …every 2 days in weeks 1-2',
+      on('2026-09-08')&&on('2026-09-10')&&!on('2026-09-09'));
+    check('  …and weekly from week 3', on('2026-09-22')&&!on('2026-09-23'));
+    check('  …with each phase dosed at its own mg', (function(){
+      const at=d=>(es.find(e=>e.date===d)||{}).dose;
+      return at('2026-09-01')==='10' && at('2026-09-08')==='25' && at('2026-09-22')==='90';
+    })());
+
+    // AN INTERVAL NEEDS AN ORIGIN, AND IT IS THE PHASE'S OWN START. Counting from the
+    // cycle start instead would skip or double an injection at a phase boundary
+    // whenever the new interval did not divide the offset — a dose error produced by
+    // arithmetic the user never sees. Week 1 starts on 08 Sep; E2D from there is
+    // 08/10/12, not 09/11/13 (which is what counting from 01 Sep would give).
+    check('  …counted from the phase start, not the cycle start',
+      on('2026-09-08')&&on('2026-09-10')&&on('2026-09-12')&&!on('2026-09-11'));
+
+    // Phases without `iv` still use the compound's own cadence, so nothing saved moves.
+    const noIv = {id:'enanthate',name:'Test E',dose:'50',unit:'mg',
+      cadence:'interval',freqVal:2,freqUnit:'days',
+      dose_phases:[{w:0,d:'50',u:'mg'},{w:2,d:'75',u:'mg'}]};
+    check('a phase with no interval falls back to the compound cadence', (function(){
+      const d=gen(noIv).map(e=>e.date);
+      return d.length===14 && d[0]==='2026-09-01' && d[1]==='2026-09-03';
+    })());
+
+    // Tier parity: the same phase interval works on peptides and Enhanced.
+    const pep={id:'cjc-ipa',name:'CJC/Ipa',times:['AM'],dose_am:'100',unit_am:'mcg',active:true,
+               days:[0,1,2,3,4,5,6], dose_phases:[{w:0,d:'100',u:'mcg',iv:3}]};
+    check('per-phase intervals work on the peptide tier too', (function(){
+      const b=G._genInjBatches({id:'p',cycle_start:'2026-09-01',end_date:'2026-09-14',
+        peptides:[pep],trt:{},enhanced:{}},'c',null)||[];
+      const d=((b[0]&&b[0].entries)||[]).map(e=>e.date);
+      return d.length===5 && d[1]==='2026-09-04';
+    })());
+
+    // The solver can propose one, and what it proposes must be schedulable.
+    G._tcBwEntries=[{date:'2026-08-18', free_t:'1300', total_t:'32', shbg:'25', unit:'pmol/L'}];
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    const vhist=[]; const vlast=new Date('2026-08-20T12:00:00');
+    for(let i=0;i<60;i++){const d=new Date(vlast.getTime()-i*2*86400000);
+      vhist.push({compId:'nebido',doseMg:'100',
+        date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+    const vr=G._tcSolveVariable({history:vhist,incomingId:'enanthate',startDate:'2026-08-27',
+      targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:16},{iters:6});
+    check('the solver can produce a variable-interval schedule',
+      !!(vr&&!vr.degenerate&&vr.phases&&vr.phases.length));
+    check('  …with every phase carrying a usable interval',
+      !!(vr&&vr.phases&&vr.phases.every(p=>p.iv>0&&p.mg>=0)),
+      vr&&vr.phases?vr.phases.map(p=>'w'+p.w+':E'+p.iv+'D'):'');
+    check('  …and a weekly load stated per phase',
+      !!(vr&&vr.phases&&vr.phases.every(p=>p.perWeek>0)));
+    // Interval stability matters as much as the numbers: an interval that changes every
+    // week is unusable however well it scores. The first version chattered
+    // 5,5,5,5,5,5,3,3,3,1,4,3,3,2,2,3 and scored WORSE than a plain fixed cadence.
+    check('  …without the interval chattering week to week', (function(){
+      if(!vr||!vr.intervals) return false;
+      let changes=0;
+      for(let i=1;i<vr.intervals.length;i++) if(vr.intervals[i]!==vr.intervals[i-1]) changes++;
+      return changes<=3;
+    })(), vr&&vr.intervals?vr.intervals.join(','):'');
   }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
