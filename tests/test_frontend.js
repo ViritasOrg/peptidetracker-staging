@@ -4549,6 +4549,10 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       /nothing to calibrate/.test(G._tcSolveAnchorGuard({history:[], startDate:'2026-08-27'})));
 
     // A real solve, calibrated the way the app would be.
+    // A real draw, so these run against a valid anchor rather than the day-0 fallback.
+    // Without it the whole block exercises a degenerate calibration, which is not the
+    // regime the app is in for anyone who has logged bloodwork.
+    G._tcBwEntries=[{date:'2026-08-18', free_t:'1300', total_t:'32', shbg:'25', unit:'pmol/L'}];
     G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
     const sol = G.tcSolveTransition({
       history:hist, incomingId:'enanthate', startDate:'2026-08-27',
@@ -4619,7 +4623,7 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
       const rr=G.tcSolveTransition({history:hist,incomingId:'enanthate',startDate:'2026-08-27',
         targetPmol:1500,concMgPerMl:250,stepMl:stepMl,weeks:16});
-      return {stepMl:stepMl, drift:rr.best.drift, err:rr.best.meanErr};
+      return {stepMl:stepMl, drift:rr.best.drift, err:rr.best.meanErr, worst:rr.best.worst, cad:rr.best.cadence.key};
     });
     // Only the claim the product actually rests on: halving the draw volume at a FIXED
     // concentration holds the target at least as tightly. Deliberately not asserting
@@ -4631,9 +4635,48 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     check('halving the draw volume holds the target at least as tightly',
       byStep[1].drift<=byStep[0].drift+1e-9,
       byStep.map(x=>x.stepMl+'ml:'+Math.round(x.drift*100)+'%').join(' '));
-    check('  …and lowers the mean error too',
-      byStep[1].err<=byStep[0].err+1e-9,
-      byStep.map(x=>x.stepMl+'ml err '+Math.round(x.err)).join(' '));
+    check('  …and on the metric the ranking actually optimises',
+      byStep[1].worst<=byStep[0].worst+1e-9,
+      byStep.map(x=>x.stepMl+'ml worst '+Math.round(x.worst*100)+'%').join(' '));
+
+    // ── The solver must refuse a degenerate calibration ────────────────────
+    // Adding testosterone cannot lower testosterone. When the model says it does, the
+    // curve is anchored somewhere useless — the known case is the anchor falling back
+    // to day 0, the FIRST logged injection, because today is past _logDays. Left
+    // unchecked the iteration saturated and produced 800 mg WEEKLY landing at
+    // 3638-4268 pmol/L against a 1400 target, presented as an answer.
+    // ── The solver must refuse a degenerate calibration ────────────────────
+    // Adding testosterone cannot lower testosterone. When the model says it does, the
+    // curve is anchored somewhere useless — the known case is the anchor falling back
+    // to day 0, the FIRST logged injection, because today is past _logDays. Left
+    // unchecked the iteration saturated and produced 800 mg WEEKLY landing at
+    // 3638-4268 pmol/L against a 1400 target, and presented it as an answer.
+    //
+    // Driven by stubbing the model response rather than by trying to recreate the
+    // calibration state: whether a given history anchors degenerately is emergent, so
+    // a test that reproduces it through the public API passes or fails on unrelated
+    // state. The guard's own logic is what needs pinning, and this pins it exactly.
+    {
+      const realEval=G._tcSolveEvaluate;
+      G._tcSolveEvaluate=function(cx,cad,dates,doses){
+        const W=cx.weeks, out=[];
+        const load=(doses||[]).reduce((a,b)=>a+(b||0),0);
+        for(let i=0;i<W;i++){
+          const m=1400-load*0.5;          // MORE dose -> LOWER level: non-physical
+          out.push({mean:m, peak:m*1.05, trough:m*0.95});
+        }
+        return {weekly:out, events:[], series:null};
+      };
+      const degen=G.tcSolveTransition({history:[{compId:'nebido',doseMg:'100',date:'2026-08-20'}],
+        incomingId:'enanthate', startDate:'2026-08-27', targetPmol:1400,
+        concMgPerMl:250, stepMl:0.05, weeks:16});
+      G._tcSolveEvaluate=realEval;
+      check('a curve that falls when dose rises is refused, not answered',
+        !!(degen&&degen.degenerate&&!degen.best),
+        degen&&degen.best?('emitted '+Math.round(degen.best.doses[0])+' mg'):'refused');
+      check('  …with a reason that points at the calibration, not the schedule',
+        !!(degen&&(degen.notes||[]).some(n=>/calibrat/i.test(n))));
+    }
 
     // Above the healthy young-male ceiling the app already has copy for this, and the
     // solver still computes what was asked. It solves for the SCHEDULE, never the TARGET.

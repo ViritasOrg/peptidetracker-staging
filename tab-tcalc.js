@@ -2632,11 +2632,24 @@ function _tcSolveForCadence(ctx, cad, opts){
   var probe=_tcSolveEvaluate(ctx, cad, dates, new Array(W).fill(probeMg));
   if(!probe) return null;
 
-  var sens=[];
+  var sens=[], negSens=0;
   for(var w=0; w<W; w++){
     var dz=(probe.weekly[w].mean-base.weekly[w].mean)/probeMg;
+    if(dz<-1e-9)negSens++;
     sens.push(dz>1e-9?dz:0);       // 0 = this week is unreachable by dosing
   }
+  // ⚠️ NON-PHYSICAL SENSITIVITY MEANS THE CALIBRATION IS DEGENERATE, NOT THAT THE
+  // SCHEDULE IS HARD. Adding testosterone cannot lower testosterone. When it appears
+  // to, the anchor the curve is calibrated against is sitting somewhere useless — the
+  // known case is _tcFreeTSeries falling back to day 0 (the FIRST logged injection,
+  // possibly months back) because "today" is past _logDays, which happens as soon as
+  // the last logged injection is older than the plotted log window.
+  //
+  // Left unchecked the iteration chases an impossible target and saturates: a real run
+  // produced 800 mg WEEKLY landing at 3638-4268 pmol/L against a 1400 target, and
+  // presented it as an answer. Refusing is the only honest response — a schedule
+  // derived from a curve that does not respond to dose is not a schedule.
+  if(negSens>0) return {degenerate:true, cadence:cad, negWeeks:negSens};
   // A week before the first injection has no sensitivity of its own; borrow the first
   // week that does, so the seed is a number rather than a divide-by-zero.
   var firstSens=sens.find(function(v){return v>0;})||0;
@@ -2739,6 +2752,20 @@ function _tcSolveForCadence(ctx, cad, opts){
   //            when one syringe step is a large fraction of the weekly requirement,
   //            the dose can only straddle the target and the level sags and overshoots.
   var drift=(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity;
+  // THE QUESTION IS "does it hold the target", and neither ripple nor drift answers it
+  // alone: ripple is within-week, drift is between-week, and a plan can look fine on
+  // both while sitting steadily off-target. worst is the furthest the level EVER gets
+  // from target, peaks and troughs included, as a fraction of target. Ranking on it
+  // stops the sum of two partial metrics from picking a cadence that is smooth in each
+  // half and wrong overall.
+  var worst=0;
+  for(var wq=from; wq<weekly.length; wq++){
+    var dHi=Math.abs(weekly[wq].peak-ctx.targetPmol);
+    var dLo=Math.abs(weekly[wq].trough-ctx.targetPmol);
+    var d=(dHi>dLo?dHi:dLo);
+    if(d>worst)worst=d;
+  }
+  worst=ctx.targetPmol>0?(worst/ctx.targetPmol):Infinity;
   // Reported separately so the settled figure is still available, but never as the
   // headline on its own.
   var sFrom=Math.max(from,W-4), sLo=Infinity, sHi=0, sErr=0, sN=0;
@@ -2752,7 +2779,7 @@ function _tcSolveForCadence(ctx, cad, opts){
   for(var sq=Math.max(0,W-4); sq<W; sq++){ if(sens[sq]>0){ sensTail+=sens[sq]; stn++; } }
   sensTail=stn?sensTail/stn:0;
   return {cadence:cad, phases:phases, weekly:weekly, doses:snapped,
-          ripple:rn?rp/rn:Infinity, drift:drift, meanErr:en?err/en:Infinity,
+          ripple:rn?rp/rn:Infinity, drift:drift, worst:worst, meanErr:en?err/en:Infinity,
           settledDrift:(isFinite(sLo)&&ctx.targetPmol>0)?((sHi-sLo)/ctx.targetPmol):Infinity,
           settledErr:sN?sErr/sN:Infinity,
           lowPmol:isFinite(wLo)?wLo:0, highPmol:wHi,
@@ -2813,19 +2840,33 @@ function tcSolveTransition(opts){
   // Quantisation is the one way a cadence genuinely cannot hit the target — a weekly
   // dose needing 12 mg when the syringe step is 25 mg — so the refined residual is
   // still checked below, and the next-smoothest cadence is tried if it is too far off.
-  results.sort(function(a,b){ return (a.ripple+a.drift)-(b.ripple+b.drift); });
+  var degenerate=results.filter(function(r){return r.degenerate;});
+  results=results.filter(function(r){return !r.degenerate;});
+  if(!results.length){
+    return {best:null, alternatives:[], target:ctx.targetPmol, degenerate:true,
+            notes:['The free-T curve does not respond to dose for this history, so no '
+              +'schedule can be solved from it. That points at the calibration rather than '
+              +'the plan: the curve is anchored to a point where essentially no drug was on '
+              +'board. Adding a recent bloodwork draw, or logging a more recent injection, '
+              +'gives the model something to calibrate against.']};
+  }
+  results.sort(function(a,b){ return a.worst-b.worst; });
   var tol=ctx.targetPmol*0.10;
   var best=null, fallback=null;
   for(var ri=0; ri<results.length; ri++){
     var refined;
     try{ refined=_tcSolveForCadence(ctx,results[ri].cadence,{iters:12}); }
     catch(e){ if(typeof _logErr==='function')_logErr('tcSolveRefine',e); continue; }
-    if(!refined) continue;
+    // A refine pass can come back degenerate even when the cheap pass did not — keep
+    // the cheap result rather than promoting an unusable one into the rankings.
+    if(!refined||refined.degenerate) continue;
     results[ri]=refined;
     if(!fallback||refined.meanErr<fallback.meanErr) fallback=refined;
     if(refined.meanErr<=tol){ best=refined; break; }
   }
   if(!best) best=fallback||results[0];
+  if(!best||best.degenerate) return {best:null, alternatives:[], target:ctx.targetPmol,
+    degenerate:true, notes:['No cadence produced a usable schedule for this history.']};
   // Report the others as they were ranked, with the winner removed.
   results=results.filter(function(r){ return r!==best; });
 
