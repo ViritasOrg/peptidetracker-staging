@@ -5257,6 +5257,59 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       !!(m && /if\(eid===_inc\)return;/.test(m[0])));
   }
 
+  // ── THE SOLVED RAMP MUST LAND IN THE PROTOCOL'S WEEK NUMBERING ────────────
+  // dose_phases are read by the generator as weeks from the PROTOCOL's cycle_start —
+  // the established contract, and what the ramp editor's copy tells the user. The
+  // solver numbers its phases from the ESTER's own start date. For a compound added
+  // partway through a running protocol those differ, and the ramp landed at the wrong
+  // offset: measured on a nine-week gap it was spent in five weeks and then pinned at
+  // its maximum, so it opened above target and had nothing left to rise with when the
+  // outgoing ester cleared. That is the "still decaying instead of holding" report.
+  {
+    const mk=(n,every,mg,last)=>{const o=[],L=new Date(last+'T12:00:00');
+      for(let i=0;i<n;i++){const d=new Date(L.getTime()-i*every*86400000);
+        o.push({compId:'nebido',doseMg:String(mg),
+          date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+      return o;};
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='915'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    const _bwSave=G._tcBwEntries;
+    G._tcBwEntries=[{date:'2026-08-18',free_t:'915',total_t:'32',shbg:'25',unit:'pmol/L'}];
+    const sol=G.tcSolveTransition({history:mk(33,2,100,'2026-08-26'),incomingId:'enanthate',
+      startDate:'2026-08-28',targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:16});
+
+    const weeklyFor=(cycleStart)=>{
+      const stack={cycle_start:cycleStart,cycle_length:40,trt:{enabled:true,compounds:[
+        {id:'enanthate',name:'Test E',dose:'100',unit:'mg',cadence:'days',days:[1],
+         active:true,start_date:'2026-08-28'}]}};
+      const comp=stack.trt.compounds[0];
+      const _eb=G._editBuf, _tc=G._trtComp, _rr=G._trtRerender;
+      G._editBuf=stack; G._trtComp=()=>comp; G._trtRerender=()=>{};
+      G._trtSolveSt('enanthate').result=sol;
+      G.trtSolveApply('edit','enanthate','best');
+      G._editBuf=_eb; G._trtComp=_tc; G._trtRerender=_rr;
+      const rows=[].concat.apply([],(G._genInjBatches(stack,'c',new Date('2026-08-28T12:00:00'))||[])
+        .map(b=>b.entries)).filter(e=>parseFloat(e.dose)>0);
+      const wk={};
+      rows.forEach(e=>{const d=new Date(e.date+'T12:00:00');
+        const w=Math.floor((d-new Date('2026-08-28T12:00:00'))/86400000/7);
+        if(w>=0&&w<16) wk[w]=(wk[w]||0)+parseFloat(e.dose);});
+      const out=[]; for(let w=0;w<16;w++) out.push(Math.round(wk[w]||0));
+      return out;
+    };
+    const aligned=weeklyFor('2026-08-28');     // protocol starts with the ester
+    const offset =weeklyFor('2026-06-26');     // protocol already nine weeks old
+
+    check('a solved ramp generates the same schedule whatever week the protocol started',
+      aligned.join(' ')===offset.join(' '),
+      'aligned='+aligned.join(' ')+'  offset='+offset.join(' '));
+    // The specific failure: spent early and then flat. The last week must still be the
+    // ramp's top, and the first week must not already be near it.
+    check('  …so the ramp still rises across the plan rather than pinning at its top',
+      offset[15]>offset[0] && offset[0]<offset[15]*0.9,
+      offset.join(' '));
+    G._tcBwEntries=_bwSave;
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
