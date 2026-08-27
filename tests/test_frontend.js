@@ -4594,10 +4594,21 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     // solution sits near a boundary. Stepping a dose down and back up for no reason is
     // how a plan stops being followed.
     check('  …with no one-step down-and-back-up chatter', (function(){
+      // A DITHERED schedule alternates two adjacent steps ON PURPOSE — that is how the
+      // weekly average lands between them — so the per-injection series is expected to
+      // go 10,10,20,10,20. The invariant that still has to hold there is on the WEEKLY
+      // load, which is what the user reads and what must not wobble.
+      if(sol.best.cadence.dithered){
+        const wk=[];
+        for(let i=0;i<sol.best.doses.length;i+=7)
+          wk.push(sol.best.doses.slice(i,i+7).reduce((a,b)=>a+b,0));
+        for(let i=1;i<wk.length-1;i++) if(wk[i-1]===wk[i+1]&&wk[i]!==wk[i-1]) return false;
+        return true;
+      }
       const d=sol.best.doses;
       for(let i=1;i<d.length-1;i++) if(d[i-1]===d[i+1]&&d[i]!==d[i-1]) return false;
       return true;
-    })(), sol.best.doses.join(','));
+    })(), sol.best.cadence.label);
 
     // The vial can be the limiting factor, and it is invisible unless stated.
     // Re-pin the calibration: this assertion depends on how many pmol/L one syringe
@@ -4605,9 +4616,12 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     // at 250 mg/ml, where the value landed at 99 against a 104 threshold — passing on
     // a 5% margin, which is not a test. 400 mg/ml puts it clearly on one side.
     G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    // Pinned on a FIXED cadence: that is the situation the note describes. A dithered
+    // daily schedule spreads one step over a single day of the week, so its effective
+    // weekly resolution is seven times finer and the warning would be wrong advice.
     const coarse = G.tcSolveTransition({
       history:hist, incomingId:'enanthate', startDate:'2026-08-27',
-      targetPmol:1300, concMgPerMl:400, stepMl:0.1, weeks:12
+      targetPmol:1300, concMgPerMl:400, stepMl:0.1, weeks:12, cadenceKey:'e2d'
     });
     check('a coarse syringe step is reported as the limit, not hidden',
       (coarse.notes||[]).some(n=>/moves your level by about/.test(n)),
@@ -4665,7 +4679,8 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       // different ones. Stubbing only the fixed evaluator let the variable path see the
       // real model, produce a good schedule and win — so the guard looked broken when
       // it was the test that was half-applied.
-      const realEval=G._tcSolveEvaluate, realPhased=G._tcSolveEvaluatePhased;
+      const realEval=G._tcSolveEvaluate, realPhased=G._tcSolveEvaluatePhased,
+            realDaily=G._tcSolveEvaluateDaily;
       const fake=function(cx,doses){
         const W=cx.weeks, out=[];
         const load=(doses||[]).reduce((a,b)=>a+(b||0),0);
@@ -4677,10 +4692,12 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       };
       G._tcSolveEvaluate=function(cx,cad,dates,doses){ return fake(cx,doses); };
       G._tcSolveEvaluatePhased=function(cx,sched,mgByWeek){ return fake(cx,mgByWeek); };
+      G._tcSolveEvaluateDaily=function(cx,days,mgByDay){ return fake(cx,mgByDay); };
       const degen=G.tcSolveTransition({history:[{compId:'nebido',doseMg:'100',date:'2026-08-20'}],
         incomingId:'enanthate', startDate:'2026-08-27', targetPmol:1400,
         concMgPerMl:250, stepMl:0.05, weeks:16});
       G._tcSolveEvaluate=realEval; G._tcSolveEvaluatePhased=realPhased;
+      G._tcSolveEvaluateDaily=realDaily;
       check('a curve that falls when dose rises is refused, not answered',
         !!(degen&&degen.degenerate&&!degen.best),
         degen&&degen.best?('emitted '+Math.round(degen.best.doses[0])+' mg'):'refused');
@@ -4913,11 +4930,17 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     const r=G.tcSolveTransition({history:mk(60,2,100,'2026-08-26'),incomingId:'enanthate',
       startDate:'2026-08-27',targetPmol:1500,concMgPerMl:100,stepMl:0.1,weeks:16});
     check('the solver reports the range it actually holds', !!(r&&r.best&&r.best.lowPmol>0&&r.best.highPmol>0));
-    check('  …spanning every week from week 1, not just the last four', (function(){
-      const w=r.best.weekly.slice(1).map(x=>x.mean);
-      return Math.abs(r.best.lowPmol-Math.min.apply(null,w))<1
+    // Scoring starts once the INCOMING ester has loaded — ~4 half-lives — not at week
+    // 1. Before that the tail is in its steepest decay and the new ester has not
+    // accumulated, and no dose choice changes either. Scoring across it let an
+    // unavoidable startup dominate: a schedule holding 1-3% for twelve weeks scored
+    // 29% on the strength of weeks it could not have affected.
+    check('  …spanning every week after the ester has loaded', (function(){
+      const sw=r.best.settleWeeks;
+      const w=r.best.weekly.slice(sw).map(x=>x.mean);
+      return sw>=1 && Math.abs(r.best.lowPmol-Math.min.apply(null,w))<1
           && Math.abs(r.best.highPmol-Math.max.apply(null,w))<1;
-    })(), 'low/high must come from the whole plan');
+    })(), 'settleWeeks='+r.best.settleWeeks);
     check('  …with drift measured over the whole plan, not the settled tail',
       r.best.drift>=r.best.settledDrift-1e-9,
       'whole-plan '+Math.round(r.best.drift*100)+'% vs settled '+Math.round(r.best.settledDrift*100)+'%');
@@ -5006,6 +5029,90 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       for(let i=1;i<vr.intervals.length;i++) if(vr.intervals[i]!==vr.intervals[i-1]) changes++;
       return changes<=3;
     })(), vr&&vr.intervals?vr.intervals.join(','):'');
+  }
+
+
+  // ── Daily with the dose varying between days ──────────────────────────────
+  // "Would locking the cadence to every day and only vary the dose between days help?"
+  // It does, and it dissolves a trade-off stated as fact earlier: a shorter interval
+  // gives coarser weekly control ONLY while every injection is the same dose. Alternate
+  // two adjacent syringe steps and daily gives the lowest peak AND the finest weekly
+  // resolution at once.
+  {
+    const P = comp => ({id:'p', cycle_start:'2026-09-01', end_date:'2026-09-21',
+      peptides:[], trt:{enabled:true, compounds:[comp]}, enhanced:{}});
+    const gen = comp => (((G._genInjBatches(P(comp),'c',null)||[])[0]||{}).entries||[]);
+    const pat = {id:'enanthate',name:'Test E',dose:'50',unit:'mg',
+      cadence:'interval',freqVal:1,freqUnit:'days',
+      dose_phases:[{w:0,u:'mg',iv:1,pattern:[50,50,62.5,50,50,50,62.5]},
+                   {w:2,u:'mg',iv:1,pattern:[37.5,37.5,50,37.5,37.5,37.5,50]}]};
+    const es = gen(pat);
+    check('a phase can carry a repeating day pattern', es.length===21, es.length+' entries');
+    check('  …dosing each day from the pattern',
+      es.slice(0,7).map(e=>e.dose).join(' ')==='50 50 62.5 50 50 50 62.5');
+    check('  …repeating it in the following week',
+      es.slice(7,14).map(e=>e.dose).join(' ')==='50 50 62.5 50 50 50 62.5');
+    check('  …and switching pattern at the next phase',
+      es.slice(14,21).map(e=>e.dose).join(' ')==='37.5 37.5 50 37.5 37.5 37.5 50');
+    // A phase with no pattern keeps its single dose, so nothing already saved changes.
+    check('a phase with no pattern still uses its single dose',
+      gen({id:'enanthate',name:'Test E',dose:'50',unit:'mg',cadence:'interval',
+           freqVal:1,freqUnit:'days',dose_phases:[{w:0,d:'40',u:'mg',iv:1}]})
+        .every(e=>e.dose==='40'));
+
+    // The solver's dithered mode.
+    G._tcBwEntries=[{date:'2026-08-18', free_t:'1300', total_t:'32', shbg:'25', unit:'pmol/L'}];
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+    const dh=[]; const dl=new Date('2026-08-20T12:00:00');
+    for(let i=0;i<60;i++){const d=new Date(dl.getTime()-i*2*86400000);
+      dh.push({compId:'nebido',doseMg:'100',
+        date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+    const dd=G._tcSolveDailyDither({history:dh,incomingId:'enanthate',startDate:'2026-08-27',
+      targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:16},{iters:10});
+    check('the solver can produce a dithered daily schedule',
+      !!(dd&&!dd.degenerate&&dd.phases&&dd.phases.length));
+    check('  …with every phase a full week of doses',
+      !!(dd&&dd.phases.every(p=>p.pattern&&p.pattern.length===7)));
+    check('  …using at most two adjacent syringe steps in a week', (function(){
+      if(!dd) return false;
+      return dd.phases.every(p=>{
+        const u=[...new Set(p.pattern)].sort((a,b)=>a-b);
+        return u.length<=2 && (u.length<2 || Math.abs((u[1]-u[0])-dd.stepMg)<0.01);
+      });
+    })(), dd?dd.phases.map(p=>[...new Set(p.pattern)].join('/')).join(' '):'');
+    // ONE CANONICAL PATTERN PER WEEKLY LOAD. Running the error diffusion across week
+    // boundaries let the carry rotate the pattern without changing the weekly total —
+    // two weeks both at 238 mg/wk came out as different day arrangements and split into
+    // two phases that read as a change when nothing had changed.
+    check('  …with the same weekly load always giving the same pattern', (function(){
+      if(!dd) return false;
+      const byLoad={};
+      for(const p of dd.phases){
+        const k=p.perWeek;
+        const sig=p.pattern.join(',');
+        if(byLoad[k]&&byLoad[k]!==sig) return false;
+        byLoad[k]=sig;
+      }
+      return true;
+    })());
+    check('  …and a weekly load that rises as the outgoing ester clears',
+      !!(dd&&dd.phases[dd.phases.length-1].perWeek>dd.phases[0].perWeek),
+      dd?dd.phases.map(p=>p.perWeek).join(' -> '):'');
+
+    // Scoring starts after the incoming ester has loaded, so an unavoidable startup
+    // cannot dominate. Before this a schedule holding 1-3% for twelve weeks scored 29%.
+    check('  …scored only after the ester has loaded',
+      !!(dd&&dd.settleWeeks>=1&&dd.settleWeeks<16), dd?('settleWeeks='+dd.settleWeeks):'');
+
+    // ⚠️ AND IT MUST NOT RECOMMEND DAILY FOR A LONG ESTER. Ripple is interval ÷
+    // half-life, so undecanoate is flat at every interval from daily to fortnightly —
+    // a tie-break on smoothness alone would pick 56 injections over 4.
+    const longEster=G.tcSolveTransition({history:dh,incomingId:'nebido',startDate:'2026-08-27',
+      targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:16});
+    check('a long ester is not scheduled daily just because it is smooth', (function(){
+      if(!longEster||!longEster.best) return true;   // refused is also acceptable
+      return !longEster.best.cadence.dithered;
+    })(), longEster&&longEster.best?longEster.best.cadence.label:'refused');
   }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);

@@ -918,7 +918,10 @@ function trtSolveApply(scope,id,which){
   // Set the MODE explicitly, not just the fields. Inference would read a solved
   // weekday answer on a Nebido row as interval (the legacy rule) and schedule
   // something the solver never proposed.
-  if(cad.variable){
+  if(cad.dithered){
+    comp.cadence='interval'; comp.freqVal=1; comp.freqUnit='days';
+  }
+  else if(cad.variable){
     // A variable-interval answer has no single cadence — each phase carries its own
     // `iv`. The compound still needs a base cadence for any date the phases do not
     // cover (and for the summary line), so it takes the first phase's interval.
@@ -932,11 +935,13 @@ function trtSolveApply(scope,id,which){
             :pick.phases.map(function(p){
                 var e={w:p.w,d:String(Math.round(p.mg*10)/10),u:'mg'};
                 if(p.iv>0)e.iv=p.iv;
+                if(p.pattern&&p.pattern.length)e.pattern=p.pattern.slice();
                 return e;
               });
   comp.dose_phases=phases.map(function(p){
     var e={w:p.w,d:p.d,u:p.u};
     if(p.iv>0)e.iv=p.iv;      // per-phase interval survives the round trip
+    if(p.pattern&&p.pattern.length)e.pattern=p.pattern.slice();   // and the day pattern
     return e;
   });
   comp.unit='mg';
@@ -1018,6 +1023,23 @@ function _renderTRTSolve(c,selData,scope){
           // card's cadence line is only the default when a phase does not override it.
           var iv=ph.iv>0?ph.iv:ivd;
           var perWk=iv>0?(ph.mg*7/iv):0;
+          // A dithered phase has no single per-injection dose — it is a repeating week
+          // of two adjacent syringe steps, and showing only the average would hide what
+          // to actually draw on each day.
+          if(ph.pattern&&ph.pattern.length){
+            var conc=parseDec(st.conc)||_trtDefaultConc(id);
+            return '<div style="font-size:11px;color:var(--text);line-height:1.6;margin-bottom:5px">'
+              +'<div style="display:flex;gap:8px;flex-wrap:wrap"><span style="color:var(--muted2);min-width:44px">Wk '+ph.w+'</span>'
+              +'<span style="color:var(--accent2,#8ab4f8);min-width:40px">daily</span>'
+              +'<span style="color:var(--muted2)">'+ph.perWeek+' mg/wk</span></div>'
+              +'<div style="display:flex;gap:4px;flex-wrap:wrap;margin:3px 0 0 52px">'
+              +ph.pattern.map(function(mgv){
+                  return '<span style="font-size:10px;font-weight:700;color:var(--accent);border:1px solid var(--border);border-radius:4px;padding:1px 5px">'
+                    +(Math.round(mgv*10)/10)+'<span style="color:var(--muted2);font-weight:400"> · '
+                    +(conc>0?(mgv/conc).toFixed(2):'?')+'ml</span></span>';
+                }).join('')
+              +'</div></div>';
+          }
           return '<div style="display:flex;gap:8px;font-size:11px;color:var(--text);line-height:1.7;flex-wrap:wrap">'
             +'<span style="color:var(--muted2);min-width:44px">Wk '+ph.w+'</span>'
             +(ph.iv>0?('<span style="color:var(--accent2,#8ab4f8);min-width:40px">'+(ph.iv===1?'daily':'E'+ph.iv+'D')+'</span>'):'')
@@ -4310,7 +4332,36 @@ function _phaseAt(p,cycleStart,targetDate){
   for(var i=1;i<phases.length;i++){if(wk>=phases[i].w){cur=phases[i];idx=i;}}
   return cur?{phase:cur,index:idx,startWeek:cur.w||0}:null;
 }
+// ── A PHASE MAY CARRY A REPEATING DAY PATTERN ───────────────────────────────
+// Henrik, 2026-08-27: "would locking the cadence to every day and only vary the dose
+// between days help then?"
+//
+// It helps a great deal, and it dissolves a trade-off I had stated as fact. I had said
+// a shorter interval gives coarser control of the weekly load, because one syringe step
+// is spread over more injections. That is only true while every injection is the SAME
+// dose. Let the dose differ between days and daily dosing gives the lowest peak AND the
+// finest weekly resolution at once: alternating two adjacent syringe steps puts the
+// weekly average anywhere between them.
+//
+// Measured on the same transition — 250 mg/ml, 0.05 ml steps, target 1400 — daily with
+// a dithered dose holds 1-3% off target from week 4 onward with 8% within-week ripple,
+// where a fixed every-2-days wanders up to 8% off and is still drifting down at week 15
+// with 14% ripple.
+//
+// `pattern` is that week: seven doses, repeating from the phase's own start. A phase
+// without one keeps using its single `d`, so nothing already saved changes.
+function _patternDoseAt(p,cycleStart,targetDate){
+  var a=_phaseAt(p,cycleStart,targetDate);
+  if(!a||!a.phase.pattern||!a.phase.pattern.length)return null;
+  var phaseStart=new Date(_cycleStartDate(cycleStart).getTime()+(a.startWeek||0)*7*86400000);
+  var day=Math.round((targetDate-phaseStart)/86400000);
+  if(day<0)day=0;
+  var pat=a.phase.pattern;
+  return {dose:String(pat[day%pat.length]),unit:a.phase.u};
+}
 function _effectiveDoseAt(p,cycleStart,targetDate){
+  var pat=_patternDoseAt(p,cycleStart,targetDate);
+  if(pat)return pat;
   var a=_phaseAt(p,cycleStart,targetDate);
   return a?{dose:a.phase.d,unit:a.phase.u}:null;
 }
