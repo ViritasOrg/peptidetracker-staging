@@ -856,9 +856,29 @@ function _trtSolveSt(id){
   if(!_trtSolveState[id])_trtSolveState[id]={target:'',conc:'',weeks:16,step:'0.05',running:false,result:null,error:''};
   return _trtSolveState[id];
 }
+// ⚠️ NEVER RE-RENDER FROM A TEXT INPUT'S oninput HANDLER.
+// This redrew the whole panel on every keystroke, which tears out the <input> being
+// typed into and takes focus — and therefore the iOS keyboard — with it. The target
+// field dismissed the keypad after every single digit.
+//
+// wizSetDose already carries this lesson ("a full re-render on every keystroke would
+// tear out the input being typed into and take the caret with it") and refreshes only
+// its dependent element in place. Same treatment: the typed value is stored, and any
+// stale result is cleared by emptying its own container rather than by redrawing the
+// form around the caret.
+//
+// The two SELECTs still re-render — they change the "= N mg per step" line, and a
+// select has already dismissed the keyboard by the time it fires.
 function trtSolveSet(scope,id,field,val){
-  var st=_trtSolveSt(id); st[field]=val; st.result=null; st.error='';
-  _trtRerender(scope);
+  var st=_trtSolveSt(id); st[field]=val; st.error='';
+  var typed=(field==='target'||field==='weeks');
+  if(st.result){
+    st.result=null;
+    var node=(typeof document!=='undefined')?document.getElementById('trt-solve-res-'+id):null;
+    if(node)node.innerHTML='';
+    else if(typed)return;            // nothing to clear in place; do not steal focus
+  }
+  if(!typed)_trtRerender(scope);
 }
 function _trtDefaultConc(id){
   var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(c){return c.id===id;}):null;
@@ -960,7 +980,7 @@ function _renderTRTSolve(c,selData,scope){
   var q=function(fn,extra){return fn+"('"+scope+"','"+id+"'"+(extra||'')+")";};
   var h='<div class="cfg-row" style="display:block;border-top:1px solid var(--border);padding-top:10px;margin-top:4px">'
     +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--accent);text-transform:uppercase;margin-bottom:6px">Auto on-ramp</div>'
-    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px">Give a target free-T level and the app works out the cadence and the per-injection dose — in 0.1 ml steps — that holds it while the outgoing ester clears. The tail comes from your LOGGED injections.</div>'
+    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px">Give a target free-T level and the app works out the cadence and the per-injection dose that holds it while the outgoing ester clears. The tail comes from your LOGGED injections — untick anything you did not actually take.</div>'
     +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
       +'<span style="font-size:11px;color:var(--muted2);min-width:56px">Target</span>'
       +'<input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(st.target||''))+'" placeholder="pmol/L" oninput="'+q('trtSolveSet',",'target',this.value")+'" style="width:80px">'
@@ -988,6 +1008,9 @@ function _renderTRTSolve(c,selData,scope){
       +' style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.5px;'+(st.running?'opacity:0.6;':'')+'">'
       +(st.running?'Solving…':'Generate on-ramp')+'</button>';
   if(st.error)h+='<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:8px 10px;margin-top:8px;font-size:11px;color:#f59e0b;line-height:1.5">'+_esc(st.error)+'</div>';
+  // Everything the solve produces lives in one node, so a keystroke can drop a stale
+  // result without redrawing the input the user is typing into.
+  h+='<div id="trt-solve-res-'+_esc(id)+'">';
   if(st.result&&st.result.degenerate&&!st.result.best){
     h+='<div style="margin-top:10px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.5);border-radius:8px;padding:10px 12px;font-size:11px;color:#f59e0b;line-height:1.55">'
       +(st.result.notes||[]).map(_esc).join('<br><br>')+'</div>';
@@ -1080,6 +1103,7 @@ function _renderTRTSolve(c,selData,scope){
         }).join('');
     }
   }
+  h+='</div>';   // close the result container
   h+='</div>';
   return h;
 }
