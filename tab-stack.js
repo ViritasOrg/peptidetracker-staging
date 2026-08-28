@@ -508,6 +508,22 @@ function renderStackEditor(){
     html+='<div style="flex:1;font-size:17px;font-weight:700;color:var(--text);">'+_esc(st.name||'Protocol '+(_editIdx+1))+'</div>';
     if(isActive)html+='<span style="background:var(--accent);color:#000;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;">ACTIVE</span>';
     html+='</div>';
+    // ⚠️ ACTIONS STAY ON SCREEN.
+    // Henrik, 2026-08-28: "the buttons for edit/delete/close should be on one row and
+    // always on top of the Plan view. Especially in Edit mode the buttons gets hidden
+    // on bottom of screen."
+    //
+    // They sat at the END of the document, so on a long protocol — and every protocol in
+    // edit mode is long — you had to scroll past every compound to reach Close or Save.
+    // Sticky at the top costs one row and is reachable from anywhere in the view.
+    //
+    // Deactivate is gone from here: it is already on the protocol list a level up, and
+    // duplicating a state-changing control next to Delete is how the wrong one gets hit.
+    html+='<div style="position:sticky;top:0;z-index:30;display:flex;gap:8px;background:var(--bg);border-bottom:1px solid var(--border);padding:8px 0 10px;margin:0 0 16px;">';
+    html+='<button onclick="buildStackStore()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--muted2);border-radius:8px;padding:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Close</button>';
+    html+='<button onclick="_editReadOnly=false;_editInnerTab=_compTabId(_stackViewTab);renderStackEditor()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Edit</button>';
+    html+='<button onclick="deleteStack('+_editIdx+')" style="flex:1;background:none;border:1px solid var(--danger);color:var(--danger);border-radius:8px;padding:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Delete</button>';
+    html+='</div>';
     html+='<div class="wiz-section">Cycle</div>';
     if(_effCs){
       var _sd2=parseLocalDate(_effCs);
@@ -559,14 +575,7 @@ function renderStackEditor(){
         });
       }
     }
-    html+='<div style="display:flex;gap:10px;margin-top:24px;padding-bottom:40px;">';
-    html+='<button onclick="buildStackStore()" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted2);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Close</button>';
-    html+='<button onclick="_editReadOnly=false;_editInnerTab=_compTabId(_stackViewTab);renderStackEditor()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Edit</button>';
-    html+='<button onclick="toggleStack('+_editIdx+');renderStackEditor()" style="flex:1;background:'+(isActive?'var(--surface2)':'var(--accent)')+';border:'+(isActive?'1px solid var(--border)':'none')+';color:'+(isActive?'var(--danger)':'#000')+';border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">'+(isActive?'Deactivate':'Activate')+'</button>';
-    html+='</div>';
-    html+='<div style="padding-bottom:20px;">';
-    html+='<button onclick="deleteStack('+_editIdx+')" style="width:100%;background:none;border:1px solid var(--danger);color:var(--danger);border-radius:8px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;opacity:0.7;">Delete Protocol</button>';
-    html+='</div>';
+    html+='<div style="padding-bottom:24px;"></div>';
     body.innerHTML=html;
     if(_stackViewTab==='compounds'&&(_userTier||1)>=3)_ensurePctPanel(st);
     return;
@@ -575,6 +584,12 @@ function renderStackEditor(){
   html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">';
   html+='<button onclick="buildStackStore()" style="background:none;border:none;color:var(--muted2);font-size:24px;cursor:pointer;padding:0;line-height:1;">←</button>';
   html+='<input id="edit-stack-name" type="text" value="'+_esc(st.name||'')+'" oninput="_editBuf.name=this.value" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:15px;font-weight:600;font-family:inherit;outline:none;">';
+  html+='</div>';
+  // Same reasoning as the read-only view, and this is the case that prompted it: an
+  // edit view is long, so Save and Cancel sat below every compound on the page.
+  html+='<div style="position:sticky;top:0;z-index:30;display:flex;gap:8px;background:var(--bg);border-bottom:1px solid var(--border);padding:8px 0 10px;margin:0 0 16px;">';
+  html+='<button onclick="buildStackStore()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--muted2);border-radius:8px;padding:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Cancel</button>';
+  html+='<button onclick="saveEditBuf()" style="flex:2;background:var(--accent);border:none;color:#000;border-radius:8px;padding:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Save Protocol</button>';
   html+='</div>';
   html+='<div class="wiz-section">Runs</div>';
   var _dateInputStyle='background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none;width:100%;box-sizing:border-box;';
@@ -621,10 +636,7 @@ function renderStackEditor(){
       html+='<div style="color:var(--muted2);font-size:13px;padding:16px 0;text-align:center;">No peptides — tap + Add to get started.</div>';
     }else{st.peptides.forEach(function(p,pi){html+=_renderEditPep(p,pi);});}
   }
-  html+='<div style="display:flex;gap:10px;margin-top:24px;padding-bottom:40px;">';
-  html+='<button onclick="buildStackStore()" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--muted2);border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Cancel</button>';
-  html+='<button onclick="saveEditBuf()" style="flex:2;background:var(--accent);border:none;color:#000;border-radius:8px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Save Protocol</button>';
-  html+='</div>';
+  html+='<div style="padding-bottom:24px;"></div>';
   body.innerHTML=html;
 }
 function _renderEditPep(p,pi){
