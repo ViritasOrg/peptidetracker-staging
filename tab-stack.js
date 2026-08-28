@@ -1034,8 +1034,41 @@ function trtSolveApply(scope,id,which){
   // later lands on the held dose rather than whatever was in the box beforehand.
   var lastPh=phases[phases.length-1];
   if(lastPh)comp.dose=String(lastPh.d);
+  // ⚠️ THE SOLVE MUST OUTLIVE THE SESSION.
+  // st._applied is in-memory, so reopening the app left the debug dump reporting
+  // "none run this session" — and the predicted-vs-plotted pairing, which is the one
+  // comparison a screenshot can never give and the thing that found two bugs today,
+  // is exactly what goes missing. The ramp itself survives in dose_phases; what does
+  // not is what the solver PREDICTED it would do, which is the half you need to tell
+  // "the plan is wrong" from "the plan is right and the model of it is wrong".
+  _trtSaveSolveRecord(id,st,pick);
   st.result=null;
   _trtRerender(scope);
+}
+// Small, and deliberately not part of the protocol document — this is diagnostic
+// history, not plan data, and it must never travel to prod through the promotion of a
+// saved protocol.
+var _TRT_SOLVE_LOG_KEY='proto-trt-solve-log';
+function _trtSaveSolveRecord(id,st,pick){
+  if(typeof localStorage==='undefined'||!pick)return;
+  try{
+    var rec={id:id, at:new Date().toISOString().replace(/\.\d{3}Z$/,'Z'),
+      target:st.target, conc:st.conc, step:st.step, weeks:st.weeks,
+      label:(pick.cadence&&pick.cadence.label)||'',
+      worst:pick.worst, worstSettled:pick.worstSettled, ripple:pick.ripple,
+      drift:pick.drift, settleWeeks:pick.settleWeeks,
+      phases:(pick.phases||[]).map(function(x){return {w:x.w,perWeek:x.perWeek};}),
+      weekly:(pick.weekly||[]).map(function(x){return Math.round(x.mean);})};
+    var all={};
+    try{all=JSON.parse(localStorage.getItem(_TRT_SOLVE_LOG_KEY)||'{}')||{};}catch(e){}
+    all[id]=rec;
+    localStorage.setItem(_TRT_SOLVE_LOG_KEY,JSON.stringify(all));
+  }catch(e){}
+}
+// Read side, kept here rather than in the dump so the dump itself touches no storage.
+function _trtLastSolveRecords(){
+  if(typeof localStorage==='undefined')return {};
+  try{return JSON.parse(localStorage.getItem(_TRT_SOLVE_LOG_KEY)||'{}')||{};}catch(e){return {};}
 }
 function _renderTRTSolve(c,selData,scope){
   var id=c.id, st=_trtSolveSt(id,scope);

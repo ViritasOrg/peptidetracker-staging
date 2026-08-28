@@ -4767,7 +4767,32 @@ function _tcDebugDump(){
 
     p('');
     p('LAST SOLVE');
-    if(!applied) p('  none run this session');
+    // Fall back to the persisted record when nothing was solved in THIS session, so a
+    // dump taken after reopening the app still carries the predicted weekly means.
+    var _persist={};
+    if(typeof _trtLastSolveRecords==='function'){try{_persist=_trtLastSolveRecords()||{};}catch(e){}}
+    if(!applied){
+      var _ks=Object.keys(_persist);
+      if(!_ks.length) p('  none run this session, and none saved');
+      else _ks.forEach(function(k){
+        var r=_persist[k];
+        p('  compound '+k+'  (saved '+(r.at||'?')+')'
+          +'  target '+(r.target||'—')+' pmol/L  conc '+(r.conc||'default')
+          +'  step '+(r.step||'—')+' ml  weeks '+(r.weeks||'—'));
+        p('  winner "'+(r.label||'?')+'"'
+          +'  worst '+Math.round((r.worst||0)*100)+'%'
+          +(r.worstSettled==null?'':'  settled '+Math.round(r.worstSettled*100)+'%')
+          +'  ripple '+Math.round((r.ripple||0)*100)+'%'
+          +'  drift '+Math.round((r.drift||0)*100)+'%'
+          +'  settleWeeks '+(r.settleWeeks==null?'—':r.settleWeeks));
+        if(r.phases&&r.phases.length)
+          p('  ramp  '+r.phases.map(function(x){return 'w'+x.w+'='+x.perWeek+'mg/wk';}).join('  '));
+        if(r.weekly&&r.weekly.length){
+          p('  predicted weekly means:');
+          p('    '+r.weekly.join(' '));
+        }
+      });
+    }
     else{
       var pick=applied._applied||(applied.result&&applied.result.best);
       // The field is blank when the default was taken, so print what the solve really
