@@ -4639,8 +4639,13 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     // invert: at ONE concentration, a finer step must hold the target more tightly.
     const byStep=[0.1,0.05,0.01].map(function(stepMl){
       G._tcp.birthYear='1981'; G._tcp.measuredFT='1300'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+      // ⚠️ PIN THE CADENCE. This measures what the STEP SIZE is worth, so the three
+      // solves must differ only in the step. Reading the auto-picked winner instead
+      // compared whichever cadence happened to rank first at each step, and once
+      // ranking moved to the settled window a step change could flip the winner —
+      // making this assert something about cadence selection rather than draw volume.
       const rr=G.tcSolveTransition({history:hist,incomingId:'enanthate',startDate:'2026-08-27',
-        targetPmol:1500,concMgPerMl:250,stepMl:stepMl,weeks:16});
+        targetPmol:1500,concMgPerMl:250,stepMl:stepMl,weeks:16,cadenceKey:'e2d'});
       return {stepMl:stepMl, drift:rr.best.drift, err:rr.best.meanErr, worst:rr.best.worst, cad:rr.best.cadence.key};
     });
     // Only the claim the product actually rests on: halving the draw volume at a FIXED
@@ -5274,6 +5279,11 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     G._tcp.birthYear='1981'; G._tcp.measuredFT='915'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
     const _bwSave=G._tcBwEntries;
     G._tcBwEntries=[{date:'2026-08-18',free_t:'915',total_t:'32',shbg:'25',unit:'pmol/L'}];
+    // ⚠️ DO NOT PIN A FIXED CADENCE HERE. Pinning e2d to save solve time broke the
+    // premise: a fixed interval anchors its injection days to the protocol's own start,
+    // so two different cycle starts legitimately hit different days and the schedules
+    // are not comparable. The auto-picked winner is the daily dithered plan, where every
+    // day is a hit and the comparison means what it says.
     const sol=G.tcSolveTransition({history:mk(33,2,100,'2026-08-26'),incomingId:'enanthate',
       startDate:'2026-08-28',targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:16});
 
@@ -5372,6 +5382,71 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     // is invisible from every other surface.
     check('  …and labels dose_phases with the origin their w is measured from',
       /w = weeks from cycle_start/.test(src));
+  }
+
+  // ── Henrik, 2026-08-28: "Fix everything" ──────────────────────────────────
+  {
+    const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+    const stk=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+
+    // `from` was read one line before its own declaration, so var-hoisting left it
+    // undefined, the loop never ran and stepPmol was always 0 — the coarse-step warning
+    // could not fire in the one mode where the step size is the whole argument.
+    check('the dither solver declares `from` before it reads it', (function(){
+      const m=src.match(/function _tcSolveDailyDither[\s\S]*?\n\}/);
+      if(!m) return false;
+      const d=m[0].indexOf('var from='), u=m[0].indexOf('for(var sq=from;');
+      return d>=0 && u>d;
+    })());
+
+    // The solve horizon must follow the protocol. 16 hardcoded against a wizard default
+    // of 12 dropped the steepest phases for anyone taking both defaults.
+    check('the solve horizon defaults to the protocol length', (function(){
+      const _eb=G._editBuf;
+      G._editBuf={cycle_length:12};
+      G._trtSolveState={};
+      const st=G._trtSolveSt('enanthate','edit');
+      G._editBuf=_eb; G._trtSolveState={};
+      return st.weeks===12;
+    })());
+    check('  …and falls back to 16 for an open-ended protocol', (function(){
+      const _eb=G._editBuf;
+      G._editBuf={cycle_length:0};
+      G._trtSolveState={};
+      const st=G._trtSolveSt('enanthate','edit');
+      G._editBuf=_eb; G._trtSolveState={};
+      return st.weeks===16;
+    })());
+    check('  …and the panel warns when the horizon outruns the protocol', (function(){
+      const _eb=G._editBuf;
+      G._editBuf={cycle_length:12};
+      G._trtSolveState={enanthate:{target:'',conc:'',weeks:16,step:'0.05',running:false,result:null,error:''}};
+      const h=G._renderTRTSolve({id:'enanthate'},{},'edit');
+      G._editBuf=_eb; G._trtSolveState={};
+      return /will not be scheduled/.test(h);
+    })());
+
+    // A weak anchor still solves, and every number then looks equally confident.
+    check('a single pre-plan draw is reported as weak calibration', (function(){
+      const _bw=G._tcBwEntries;
+      G._tcBwEntries=[{date:'2026-06-26',free_t:'217',total_t:'17',shbg:'45',unit:'pmol/L'}];
+      G._tcp.birthYear='1972'; G._tcp.shbg='45';
+      const mk=(n,every,mg,last)=>{const o=[],L=new Date(last+'T12:00:00');
+        for(let i=0;i<n;i++){const d=new Date(L.getTime()-i*every*86400000);
+          o.push({compId:'nebido',doseMg:String(mg),
+            date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+        return o;};
+      const r=G.tcSolveTransition({history:mk(20,2,100,'2026-08-26'),incomingId:'enanthate',
+        startDate:'2026-08-28',targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:12,cadenceKey:'e2d'});
+      G._tcBwEntries=_bw;
+      return !!(r&&(r.notes||[]).some(n=>/one draw|days before this plan starts/.test(n)));
+    })());
+
+    // The loading peak is an ester property shared by every candidate; ranking on it
+    // let a near-constant choose, picking a plan 3-6% high over one holding target.
+    check('ranking uses the settled window, not the loading peak',
+      /var aw=\(a\.worstSettled==null\)\?a\.worst:a\.worstSettled;/.test(src));
+    check('  …and every scorer reports it', (src.match(/worstSettled:/g)||[]).length>=3);
   }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
