@@ -1127,7 +1127,14 @@ function _trtLastSolveRecords(){
   if(typeof localStorage==='undefined')return {};
   try{return JSON.parse(localStorage.getItem(_TRT_SOLVE_LOG_KEY)||'{}')||{};}catch(e){return {};}
 }
-function _renderTRTSolve(c,selData,scope){
+// ⚠️ IN THE WIZARD, "NEXT" GENERATES.
+// Henrik, 2026-08-28: "Clicking Next after picking free T target should just generate
+// doses, the generate button is a unnecessary step and its also hidden."
+//
+// Both true: it sat below the inputs, where the footer's own Next button already lives —
+// so the primary action was duplicated and the copy that mattered was the one you could
+// not see. hideRun drops it wherever the footer drives the solve instead.
+function _renderTRTSolve(c,selData,scope,hideRun){
   var id=c.id, st=_trtSolveSt(id,scope);
   var conc=st.conc||String(_trtDefaultConc(id));
   var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(x){return x.id===id;}):null;
@@ -1174,6 +1181,7 @@ function _renderTRTSolve(c,selData,scope){
     +'<button onclick="'+q('trtSolveRun')+'"'+(st.running?' disabled':'')
       +' style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.5px;'+(st.running?'opacity:0.6;':'')+'">'
       +(st.running?'Solving…':'Generate schedule')+'</button>';
+  if(hideRun)h=h.replace(/<button onclick="trtSolveRun\([^"]*"[^>]*>[^<]*<\/button>/,'');
   if(st.error)h+='<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:8px 10px;margin-top:8px;font-size:11px;color:#f59e0b;line-height:1.5">'+_esc(st.error)+'</div>';
   // Everything the solve produces lives in one node, so a keystroke can drop a stale
   // result without redrawing the input the user is typing into.
@@ -3110,13 +3118,28 @@ function _wizTrtPlanComplete(){
   return !!(p.compId && parseDec(p.doseMg)>0 && parseDec(p.cadenceDays)>0 && p.startDate);
 }
 
+async function wizTrtGenerate(){
+  var p=_wizEnsureTrtPlan();
+  if(!p.compId)return;
+  var st=_trtSolveSt(p.compId,'wiz');
+  st.target=String(p.targetPmol||'');
+  await trtSolveRun('wiz',p.compId);
+  wizRender();
+}
 function wizStepTRTHandoff(body,footer){
   if(_wizTrtClassic) return wizStepTRT(body,footer);
   // The footer goes in FIRST and the body build is wrapped: this step reads helpers
   // that live in tab-tcalc.js, which loads after this file. If any of them is missing
   // or throws, the user must still get a usable step — a blank pane with nothing but
   // a Next button gives no way to tell a broken step from an empty one.
-  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>';
+  // Next is the only forward action on this step, so in target mode it runs the solve
+  // first and stays put to show the result; pressing it again moves on.
+  var _tp=(typeof _wizEnsureTrtPlan==='function')?_wizEnsureTrtPlan():null;
+  var _needSolve=!!(_tp&&_tp.mode==='target'&&_tp.compId&&parseDec(_tp.targetPmol)>0
+                    &&(function(){var q=_trtSolveSt(_tp.compId,'wiz');return !q.result&&!q.running;})());
+  footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="'
+    +(_needSolve?'wizTrtGenerate()':'wizNext()')+'">'
+    +(_needSolve?'Generate &amp; continue →':'Next →')+'</button>';
   try{
     _wizRenderTrtPlanner(body);
   }catch(err){
@@ -3189,9 +3212,15 @@ function _wizRenderTrtPlanner(body){
     html+='<input type="text" inputmode="decimal" value="'+_esc(String(p.targetPmol||''))+'" placeholder="e.g. 600" onchange="wizSetTrtPlan(\'targetPmol\',this.value)" style="'+iSty+';margin-bottom:14px">';
     html+='<label style="'+lSty+'">3 · First injection</label>';
     html+='<input type="date" value="'+(p.startDate||'')+'" onchange="wizSetTrtPlan(\'startDate\',this.value)" style="'+iSty+'">';
-    html+='<div style="margin-top:14px;font-size:11.5px;color:var(--muted2);line-height:1.55">'
-      +'The schedule itself — how often, and how much to draw each time — is worked out on the next screen, '
-      +'where you can see what it holds before applying it.</div>';
+    var _sst=(typeof _trtSolveSt==='function'&&p.compId)?_trtSolveSt(p.compId,'wiz'):null;
+    if(p.compId&&_sst&&(_sst.result||_sst.running||_sst.error)){
+      html+=(typeof _renderTRTSolve==='function')
+        ? _renderTRTSolve({id:p.compId,name:nameOf(p.compId)},{},'wiz',true) : '';
+    }else{
+      html+='<div style="margin-top:14px;font-size:11.5px;color:var(--muted2);line-height:1.55">'
+        +'Press Next and the app works out the schedule — how often, and how much to draw each '
+        +'time — so you can see what it holds before applying it.</div>';
+    }
     html+='<div onclick="wizToggleTrtClassic()" style="text-align:center;font-size:12px;color:var(--muted2);text-decoration:underline;cursor:pointer;padding:14px 8px 4px">Advanced: multi-compound config</div>';
     body.innerHTML=html;
     return;
