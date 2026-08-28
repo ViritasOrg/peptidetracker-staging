@@ -845,7 +845,15 @@ function editAddTRTPhase(id){trtAddPhase('edit',id);}
 function editRemoveTRTPhase(id,phi){trtRemovePhase('edit',id,phi);}
 function editSetTRTPhase(id,phi,field,val){trtSetPhase('edit',id,phi,field,val);}
 
-// ── AUTO ON-RAMP ────────────────────────────────────────────────────────────
+// ── BUILD A SCHEDULE FROM A TARGET FREE-T LEVEL ─────────────────────────────
+// Henrik, 2026-08-28: "Calling this feature a on-ramp is wrong, it is just a new way
+// of creating a TRT/Test protocol with a targeted free T."
+//
+// He is right, and the old name misdescribed the scope. "On-ramp" implies a temporary
+// run-up to something else, which is only one of the cases this covers — it is equally
+// the way you set up a plain TRT protocol by naming the level you want instead of
+// guessing a milligram figure. Any outgoing ester still clearing is an INPUT to that,
+// not the point of it.
 // "Both cadence and dose (in 0.1 ml steps) needs to be created by the app" — doing
 // this by hand means inverting a calibrated PK model against a decaying tail, week
 // by week, then rounding to what a syringe can actually draw. That is not a manual
@@ -1077,8 +1085,8 @@ function _renderTRTSolve(c,selData,scope){
   var concs=(cat&&cat.conc&&cat.conc.length)?cat.conc:[250,100];
   var q=function(fn,extra){return fn+"('"+scope+"','"+id+"'"+(extra||'')+")";};
   var h='<div class="cfg-row" style="display:block;border-top:1px solid var(--border);padding-top:10px;margin-top:4px">'
-    +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--accent);text-transform:uppercase;margin-bottom:6px">Auto on-ramp</div>'
-    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px">Give a target free-T level and the app works out the cadence and the per-injection dose that holds it while the outgoing ester clears. The tail comes from your LOGGED injections — untick anything you did not actually take.</div>'
+    +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--accent);text-transform:uppercase;margin-bottom:6px">Target free T</div>'
+    +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px">Name the free-T level you want and the app works out the injection schedule that holds it — how often, and how much to draw each time. Anything still clearing from a previous ester is taken into account, read from your LOGGED injections, so untick anything you did not actually take.</div>'
     +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
       +'<span style="font-size:11px;color:var(--muted2);min-width:56px">Target</span>'
       +'<input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(st.target||''))+'" placeholder="pmol/L" oninput="'+q('trtSolveSet',",'target',this.value")+'" style="width:80px">'
@@ -1116,7 +1124,7 @@ function _renderTRTSolve(c,selData,scope){
       +(Math.round((parseDec(conc)||250)*(parseDec(st.step)||0.05)*10)/10)+' mg per step</span></div>'
     +'<button onclick="'+q('trtSolveRun')+'"'+(st.running?' disabled':'')
       +' style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.5px;'+(st.running?'opacity:0.6;':'')+'">'
-      +(st.running?'Solving…':'Generate on-ramp')+'</button>';
+      +(st.running?'Solving…':'Generate schedule')+'</button>';
   if(st.error)h+='<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:8px 10px;margin-top:8px;font-size:11px;color:#f59e0b;line-height:1.5">'+_esc(st.error)+'</div>';
   // Everything the solve produces lives in one node, so a keystroke can drop a stale
   // result without redrawing the input the user is typing into.

@@ -5166,10 +5166,19 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     })());
 
     // The step size is a control now, so the blurb must not name one.
-    check('the on-ramp blurb does not hardcode a step size', (function(){
+    check('the blurb does not hardcode a step size', (function(){
       const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
-      const m=src.match(/Give a target free-T level[\s\S]{0,240}/);
+      const m=src.match(/Name the free-T level you want[\s\S]{0,300}/);
       return m && !/0\.1 ml steps/.test(m[0]);
+    })());
+    // ⚠️ NAMING. "On-ramp" implies a temporary run-up to something else, which is one
+    // case this covers rather than what it is: building a TRT/Test schedule from a
+    // target free-T level. An outgoing ester still clearing is an input, not the point.
+    check('  …and the feature is not called an on-ramp in the UI', (function(){
+      const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+      // strings the user can actually read — comments may still discuss the history
+      return !/>[^<']*[Oo]n-ramp[^<']*</.test(src)
+          && !/'[^']*Generate on-ramp[^']*'/.test(src);
     })());
   }
 
