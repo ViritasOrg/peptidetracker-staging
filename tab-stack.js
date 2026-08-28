@@ -858,8 +858,24 @@ function editSetTRTPhase(id,phi,field,val){trtSetPhase('edit',id,phi,field,val);
 // pharmacology and it must stay that way — a second model would be free to disagree
 // with the curve on screen.
 var _trtSolveState={};
-function _trtSolveSt(id){
-  if(!_trtSolveState[id])_trtSolveState[id]={target:'',conc:'',weeks:16,step:'0.05',running:false,result:null,error:''};
+// ⚠️ THE SOLVE HORIZON MUST FOLLOW THE PROTOCOL, NOT A CONSTANT.
+// This defaulted to 16 weeks with nothing connecting it to the protocol's own length,
+// while the wizard defaults a protocol to 12. Anyone taking both defaults lost the top
+// of their ramp: the generator stops at the protocol's end, so the last phases never
+// schedule — and those are the steepest ones, where the outgoing ester is clearing
+// fastest and the incoming dose should be climbing hardest. Measured on a real 12-week
+// protocol solved over 16: phases w13=138 mg/wk and w14=150 mg/wk simply vanished.
+function _trtSolveWeeksDefault(scope){
+  var cl=0;
+  var box=(scope==='wiz')?(typeof _wiz!=='undefined'&&_wiz)
+                         :(typeof _editBuf!=='undefined'&&_editBuf);
+  if(box&&box.cycle_length>0)cl=parseInt(box.cycle_length,10)||0;
+  if(!(cl>0))return 16;                 // open-ended protocol — no length to follow
+  return Math.max(4,Math.min(52,cl));
+}
+function _trtSolveSt(id,scope){
+  if(!_trtSolveState[id])_trtSolveState[id]={target:'',conc:'',
+    weeks:_trtSolveWeeksDefault(scope),step:'0.05',running:false,result:null,error:''};
   return _trtSolveState[id];
 }
 // ⚠️ NEVER RE-RENDER FROM A TEXT INPUT'S oninput HANDLER.
@@ -891,7 +907,7 @@ function _trtDefaultConc(id){
   return (cat&&cat.conc&&cat.conc.length)?cat.conc[0]:250;
 }
 async function trtSolveRun(scope,id){
-  var st=_trtSolveSt(id);
+  var st=_trtSolveSt(id,scope);
   var comp=_trtComp(scope,id);
   if(!comp){st.error='Compound not found.';_trtRerender(scope);return;}
   st.running=true; st.error=''; st.result=null; _trtRerender(scope);
@@ -1022,7 +1038,7 @@ function trtSolveApply(scope,id,which){
   _trtRerender(scope);
 }
 function _renderTRTSolve(c,selData,scope){
-  var id=c.id, st=_trtSolveSt(id);
+  var id=c.id, st=_trtSolveSt(id,scope);
   var conc=st.conc||String(_trtDefaultConc(id));
   var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(x){return x.id===id;}):null;
   var concs=(cat&&cat.conc&&cat.conc.length)?cat.conc:[250,100];
@@ -1041,6 +1057,18 @@ function _renderTRTSolve(c,selData,scope){
       +'</select>'
       +'<span style="font-size:11px;color:var(--muted2);margin-left:6px">Weeks</span>'
       +'<input class="dose-in" type="number" inputmode="numeric" min="4" max="52" value="'+String(st.weeks||16)+'" oninput="'+q('trtSolveSet',",'weeks',this.value")+'" style="width:52px;text-align:center"></div>'
+    // A horizon past the protocol's end is not an error — the user may be about to
+    // extend it — but the phases beyond that end will not schedule, and saying nothing
+    // is how the top of the ramp disappeared silently.
+    +(function(){
+        var cl=_trtSolveWeeksDefault(scope), wv=parseInt(st.weeks,10)||0;
+        var box=(scope==='wiz')?(typeof _wiz!=='undefined'&&_wiz)
+                               :(typeof _editBuf!=='undefined'&&_editBuf);
+        if(!box||!(box.cycle_length>0)||wv<=cl)return '';
+        return '<div style="font-size:11px;color:#f59e0b;line-height:1.5;margin:-2px 0 8px">'
+          +'This protocol runs '+box.cycle_length+' weeks. Anything past week '+cl
+          +' will not be scheduled — shorten the solve, or lengthen the protocol.</div>';
+      })()
     // THE STEP IS THE LEVER THAT MATTERS, so it is a control rather than a constant.
     // At 250 mg/ml — the standard vial — 0.1 ml steps are 25 mg, which is too coarse
     // to track a decaying tail and is what makes the level sag between steps.

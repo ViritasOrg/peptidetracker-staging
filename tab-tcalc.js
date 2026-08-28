@@ -2771,9 +2771,26 @@ function _tcSolveVariable(ctx, opts){
 
   // Weekly mg per reference injection -> weekly load.
   var perWkRef=7/refIv;
+  // ⚠️ NEVER INVERT AGAINST A LOADING-PHASE SENSITIVITY.
+  // sens[w] is probed with a UNIFORM dose, so early weeks report only the fraction of
+  // the plateau that has accumulated BY THEN. Dividing a week's whole gap by that
+  // deflated number demands a dose big enough to close the gap INSIDE that week — it
+  // treats a week-0 dose as a week-0 instrument, when the dose goes on working for
+  // weeks. That is the week-0 loading spike and the overshoot behind it.
+  // "Why would week 0 have a fixed target???" — it should not. The target is the level
+  // the schedule SETTLES at; the loading weeks are how it gets there, and with a long
+  // ester it cannot get there at any dose that is safe afterwards. Confined to the
+  // loading weeks: past them the low reading is real, and clamping there ran the whole
+  // schedule under target.
+  var _vl=_tcCompInfo(ctx.incomingId);
+  var _loadWv=Math.min(W-1,Math.max(1,Math.ceil(4*(_vl.halfLifeDays||3)/7)));
+  var sensRefV=0,_srv=0;
+  for(var _sv2=_loadWv;_sv2<W;_sv2++){ if(sens[_sv2]>0){sensRefV+=sens[_sv2];_srv++;} }
+  sensRefV=_srv?sensRefV/_srv:0;
   var loadWk=[];
   for(var s0=0;s0<W;s0++){
     var k=sens[s0]>0?sens[s0]:firstSens;
+    if(s0<_loadWv&&sensRefV>k)k=sensRefV;
     var perInj=k>0?Math.max(0,(ctx.targetPmol-base.weekly[s0].mean)/k):0;
     loadWk.push(perInj*perWkRef);
   }
@@ -2809,6 +2826,7 @@ function _tcSolveVariable(ctx, opts){
     var moved=0;
     for(var w2=0;w2<W;w2++){
       var k2=sens[w2]>0?sens[w2]:firstSens;
+      if(w2<_loadWv&&sensRefV>k2)k2=sensRefV;
       if(!(k2>0)) continue;
       var deltaPerInj=_TC_SOLVE_DAMPING*(ctx.targetPmol-evalRes.weekly[w2].mean)/k2;
       var next=Math.max(0, loadWk[w2]+deltaPerInj*perWkRef);
@@ -2859,7 +2877,15 @@ function _tcSolveVariable(ctx, opts){
     var ov=weekly[zv].peak-ctx.targetPmol;
     if(ov>worst)worst=ov;
   }
-  return {cadence:{key:'variable', label:'Variable interval', variable:true}, settleWeeks:settleWeeks,
+  var worstSettledV=0;
+  for(var wsv=from; wsv<weekly.length; wsv++){
+    var vHi=weekly[wsv].peak-ctx.targetPmol, vLo=ctx.targetPmol-weekly[wsv].trough;
+    var vd=(vHi>vLo?vHi:vLo);
+    if(vd>worstSettledV)worstSettledV=vd;
+  }
+  worstSettledV=ctx.targetPmol>0?worstSettledV/ctx.targetPmol:Infinity;
+  return {worstSettled:worstSettledV,
+          cadence:{key:'variable', label:'Variable interval', variable:true}, settleWeeks:settleWeeks,
           phases:phases, weekly:weekly, doses:mgWk, intervals:ivWk,
           ripple:rn?rp/rn:Infinity,
           drift:(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity,
@@ -2924,9 +2950,26 @@ function _tcSolveDailyDither(ctx, opts){
   if(neg>0) return {degenerate:true, negWeeks:neg};
   var firstS=sens.find(function(v){return v>0;})||0;
 
+  // ⚠️ NEVER INVERT AGAINST A LOADING-PHASE SENSITIVITY.
+  // sens[w] is probed with a UNIFORM dose, so early weeks report only the fraction of
+  // the plateau that has accumulated BY THEN. Dividing a week's whole gap by that
+  // deflated number demands a dose big enough to close the gap INSIDE that week — it
+  // treats a week-0 dose as a week-0 instrument, when the dose goes on working for
+  // weeks. That is the week-0 loading spike and the overshoot behind it.
+  // "Why would week 0 have a fixed target???" — it should not. The target is the level
+  // the schedule SETTLES at; the loading weeks are how it gets there, and with a long
+  // ester it cannot get there at any dose that is safe afterwards. Confined to the
+  // loading weeks: past them the low reading is real, and clamping there ran the whole
+  // schedule under target.
+  var _dl=_tcCompInfo(ctx.incomingId);
+  var _loadW=Math.min(W-1,Math.max(1,Math.ceil(4*(_dl.halfLifeDays||3)/7)));
+  var sensRef=0,_srn=0;
+  for(var _sr=_loadW;_sr<W;_sr++){ if(sens[_sr]>0){sensRef+=sens[_sr];_srn++;} }
+  sensRef=_srn?sensRef/_srn:0;
   var needW=[];
   for(var s0=0;s0<W;s0++){
     var k0=sens[s0]>0?sens[s0]:firstS;
+    if(s0<_loadW&&sensRef>k0)k0=sensRef;
     needW.push(k0>0?Math.max(0,(ctx.targetPmol-zero.weekly[s0].mean)/k0):0);
   }
   var peakWeek=0,pv=-Infinity;
@@ -2968,6 +3011,7 @@ function _tcSolveDailyDither(ctx, opts){
     var moved=0;
     for(var w3=0;w3<W;w3++){
       var k3=sens[w3]>0?sens[w3]:firstS;
+      if(w3<_loadW&&sensRef>k3)k3=sensRef;   // the correction repeats the seed's inversion
       if(!(k3>0)) continue;
       var nx=Math.max(0, needW[w3]+_TC_SOLVE_DAMPING*(ctx.targetPmol-res.weekly[w3].mean)/k3);
       moved=Math.max(moved,Math.abs(nx-needW[w3]));
@@ -2999,11 +3043,17 @@ function _tcSolveDailyDither(ctx, opts){
   // step on ONE day of the week, so the effective weekly resolution is seven times finer
   // than a fixed daily dose — which is the whole reason this mode exists, and why the
   // coarse-step warning usually should not fire for it.
+  // ⚠️ DECLARED BEFORE IT IS READ. `from` was declared on the line AFTER this loop,
+  // so var-hoisting made it undefined here: `sq=undefined; sq<W` is false, the loop
+  // never ran, sensAvg stayed 0 and stepPmol was always 0 — the coarse-step warning
+  // could never fire in dithered mode, which is the one mode where the step size is
+  // the whole argument.
+  var from=(W>1)?settleWeeks:0;
   var sensAvg=0,sn=0;
   for(var sq=from;sq<W;sq++){ if(sens[sq]>0){sensAvg+=sens[sq];sn++;} }
   sensAvg=sn?sensAvg/sn:0;
   var stepPmolDaily=sensAvg*stepMg/7;
-  var from=(W>1)?settleWeeks:0, rp=0,rn=0,err=0,en=0,wLo=Infinity,wHi=0,worst=0;
+  var rp=0,rn=0,err=0,en=0,wLo=Infinity,wHi=0,worst=0;
   for(var z=from;z<fin.weekly.length;z++){
     var x=fin.weekly[z];
     if(x.mean>0){ rp+=(x.peak-x.trough)/x.mean; rn++; }
@@ -3019,7 +3069,15 @@ function _tcSolveDailyDither(ctx, opts){
     var over=fin.weekly[zo].peak-ctx.targetPmol;
     if(over>worst)worst=over;
   }
-  return {cadence:{key:'daily-dither', label:'Daily, dose varies by day', dithered:true, days:null, freqVal:1, freqUnit:'days'},
+  var worstSettledD=0;
+  for(var wsd=from; wsd<fin.weekly.length; wsd++){
+    var dHi2=fin.weekly[wsd].peak-ctx.targetPmol, dLo2=ctx.targetPmol-fin.weekly[wsd].trough;
+    var dd2=(dHi2>dLo2?dHi2:dLo2);
+    if(dd2>worstSettledD)worstSettledD=dd2;
+  }
+  worstSettledD=ctx.targetPmol>0?worstSettledD/ctx.targetPmol:Infinity;
+  return {worstSettled:worstSettledD,
+          cadence:{key:'daily-dither', label:'Daily, dose varies by day', dithered:true, days:null, freqVal:1, freqUnit:'days'},
           phases:phases, weekly:fin.weekly.map(function(x,i){return {week:i,mean:x.mean,peak:x.peak,trough:x.trough,mg:mg[i*7]};}),
           doses:mg, ripple:rn?rp/rn:Infinity,
           drift:(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity,
@@ -3071,10 +3129,27 @@ function _tcSolveForCadence(ctx, cad, opts){
 
   // 3. Seed, then iterate. Diagonally dominant — this week's dose dominates this
   //    week's level — so a handful of passes converges.
+  // ⚠️ NEVER INVERT AGAINST A LOADING-PHASE SENSITIVITY.
+  // sens[w] is probed with a UNIFORM dose, so early weeks report only the fraction of
+  // the plateau that has accumulated BY THEN. Dividing a week's whole gap by that
+  // deflated number demands a dose big enough to close the gap INSIDE that week — it
+  // treats a week-0 dose as a week-0 instrument, when the dose goes on working for
+  // weeks. That is the week-0 loading spike and the overshoot behind it.
+  // "Why would week 0 have a fixed target???" — it should not. The target is the level
+  // the schedule SETTLES at; the loading weeks are how it gets there, and with a long
+  // ester it cannot get there at any dose that is safe afterwards. Confined to the
+  // loading weeks: past them the low reading is real, and clamping there ran the whole
+  // schedule under target.
+  var _fl=_tcCompInfo(ctx.incomingId);
+  var _loadWf=Math.min(W-1,Math.max(1,Math.ceil(4*(_fl.halfLifeDays||3)/7)));
+  var sensRefF=0,_srf=0;
+  for(var _sf=_loadWf;_sf<W;_sf++){ if(sens[_sf]>0){sensRefF+=sens[_sf];_srf++;} }
+  sensRefF=_srf?sensRefF/_srf:0;
   var doses=[];
   for(var s0=0; s0<W; s0++){
     var need=ctx.targetPmol-base.weekly[s0].mean;
     var k=sens[s0]>0?sens[s0]:firstSens;
+    if(s0<_loadWf&&sensRefF>k)k=sensRefF;
     doses.push(k>0?Math.max(0,need/k):0);
   }
   // Where the outgoing ester's own contribution peaks — the pivot of the shape above.
@@ -3089,6 +3164,7 @@ function _tcSolveForCadence(ctx, cad, opts){
     var moved=0;
     for(var w2=0; w2<W; w2++){
       var k2=sens[w2]>0?sens[w2]:firstSens;
+      if(w2<_loadWf&&sensRefF>k2)k2=sensRefF;
       if(!(k2>0)) continue;
       // DAMPED. The per-week sensitivity treats each week as independent, but with a
       // 4.5-day ester roughly a third of a dose is still on board the following week.
@@ -3200,6 +3276,21 @@ function _tcSolveForCadence(ctx, cad, opts){
     if(d>worst)worst=d;
   }
   worst=ctx.targetPmol>0?(worst/ctx.targetPmol):Infinity;
+  // ⚠️ RANK ON THE SETTLED PERIOD; REPORT THE LOADING PEAK SEPARATELY.
+  // The loading overshoot is a property of the ESTER, not of the schedule — every
+  // candidate here lands within 1494-1550 on the same transition. Folding it into the
+  // ranking key adds a near-constant to all of them, which compresses the real
+  // differences until noise decides. It picked a plan sitting 3-6% high for six weeks
+  // over one holding 1387-1447, because the loser's loading peak was 40 pmol/L higher.
+  // Scoring it stays honest (that is what #1081 fixed); it just must not be the thing
+  // that chooses between schedules.
+  var worstSettled=0;
+  for(var ws=from; ws<weekly.length; ws++){
+    var sHi=weekly[ws].peak-ctx.targetPmol, sLo=ctx.targetPmol-weekly[ws].trough;
+    var sd=(sHi>sLo?sHi:sLo);
+    if(sd>worstSettled)worstSettled=sd;
+  }
+  worstSettled=ctx.targetPmol>0?(worstSettled/ctx.targetPmol):Infinity;
   // Reported separately so the settled figure is still available, but never as the
   // headline on its own.
   var sFrom=Math.max(from,W-4), sLo=Infinity, sHi=0, sErr=0, sN=0;
@@ -3213,7 +3304,8 @@ function _tcSolveForCadence(ctx, cad, opts){
   for(var sq=Math.max(0,W-4); sq<W; sq++){ if(sens[sq]>0){ sensTail+=sens[sq]; stn++; } }
   sensTail=stn?sensTail/stn:0;
   return {cadence:cad, phases:phases, weekly:weekly, doses:snapped,
-          ripple:rn?rp/rn:Infinity, drift:drift, worst:worst, meanErr:en?err/en:Infinity,
+          ripple:rn?rp/rn:Infinity, drift:drift, worst:worst, worstSettled:worstSettled,
+          meanErr:en?err/en:Infinity,
           settledDrift:(isFinite(sLo)&&ctx.targetPmol>0)?((sHi-sLo)/ctx.targetPmol):Infinity,
           settledErr:sN?sErr/sN:Infinity,
           lowPmol:isFinite(wLo)?wLo:0, highPmol:wHi, settleWeeks:settleWeeks,
@@ -3342,7 +3434,12 @@ function tcSolveTransition(opts){
     return 3.5;
   };
   results.sort(function(a,b){
-    var d=a.worst-b.worst;
+    // worstSettled, not worst — see the note in the scorer. The loading peak is an
+    // ester property common to every candidate; ranking on it lets a near-constant
+    // decide. Falls back to worst for any result that predates the field.
+    var aw=(a.worstSettled==null)?a.worst:a.worstSettled;
+    var bw=(b.worstSettled==null)?b.worst:b.worstSettled;
+    var d=aw-bw;
     if(Math.abs(d)>_TIE) return d;
     var rp=a.ripple-b.ripple;
     if(Math.abs(rp)>_TIE) return rp;
@@ -3377,6 +3474,32 @@ function tcSolveTransition(opts){
   var notes=[];
   var guard=_tcSolveAnchorGuard(ctx);
   if(guard) notes.push(guard);
+  // ── HOW WELL IS THIS CURVE ACTUALLY CALIBRATED? ────────────────────────────
+  // The guards above catch a curve that cannot be solved at all. They say nothing
+  // about one that solves fine but rests on a weak anchor, and those numbers come out
+  // looking exactly as confident as any other. The common case is a single draw taken
+  // before the protocol started: the curve is then pinned at a point where almost no
+  // drug was on board, and every level downstream is scaled off it.
+  (function(){
+    var bw=(typeof _tcBwEntries!=='undefined'&&_tcBwEntries)?_tcBwEntries:[];
+    if(!bw.length){
+      notes.push('No bloodwork on file, so the curve is scaled from a population '
+        +'estimate for your age rather than from a measurement. Levels are indicative; '
+        +'add a draw and the whole plan re-scales to it.');
+      return;
+    }
+    var latest=bw.slice().sort(function(a,b){return (a.date||'')<(b.date||'')?-1:1;}).pop();
+    if(!latest||!latest.date) return;
+    var ageD=Math.round((new Date(ctx.startDate+'T12:00:00')-new Date(latest.date+'T12:00:00'))/86400000);
+    var msgs=[];
+    if(bw.length===1) msgs.push('one draw');
+    if(ageD>=56) msgs.push('taken '+ageD+' days before this plan starts');
+    if(msgs.length)
+      notes.push('Calibrated on '+msgs.join(', ')+'. The whole curve is scaled off that '
+        +'single point, so treat the absolute levels as approximate — the SHAPE of the '
+        +'ramp is far more reliable than the numbers on it. A more recent draw tightens '
+        +'every figure here.');
+  })();
   if(best.phases.some(function(p){return p.overshoot;})){
     notes.push('The outgoing ester alone already puts you at or above '+Math.round(ctx.targetPmol)
       +' pmol/L in the early weeks, so the ramp starts at zero — no dose of the new ester can '
