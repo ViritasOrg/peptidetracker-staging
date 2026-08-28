@@ -1333,7 +1333,12 @@ console.log(`\n${'─'.repeat(59)}`);
     !/if\(st&&st\.cycle_start\)set\.add\(_stackCycleId\(st\)\)/.test(rawScript));
 
   check('activation backfills the start date', /function _ensureCycleStart\(idx\)\{/.test(rawScript));
-  check('  …to today', /st\.cycle_start=dateKey\(NOW\);/.test(rawScript));
+  // ⚠️ NO LONGER "TODAY". Henrik, 2026-08-28: a new protocol should start the day after
+  // the current one ends, so activation backfills _nextFreeStartDate() — which clamps to
+  // today when nothing is still running, preserving the behaviour this test was written
+  // for while fixing the overlap it caused.
+  check('  …to the day after the last protocol ends, or today',
+    /st\.cycle_start=_nextFreeStartDate\(\);/.test(rawScript));
   check('  …and never overwrites one already set', /if\(st\.cycle_start\)return false;/.test(rawScript));
 
   // _deriveStackCycleId includes the start date. Setting one before the id is
@@ -5503,6 +5508,48 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       /NO SUCH PROTOCOL/.test(src) && /belong to no existing protocol/.test(src));
     check('  …grouping by protocol as well as compound',
       /var k=\(e\.compId\|\|'\?'\)\+'\\u0000'\+\(e\.cycleId\|\|''\);/.test(src));
+  }
+
+  // ── A new protocol starts where the last one ends ─────────────────────────
+  // Henrik, 2026-08-28: "I have a active protocol ending September 13, the default
+  // start date when I create a new Protocol should be last date of current protocol
+  // (if one exists) +1 day. So here it should default to 14 September"
+  //
+  // Defaulting to today put a new protocol on top of one still running: two protocols
+  // overlapping schedule two sets of injections into the same days.
+  {
+    // _userStacks is a let binding, so the array is mutated rather than rebound —
+    // exactly how the app itself reaches it.
+    const ev=(js)=>vm.runInContext(js,sandbox);
+    const setStacks=(arr)=>{ sandbox.__stk=arr;
+      ev('_userStacks.length=0;__stk.forEach(function(x){_userStacks.push(x);});'); };
+    const today=ev('dateKey(NOW)');
+    const nextStart=()=>ev('_nextFreeStartDate()');
+    const save=ev('_userStacks.slice()');
+
+    setStacks([]);
+    check('with no protocols the default is today', nextStart()===today, nextStart());
+    // The reported case.
+    setStacks([{id:'p1',cycle_start:'2026-06-01',end_date:'2026-09-13'}]);
+    check('  …a protocol ending 13 Sep defaults the next one to 14 Sep',
+      nextStart()==='2026-09-14', nextStart());
+    // An end derived from cycle_length counts too, not just an explicit end_date.
+    setStacks([{id:'p1',cycle_start:'2026-08-28',cycle_length:12}]);
+    check('  …a length-derived end counts the same as an explicit one',
+      nextStart()==='2026-11-21', nextStart());
+    // ⚠️ NEVER INTO THE PAST. A finished protocol must not drag the default backwards.
+    setStacks([{id:'p1',cycle_start:'2026-01-01',end_date:'2026-03-01'}]);
+    check('  …but a protocol that already ended yields today', nextStart()===today, nextStart());
+    // The protocol being created has no cycle_start, so it contributes no end date and
+    // cannot push its own default forward.
+    setStacks([{id:'p1',cycle_start:'2026-06-01',end_date:'2026-09-13'},{id:'new'}]);
+    check('  …and the protocol being created does not count itself',
+      nextStart()==='2026-09-14', nextStart());
+
+    setStacks(save);
+    check('  …and the wizard first-injection follows the same default',
+      /_nextFreeStartDate==='function' \? _nextFreeStartDate\(\)/
+        .test(require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8')));
   }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);

@@ -3074,7 +3074,11 @@ function _wizEnsureTrtPlan(){
         : (c.freqUnit==='weeks' ? c.freqVal*7 : c.freqVal);
     }
   }
-  if(!seed.startDate) seed.startDate = _wiz.cycle_start || (typeof dateKey==='function' ? dateKey(NOW) : '');
+  // The first injection follows the protocol's own start, which now defaults to the day
+  // after the last one ends rather than to today.
+  if(!seed.startDate) seed.startDate = _wiz.cycle_start
+    || (typeof _nextFreeStartDate==='function' ? _nextFreeStartDate()
+        : (typeof dateKey==='function' ? dateKey(NOW) : ''));
   _wiz.trtPlan=seed;
   return _wiz.trtPlan;
 }
