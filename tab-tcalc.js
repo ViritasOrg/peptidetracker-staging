@@ -4474,7 +4474,15 @@ function _tcDebugDump(){
     if(!toDump.length){ p('PROTOCOL  no stacks loaded (targetStackId '+(tid||'—')+')'); }
     if(!stk&&all.length) p('PROTOCOL  target unresolved (targetStackId '+(tid||'—')+') — dumping all '+all.length);
     toDump.forEach(function(stk){
-      p('PROTOCOL  '+(stk.name||'(unnamed)')+'  [id '+stk.id+']'+(stk.id===tid?'   ← T-Calc target':''));
+      // ⚠️ EXACTLY ONE PROTOCOL IS ACTIVE AT A TIME, and only the active one generates
+      // injections. A compound sitting on an inactive protocol schedules nothing and is
+      // therefore invisible to both the curve and the solve — which reads, from the
+      // outside, exactly like a compound that was silently dropped.
+      var _ix=all.indexOf(stk);
+      var _act=(typeof _isActiveStack==='function'&&_ix>=0)?_isActiveStack(_ix):null;
+      p('PROTOCOL  '+(stk.name||'(unnamed)')+'  [id '+stk.id+']'
+        +(_act===true?'   ACTIVE — generates':_act===false?'   inactive — schedules nothing':'')
+        +(stk.id===tid?'   ← T-Calc target':''));
       p('  cycle_start '+(stk.cycle_start||'—')
         +'   end_date '+(stk.end_date||'—')
         +'   cycle_length '+(stk.cycle_length==null?'—':stk.cycle_length));
@@ -4612,30 +4620,41 @@ function _tcDebugDump(){
     // Without a start date the weekly rows would not line up with the predicted ones,
     // but the curve is still worth printing — anchor it at today and say so.
     var anchorKey=startKey||dateKey(NOW);
-    if(_tcDrawnFT&&_tcDrawnFT.values&&_tcDrawnFT.values.length){
+    // ⚠️ NOT FROM _tcDrawnFT. That array stops at the last PAST injection by
+    // construction — it exists to persist free-T HISTORY. Reading the forward plan out
+    // of it yielded exactly one week and defeated the whole point of this block, which
+    // is to sit the plotted weeks next to the predicted ones. The series below is the
+    // same expression the chart plots (total × calFT), over the full horizon.
+    if(S&&S.total&&S.totalDays>0){
       var s0=parseLocalDate(anchorKey);
-      var off=Math.round((s0-_tcDrawnFT.firstMs)/86400000);
+      var off=Math.round((s0-S.firstDate.getTime())/86400000);
       var wk=[];
       for(var w=0;w<16;w++){
         var sum=0,n=0;
         for(var d=off+w*7;d<off+(w+1)*7;d++){
-          var v=_tcDrawnFT.values[d];
-          if(d>=0&&isFinite(v)){sum+=v;n++;}
+          if(d<0||d>S.totalDays)continue;
+          var v=S.total[d]*(S.calFT_arr?S.calFT_arr[d]:S.scale);
+          if(isFinite(v)){sum+=v;n++;}
         }
         if(n)wk.push(Math.round(sum/n));
       }
       p('  weekly means from '+anchorKey+(startKey?'  (incoming ester start)':'  (today — no ester start_date found)')+':');
       p('    '+wk.join(' '));
-    } else p('  no drawn curve yet — open the chart, then Build again');
+    } else p('  series unavailable');
 
     p('');
     p('LAST SOLVE');
     if(!applied) p('  none run this session');
     else{
       var pick=applied._applied||(applied.result&&applied.result.best);
+      // The field is blank when the default was taken, so print what the solve really
+      // used — a dump that reports "conc —" for a solve done at 250 mg/ml is misleading
+      // about the one number the syringe steps are derived from.
+      var _effConc=parseDec(applied.conc)
+        ||((typeof _trtDefaultConc==='function')?_trtDefaultConc(appliedId):null);
       p('  compound '+appliedId
         +'  target '+(applied.target||'—')+' pmol/L'
-        +'  conc '+(applied.conc||'—')+' mg/ml'
+        +'  conc '+(_effConc||'—')+' mg/ml'+(applied.conc?'':' (default)')
         +'  step '+(applied.step||'—')+' ml'
         +'  weeks '+(applied.weeks||'—'));
       if(!pick) p('  no plan (refused or degenerate)');
@@ -4647,6 +4666,22 @@ function _tcDebugDump(){
           +'  settleWeeks '+(pick.settleWeeks==null?'—':pick.settleWeeks));
         if(pick.phases&&pick.phases.length)
           p('  ramp  '+pick.phases.map(function(x){return 'w'+x.w+'='+x.perWeek+'mg/wk';}).join('  '));
+        // A solve horizon longer than the protocol's own length means the tail of the
+        // ramp never generates: the last steps are simply dropped, and the level falls
+        // short exactly where the ramp was supposed to be climbing.
+        var _hostStk=null;
+        (stk?[stk]:all).forEach(function(sx){
+          [sx.trt,sx.enhanced].forEach(function(b){
+            if(b&&b.compounds&&b.compounds.some(function(c){return c&&c.id===appliedId;}))_hostStk=sx;
+          });
+        });
+        if(_hostStk&&_hostStk.cycle_length>0&&pick.phases&&pick.phases.length){
+          var lastW=pick.phases[pick.phases.length-1].w||0;
+          if(lastW>=_hostStk.cycle_length)
+            p('  ⚠ ramp runs to w'+lastW+' but "'+(_hostStk.name||_hostStk.id)
+              +'" is only '+_hostStk.cycle_length+' weeks — phases from w'
+              +_hostStk.cycle_length+' never generate');
+        }
         if(pick.weekly&&pick.weekly.length){
           p('  predicted weekly means:');
           p('    '+pick.weekly.map(function(x){return Math.round(x.mean);}).join(' '));
