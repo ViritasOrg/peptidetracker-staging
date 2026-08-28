@@ -5490,6 +5490,21 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       /if\(!\(parseDec\(_dpd\.dose\)>0\)\)continue;/.test(stk));
   }
 
+  // ── Orphaned scheduled doses must be visible ──────────────────────────────
+  // There is an open bug in which testosterone doses survive a delete that should reach
+  // them; the delete keys on (cycle_id, compound_id) and neither is visible from the UI.
+  // Henrik tests by deleting and recreating a protocol every time, so rows left behind
+  // would silently drive every subsequent curve.
+  {
+    const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+    check('scheduled rows carry the protocol that made them',
+      /cycleId: e\.cycle_id \|\| ''/.test(src));
+    check('  …and the dump flags rows no live protocol owns',
+      /NO SUCH PROTOCOL/.test(src) && /belong to no existing protocol/.test(src));
+    check('  …grouping by protocol as well as compound',
+      /var k=\(e\.compId\|\|'\?'\)\+'\\u0000'\+\(e\.cycleId\|\|''\);/.test(src));
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
