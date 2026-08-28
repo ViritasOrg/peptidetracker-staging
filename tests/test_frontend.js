@@ -5458,6 +5458,38 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     check('  …and every scorer reports it', (src.match(/worstSettled:/g)||[]).length>=3);
   }
 
+  // ── A testosterone arrives with NO dose ───────────────────────────────────
+  // Henrik, 2026-08-28: "Why Dafuk would there be a default dose to start with?"
+  // It was quick-add convenience, and for a dosing app that is the wrong trade: the
+  // dose IS the clinical decision, and a pre-filled one is indistinguishable from a
+  // chosen one. It scheduled real injections and drove the plasma curve — a user who
+  // asked only for a 1400 pmol/L target had 125 mg every Monday scheduled for them.
+  {
+    const stk=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+    check('adding a testosterone does not invent a dose', (function(){
+      // every TRT add path, wizard and editor
+      const adds=stk.match(/_(wiz|editBuf)\.trt\.compounds\.push\(\{[^}]*\}/g)||[];
+      return adds.length>=3 && adds.every(a=>/dose:''/.test(a));
+    })(), (stk.match(/_(wiz|editBuf)\.trt\.compounds\.push\(\{[^}]*\}/g)||[]).length+' add paths');
+    // The CADENCE default stays — a schedule shape is visible and changeable; a
+    // milligram figure the app invented is a decision made for the user.
+    check('  …but it keeps a cadence to start from',
+      /_wiz\.trt\.compounds\.push\(\{[^}]*freqUnit:/.test(stk));
+
+    check('a testosterone with no dose schedules nothing', (function(){
+      const mk=(dose)=>({cycle_start:'2026-08-28',cycle_length:12,trt:{enabled:true,compounds:[
+        {id:'enanthate',name:'Testosterone Enanthate',dose:dose,unit:'mg',
+         freqVal:1,freqUnit:'weeks',days:[1],active:true}]}});
+      const rows=(st)=>[].concat.apply([],(G._genInjBatches(st,'c',new Date('2026-08-28T12:00:00'))||[])
+        .map(b=>b.entries));
+      return rows(mk('')).length===0 && rows(mk('125')).length>0;
+    })());
+    // The peptide branch always guarded this; the TRT branch pushed regardless, which
+    // stayed invisible only while every testosterone arrived pre-filled.
+    check('  …and the guard is in the generator, not just the add path',
+      /if\(!\(parseDec\(_dpd\.dose\)>0\)\)continue;/.test(stk));
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });

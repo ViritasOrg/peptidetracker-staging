@@ -680,7 +680,7 @@ function editToggleTRT(){
 function editToggleTRTCompound(id){
   var _has=((_editBuf.trt&&_editBuf.trt.compounds)||[]).some(function(c){return c&&c.id===id;});
   if((_userTier||1)<2 && !_has){ showCompoundUpgrade(id); return; }
-  if(!_editBuf.trt)_editBuf.trt={enabled:true,compounds:[]};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];var idx=_editBuf.trt.compounds.findIndex(function(c){return c.id===id;});if(idx!==-1){_editBuf.trt.compounds.splice(idx,1);}else{var cat=TRT_CAT.find(function(c){return c.id===id;});if(cat)_editBuf.trt.compounds.push({id:id,name:cat.name,dose:cat.defaultDose||'',unit:cat.unit||'mg',freqVal:cat.freqVal||1,freqUnit:cat.freqUnit||'weeks',days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});}_collectEditInputs();renderStackEditor();}
+  if(!_editBuf.trt)_editBuf.trt={enabled:true,compounds:[]};if(!_editBuf.trt.compounds)_editBuf.trt.compounds=[];var idx=_editBuf.trt.compounds.findIndex(function(c){return c.id===id;});if(idx!==-1){_editBuf.trt.compounds.splice(idx,1);}else{var cat=TRT_CAT.find(function(c){return c.id===id;});if(cat)_editBuf.trt.compounds.push({id:id,name:cat.name,dose:'',unit:cat.unit||'mg',freqVal:cat.freqVal||1,freqUnit:cat.freqUnit||'weeks',days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});}_collectEditInputs();renderStackEditor();}
 // A SELECT MUST NEVER DISPLAY A UNIT IT IS NOT HOLDING.
 // Reported 2026-08-19: "Choosing 100mg every 2 day generates a 28mg dose instead of the
 // planned 100mg." The entry stored unit "mg/week" — carried in from the Enhanced block
@@ -910,6 +910,21 @@ function trtSolveSet(scope,id,field,val){
   }
   if(!typed)_trtRerender(scope);
 }
+// ⚠️ A TESTOSTERONE ARRIVES WITH NO DOSE. THIS IS DELIBERATE.
+// Henrik, 2026-08-28: "Why Dafuk would there be a default dose to start with?"
+//
+// It was quick-add convenience: pick a compound and it arrives ready to save, seeded
+// from the catalogue's Standard-TRT tier. For a dosing app that is the wrong trade.
+// The dose IS the clinical decision, and a pre-filled one is indistinguishable from a
+// chosen one — it immediately generates real injections, drives the plasma curve, and
+// appears in Today as doses to tick. A user who asked only for a 1400 pmol/L target
+// still had 125 mg every Monday scheduled on their behalf, and the curve ran to 2349.
+//
+// The CADENCE default stays. A schedule shape is a starting point the user can see and
+// change; a milligram figure the app invented is a decision made for them.
+// TRT_CAT.defaultDose is still read by the AAS sheet and the enhanced tier, which is
+// why it remains in the catalogue.
+
 // What this compound actually schedules as things stand, in the user's own terms.
 function _trtCurrentScheduleLabel(c){
   if(!c)return '';
@@ -3182,7 +3197,7 @@ function wizToggleTRTCompound(id){
   if(!_wiz.trt.compounds)_wiz.trt.compounds=[];
   var idx=_wiz.trt.compounds.findIndex(function(c){return c.id===id;});
   if(idx!==-1){_wiz.trt.compounds.splice(idx,1);}
-  else{var cat=TRT_CAT.find(function(c){return c.id===id;});if(cat)_wiz.trt.compounds.push({id:id,name:cat.name,dose:cat.defaultDose,unit:cat.unit,freqVal:cat.freqVal,freqUnit:cat.freqUnit,days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});}
+  else{var cat=TRT_CAT.find(function(c){return c.id===id;});if(cat)_wiz.trt.compounds.push({id:id,name:cat.name,dose:'',unit:cat.unit,freqVal:cat.freqVal,freqUnit:cat.freqUnit,days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});}
   wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 function wizSetTRTDose(id,v){var c=(_wiz.trt.compounds||[]).find(function(c){return c.id===id;});if(c)c.dose=v;}
@@ -3813,7 +3828,7 @@ function _wizSeedTrtBase(id){
     ? TRT_CAT.find(function(c){return c&&(c.id===cid||c.id===id);}) : null;
   if(!cat)return false;
   _wiz.trt.enabled=true;
-  _wiz.trt.compounds.push({id:cat.id,name:cat.name,dose:cat.defaultDose||'',unit:cat.unit||'mg',
+  _wiz.trt.compounds.push({id:cat.id,name:cat.name,dose:'',unit:cat.unit||'mg',
     freqVal:cat.freqVal||1,freqUnit:cat.freqUnit||'weeks',
     days:cat.id==='nebido'?undefined:(cat.defaultDays?cat.defaultDays.slice():[1])});
   return true;
@@ -4708,6 +4723,12 @@ function _genInjBatches(stack,cycleId,fromDate){
               ? _enhDosePerInjection(Object.assign({},c,{dose:_eff.dose,unit:_eff.unit}))
               : {dose:_eff.dose,unit:_eff.unit})
           : _tpd;
+        // ⚠️ NO DOSE MEANS NO INJECTION.
+        // The peptide branch has always guarded this; the TRT branch pushed regardless,
+        // so a compound with an empty dose produced real rows carrying ''. That only
+        // stayed invisible while every testosterone arrived pre-filled from the
+        // catalogue — which is the thing being removed here.
+        if(!(parseDec(_dpd.dose)>0))continue;
         compEntries.push({cycle_id:cycleId,date:dateKey(d),compound_id:c.id,compound_name:c.name,tier:'trt',dose:_dpd.dose||'',unit:_dpd.unit||'mg',dot:dot,time_of_day:(c.time==='PM'?'PM':'AM'),active:true,logged:false});
       }
       // Empty batches are pushed too — see the note in the peptide branch above.
