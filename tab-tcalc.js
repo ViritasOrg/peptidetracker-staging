@@ -4807,6 +4807,27 @@ function _tcDebugDump(){
         +'  weeks '+(applied.weeks||'—'));
       if(!pick) p('  no plan (refused or degenerate)');
       else{
+        // ⚠️ SOLVED IS NOT APPLIED, AND THE DUMP MUST NOT BLUR THEM.
+        // This printed a winner, its ramp and its predicted weekly means under a heading
+        // that reads as "the plan" — whether or not Apply was ever pressed. A solve left
+        // unapplied then looks identical to one that is live, while the compound quietly
+        // carries something else entirely. That is what turned an unapplied solve into a
+        // report of an insane regression: the numbers here were a proposal, the schedule
+        // being plotted was a flat default, and nothing said so.
+        var _isApplied=!!applied._applied;
+        p('  status: '+(_isApplied
+            ? 'APPLIED — written to the compound'
+            : 'SOLVED but NOT APPLIED — this is a proposal; the compound below is what is actually scheduled'));
+        // And check it rather than trust it: an applied plan whose ramp is not on the
+        // compound means the write did not survive, which is a real fault worth shouting.
+        var _acp=(ac&&ac.dose_phases)?ac.dose_phases:[];
+        var _want=(pick.phases||[]).length;
+        if(_isApplied&&_want&&!_acp.length)
+          p('  ⚠ MISMATCH: applied, but the compound carries no dose_phases at all.');
+        else if(_want&&_acp.length&&_acp.length!==_want)
+          p('  ⚠ MISMATCH: '+_want+' solved phases vs '+_acp.length+' on the compound.');
+        else if(!_isApplied&&!_acp.length)
+          p('  the compound has no ramp — it is running its flat dose, not this plan.');
         p('  winner "'+((pick.cadence&&pick.cadence.label)||'?')+'"'
           +'  worst '+Math.round((pick.worst||0)*100)+'%'
           +'  ripple '+Math.round((pick.ripple||0)*100)+'%'
