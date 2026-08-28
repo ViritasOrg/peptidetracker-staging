@@ -1369,12 +1369,40 @@ function _scanAndShowStartupConflicts(){
 // stack whose id is not yet frozen would MOVE its cycle id and orphan every
 // injection already stored against 'name_nostart'. Freeze the id first — that is
 // exactly what _ensureStackId is for — then set the date.
+// ⚠️ A NEW PROTOCOL STARTS WHERE THE LAST ONE ENDS.
+// Henrik, 2026-08-28: "I have a active protocol ending September 13, the default start
+// date when I create a new Protocol should be last date of current protocol (if one
+// exists) +1 day. So here it should default to 14 September"
+//
+// Defaulting to today put the new protocol on top of one still running, which is not a
+// thing anyone means to do: two protocols overlapping schedule two sets of injections
+// into the same days, and only one of them can be the active one driving the curve.
+//
+// Every protocol is considered, not only the active one, because at the moment of
+// creation the flags are in flux — the new protocol may already be active and the old
+// one just deactivated. The clamp below makes that safe: a protocol that has already
+// ended yields today, so only a genuinely current one moves the date.
+function _nextFreeStartDate(){
+  var today=dateKey(NOW), latest='';
+  (_userStacks||[]).forEach(function(st){
+    if(!st)return;
+    // A protocol with no cycle_start has no end either — that is the one being created.
+    var end=(typeof _cycleEndDateStr==='function')?_cycleEndDateStr(st):(st.end_date||'');
+    if(end&&end>latest)latest=end;
+  });
+  if(!latest)return today;
+  var d=parseLocalDate(latest);
+  if(!d||isNaN(d.getTime()))return today;
+  d.setDate(d.getDate()+1);
+  var nxt=dateKey(d);
+  return nxt>today?nxt:today;      // never default into the past
+}
 function _ensureCycleStart(idx){
   var st=_userStacks[idx];
   if(!st)return false;
   if(typeof _ensureStackId==='function')_ensureStackId(st);
   if(st.cycle_start)return false;
-  st.cycle_start=dateKey(NOW);
+  st.cycle_start=_nextFreeStartDate();
   return true;
 }
 // ── EVERYTHING THAT MUST HAPPEN WHEN THE ACTIVE PROTOCOL CHANGES ────────────
