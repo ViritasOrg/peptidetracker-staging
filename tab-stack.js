@@ -940,10 +940,17 @@ function trtSolveSet(scope,id,field,val){
 // What this compound actually schedules as things stand, in the user's own terms.
 function _trtCurrentScheduleLabel(c){
   if(!c)return '';
-  var dose=(c.dose_phases&&c.dose_phases.length)
+  // ⚠️ AN UNSET DOSE IS NOT A DOSE.
+  // Since a testosterone arrives with no dose, c.dose is '' until the user sets one or
+  // applies a plan — and this built the label by concatenation, so it rendered as
+  // "still scheduling mg, every week". Worse than ugly: it claimed something was being
+  // scheduled when nothing is.
+  var hasRamp=!!(c.dose_phases&&c.dose_phases.length);
+  var hasDose=parseDec(c.dose)>0;
+  if(!hasRamp&&!hasDose)return 'NONE';
+  var dose=hasRamp
     ? 'a ramp of '+c.dose_phases.length+' steps'
-    : ((c.dose?String(c.dose):'')+' '+(c.unit||'mg')).trim();
-  if(!dose)return '';
+    : (String(c.dose)+' '+(c.unit||'mg')).trim();
   var cad=(typeof _trtCadenceLabel==='function')?_trtCadenceLabel(c):'';
   if(!cad)return dose;
   // "125 mg M" is accurate and unreadable. A weekday label needs joining words; an
@@ -1177,7 +1184,31 @@ function _renderTRTSolve(c,selData,scope){
   }
   else if(st.result&&st.result.best){
     var r=st.result, b=r.best;
-    h+='<div style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent);border-radius:8px;padding:10px 12px">'
+    // ⚠️ THE ACTION SITS ABOVE THE THING IT ACTS ON.
+    // Henrik, 2026-08-28: "The Apply Cadence button needs to be presented in an overlay
+    // instead invisible down under the generated schedule."
+    //
+    // It was the last element of the result card, below the full ramp, every weekly
+    // chip, the notes and the vial advice — so on a twelve-week plan the button you must
+    // press to make any of it real was off-screen, and the wizard's own fixed "Next"
+    // footer sat where a reader expects the primary action. Sticking it to the top of
+    // the results keeps it in reach for the whole scroll without competing with Next.
+    h+='<div style="position:sticky;top:0;z-index:25;background:var(--bg);padding:10px 0 8px;margin-top:10px">';
+    h+=(function(){
+          var cur=_trtCurrentScheduleLabel(c);
+          if(!cur)return '';
+          var body=(cur==='NONE')
+            ? 'Not applied yet. This compound has no dose set, so <b>nothing is being '
+              +'scheduled</b>. Apply to use this plan.'
+            : ('Not applied yet. This protocol is still scheduling <b>'+_esc(cur)+'</b>'
+               +(c.dose_phases&&c.dose_phases.length?'':' — not this plan')+'. Apply to replace it.');
+          return '<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.45);'
+            +'border-radius:8px;padding:8px 10px;font-size:11px;color:#f59e0b;line-height:1.5;margin-bottom:8px">'
+            +body+'</div>';
+        })();
+    h+='<button onclick="'+q('trtSolveApply',",'best'")+'" style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:11px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Apply cadence + ramp</button>';
+    h+='</div>';
+    h+='<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:8px;padding:10px 12px">'
       +'<div style="font-size:12px;font-weight:700;color:var(--accent);margin-bottom:2px">'+_esc(b.cadence.label)+'</div>'
       +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px">'
         +'Holds '+Math.round(b.lowPmol)+'–'+Math.round(b.highPmol)+' pmol/L across the plan'
@@ -1254,16 +1285,6 @@ function _renderTRTSolve(c,selData,scope){
       //
       // This does not auto-apply. The choice stays the user's — it just stops being an
       // invisible one.
-      +(function(){
-          var cur=_trtCurrentScheduleLabel(c);
-          if(!cur)return '';
-          return '<div style="margin-top:10px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.45);'
-            +'border-radius:8px;padding:8px 10px;font-size:11px;color:#f59e0b;line-height:1.5">'
-            +'Not applied yet. This protocol is still scheduling <b>'+_esc(cur)+'</b>'
-            +(c.dose_phases&&c.dose_phases.length?'':' — the default it was created with, not this plan')
-            +'. Apply to replace it.</div>';
-        })()
-      +'<button onclick="'+q('trtSolveApply',",'best'")+'" style="width:100%;margin-top:10px;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">Apply cadence + ramp</button>'
       +'</div>';
     // THE TRADE-OFF IS THE USER'S TO MAKE. A shorter interval cuts the within-week
     // swing; a longer one gives finer control of the weekly milligrams, because one
