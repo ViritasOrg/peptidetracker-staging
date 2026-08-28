@@ -4432,6 +4432,265 @@ function _tcBoundStack(){
 
 
 
+// ── T-CALC DEBUG DUMP (staging only) ─────────────────────────────────────────
+// Henrik, 2026-08-27: "Should t-calc have a debug output window in stage? Then I
+// can give you data instead of screenshots?"
+//
+// Yes, and every bug fixed today argues for it. Each was found by RECONSTRUCTING the
+// stack from a screenshot and guessing at the inputs:
+//   #1081  the solver was blind to the outgoing ester's still-scheduled doses. Only
+//          knowable from a remark made weeks earlier, not from anything on screen.
+//   #1083  the solved ramp was written in the ester's week numbering and read in the
+//          protocol's. Needed cycle_start AND the compound's start_date together —
+//          neither is displayed anywhere.
+// The pairing that actually settles these is PREDICTED vs PLOTTED weekly means in one
+// block. A screenshot can never show that; it is the first thing this prints.
+//
+// Staging only, via IS_STAGING — the same gate TAB_LABELS uses for the Storage tab.
+// The file promotes to prod unchanged and the path test simply fails there.
+//
+// Read-only: no fetches, no writes, nothing cached. And nothing authentication-shaped
+// goes in — no token, no session, no email. It is a description of the curve's inputs.
+function _tcDebugDump(){
+  var L=[], p=function(s){L.push(s==null?'':String(s));};
+  var pad=function(s,n){s=String(s==null?'':s);while(s.length<n)s+=' ';return s;};
+  var dnum=function(v,d){var n=parseDec(v);return isFinite(n)?(d==null?n:Math.round(n*Math.pow(10,d))/Math.pow(10,d)):v;};
+  try{
+    p('=== T-CALC DEBUG · v'+(typeof VERSION!=='undefined'?VERSION:'?')
+      +' · '+new Date().toISOString().replace(/\.\d{3}Z$/,'Z')+' ===');
+
+    // ── the protocol frame: cycle_start against each compound's own start_date ──
+    var tid=(typeof _tcTargetCycleId==='function')?_tcTargetCycleId():'';
+    var all=(typeof _userStacks!=='undefined'&&_userStacks)?_userStacks.slice():[];
+    var stk=all.find(function(s){return s&&s.id===tid;})||null;
+    // ⚠️ NEVER DROP THIS SECTION ON A FAILED LOOKUP.
+    // The first run printed "PROTOCOL none selected" and then omitted cycle_start and
+    // every dose_phases block — which is precisely the pairing that the ramp-offset bug
+    // (#1083) turned on, and the one thing no other surface shows. If the target cannot
+    // be resolved, dump every stack instead and mark which one T-Calc is pointing at.
+    // An unresolved target is itself worth seeing.
+    p('');
+    var toDump=stk?[stk]:all;
+    if(!toDump.length){ p('PROTOCOL  no stacks loaded (targetStackId '+(tid||'—')+')'); }
+    if(!stk&&all.length) p('PROTOCOL  target unresolved (targetStackId '+(tid||'—')+') — dumping all '+all.length);
+    toDump.forEach(function(stk){
+      p('PROTOCOL  '+(stk.name||'(unnamed)')+'  [id '+stk.id+']'+(stk.id===tid?'   ← T-Calc target':''));
+      p('  cycle_start '+(stk.cycle_start||'—')
+        +'   end_date '+(stk.end_date||'—')
+        +'   cycle_length '+(stk.cycle_length==null?'—':stk.cycle_length));
+      var groups=[['trt',stk.trt],['enhanced',stk.enhanced]];
+      groups.forEach(function(g){
+        var tier=g[0], box=g[1];
+        if(!box||!box.compounds||!box.compounds.length)return;   // an empty tier is noise
+        p('  '+tier+(box.enabled===false?' (disabled)':''));
+        (box.compounds||[]).forEach(function(c){
+          if(!c)return;
+          p('    '+pad(c.id,14)+' "'+(c.name||'')+'"'+(c.active===false?'  INACTIVE':''));
+          p('      start_date '+(c.start_date||'—')+'   end_date '+(c.end_date||'—'));
+          p('      cadence '+(c.cadence||'(inferred)')
+            +'  freq '+(c.freqVal==null?'—':c.freqVal)+' '+(c.freqUnit||'')
+            +'  days '+(c.days?JSON.stringify(c.days):'—')
+            +'  dose '+(c.dose==null?'—':c.dose)+' '+(c.unit||''));
+          // The ramp exactly as stored — `w` included, because the week ORIGIN is the
+          // thing that was wrong and it is invisible from every other surface.
+          if(c.dose_phases&&c.dose_phases.length){
+            p('      dose_phases (w = weeks from cycle_start):');
+            c.dose_phases.forEach(function(ph){
+              p('        w'+pad(ph.w,4)+dnum(ph.d,1)+' '+(ph.u||'mg')
+                +(ph.iv?'  iv'+ph.iv:'')
+                +(ph.pattern&&ph.pattern.length?'  pat['+ph.pattern.map(function(x){return dnum(x,1);}).join(',')+']':''));
+            });
+          } else p('      dose_phases —');
+        });
+      });
+    });
+
+    // ── what is already committed ahead: the half the solver used to be blind to ──
+    p('');
+    p('SCHEDULED AHEAD  (future rows the curve reads)');
+    var sched=(typeof _tcProtocolInjections==='function')?(_tcProtocolInjections()||[]):[];
+    if(!sched.length) p('  none');
+    else{
+      var byC={};
+      sched.forEach(function(e){
+        var k=e.compId||'?'; (byC[k]=byC[k]||[]).push(e);
+      });
+      Object.keys(byC).sort().forEach(function(k){
+        var rows=byC[k].slice().sort(function(a,b){return a.date<b.date?-1:1;});
+        var mgs=rows.map(function(r){return parseDec(r.doseMg)||0;});
+        var tot=mgs.reduce(function(a,b){return a+b;},0);
+        var lo=Math.min.apply(null,mgs), hi=Math.max.apply(null,mgs);
+        p('  '+pad(k,14)+pad(rows.length+' rows',11)
+          +rows[0].date+' → '+rows[rows.length-1].date
+          +'   '+(lo===hi?dnum(lo,1)+' mg':dnum(lo,1)+'–'+dnum(hi,1)+' mg')
+          +'   total '+Math.round(tot)+' mg');
+      });
+    }
+
+    // ── the logged past, and how stale it is ──
+    p('');
+    p('LOGGED HISTORY  (the tail the solve is built from)');
+    var hist=(typeof _tcLoggedHistory==='function')?(_tcLoggedHistory()||[]):[];
+    if(!hist.length) p('  none');
+    else{
+      var hs=hist.slice().sort(function(a,b){return a.date<b.date?-1:1;});
+      var byH={};
+      hs.forEach(function(e){var k=e.compId||'?';byH[k]=byH[k]||{n:0,mg:0};byH[k].n++;byH[k].mg+=parseDec(e.doseMg)||0;});
+      p('  '+hs.length+' rows  '+hs[0].date+' → '+hs[hs.length-1].date);
+      Object.keys(byH).sort().forEach(function(k){
+        p('  '+pad(k,14)+byH[k].n+' doses, '+Math.round(byH[k].mg)+' mg total');
+      });
+      var lastMs=parseLocalDate(hs[hs.length-1].date);
+      var ageD=lastMs?Math.round((NOW-lastMs)/86400000):null;
+      p('  last logged '+hs[hs.length-1].date+(ageD==null?'':'  ('+ageD+' d ago)'));
+    }
+    // Doses scheduled in the PAST and never ticked. These are the gap between what the
+    // model thinks was taken and what was: they under-model the tail, and the on-ramp
+    // then over-doses to compensate.
+    var untick=0, untickLast=[];
+    if(typeof _injectionsCache!=='undefined'&&_injectionsCache){
+      var tk=dateKey(NOW);
+      Object.keys(_injectionsCache).forEach(function(dk){
+        (_injectionsCache[dk]||[]).forEach(function(e){
+          if(!e||e.logged||e.active===false)return;
+          if((e.date||'')>=tk)return;
+          if(typeof _tcIsTestoRow==='function'&&!_tcIsTestoRow(e.tier,e.compound_id))return;
+          untick++; untickLast.push(e.date+' '+(e.compound_id||'')+' '+(e.dose||'')+(e.unit||''));
+        });
+      });
+    }
+    p('  unticked past scheduled: '+untick
+      +(untick?'  ← under-models the tail':''));
+    untickLast.sort().slice(-5).forEach(function(s){p('    '+s);});
+
+    // ── calibration: recomputed from the same call the chart makes ──
+    p('');
+    p('CALIBRATION');
+    var bw=(typeof _tcBwEntries!=='undefined'&&_tcBwEntries)?_tcBwEntries:[];
+    if(!bw.length) p('  no bloodwork — curve falls back to the population default');
+    else bw.slice().sort(function(a,b){return (a.date||'')<(b.date||'')?-1:1;}).slice(-3).forEach(function(b){
+      p('  draw '+(b.date||'?')+'  free_t '+(b.free_t||'—')+' '+(b.unit||'')
+        +'  total_t '+(b.total_t||'—')+'  shbg '+(b.shbg||'—'));
+    });
+    var curveLog=(typeof _tcCurveLog==='function')?_tcCurveLog():[];
+    var S=null;
+    try{ S=(typeof _tcFreeTSeries==='function')
+      ? _tcFreeTSeries(curveLog.slice().sort(function(a,b){return a.date<b.date?-1:1;}),{}) : null; }catch(e){}
+    if(S){
+      p('  calFT '+dnum(S.calFT,4)+'   logDays '+S.logDays+'   totalDays '+S.totalDays
+        +'   unit '+(S.unitLabel||'?'));
+      p('  curve built from '+curveLog.length+' rows (logged + scheduled, deduped)');
+    } else p('  series unavailable');
+    p('  profile: birthYear '+((_tcp&&_tcp.birthYear)||'—')
+      +'  shbg '+((_tcp&&_tcp.shbg)||'—')
+      +'  measuredFT '+((_tcp&&_tcp.measuredFT)||'—')
+      +'  currentDoseMgWk '+((_tcp&&_tcp.currentDoseMgWk)||'—'));
+
+    // ── PLOTTED vs PREDICTED — the comparison a screenshot cannot show ──
+    p('');
+    p('PLOTTED CURVE  (exactly what the chart drew)');
+    if(typeof _tcSsPeakPmol!=='undefined'&&_tcSsPeakPmol)
+      p('  exposure peak '+Math.round(_tcSsPeakPmol)+' pmol/L');
+    var applied=null, appliedId=null;
+    if(typeof _trtSolveState!=='undefined'&&_trtSolveState){
+      Object.keys(_trtSolveState).forEach(function(k){
+        var st=_trtSolveState[k];
+        if(st&&(st._applied||st.result)){applied=st;appliedId=k;}
+      });
+    }
+    // Weekly means from the incoming ester's start, so the two lists line up row for row.
+    var startKey=null;
+    if(appliedId){
+      var ac=null;
+      (stk?[stk]:all).forEach(function(sx){
+        [sx.trt,sx.enhanced].forEach(function(b){
+          if(b&&b.compounds)b.compounds.forEach(function(c){if(c&&c.id===appliedId)ac=c;});
+        });
+      });
+      if(ac&&ac.start_date)startKey=ac.start_date;
+    }
+    // Without a start date the weekly rows would not line up with the predicted ones,
+    // but the curve is still worth printing — anchor it at today and say so.
+    var anchorKey=startKey||dateKey(NOW);
+    if(_tcDrawnFT&&_tcDrawnFT.values&&_tcDrawnFT.values.length){
+      var s0=parseLocalDate(anchorKey);
+      var off=Math.round((s0-_tcDrawnFT.firstMs)/86400000);
+      var wk=[];
+      for(var w=0;w<16;w++){
+        var sum=0,n=0;
+        for(var d=off+w*7;d<off+(w+1)*7;d++){
+          var v=_tcDrawnFT.values[d];
+          if(d>=0&&isFinite(v)){sum+=v;n++;}
+        }
+        if(n)wk.push(Math.round(sum/n));
+      }
+      p('  weekly means from '+anchorKey+(startKey?'  (incoming ester start)':'  (today — no ester start_date found)')+':');
+      p('    '+wk.join(' '));
+    } else p('  no drawn curve yet — open the chart, then Build again');
+
+    p('');
+    p('LAST SOLVE');
+    if(!applied) p('  none run this session');
+    else{
+      var pick=applied._applied||(applied.result&&applied.result.best);
+      p('  compound '+appliedId
+        +'  target '+(applied.target||'—')+' pmol/L'
+        +'  conc '+(applied.conc||'—')+' mg/ml'
+        +'  step '+(applied.step||'—')+' ml'
+        +'  weeks '+(applied.weeks||'—'));
+      if(!pick) p('  no plan (refused or degenerate)');
+      else{
+        p('  winner "'+((pick.cadence&&pick.cadence.label)||'?')+'"'
+          +'  worst '+Math.round((pick.worst||0)*100)+'%'
+          +'  ripple '+Math.round((pick.ripple||0)*100)+'%'
+          +'  drift '+Math.round((pick.drift||0)*100)+'%'
+          +'  settleWeeks '+(pick.settleWeeks==null?'—':pick.settleWeeks));
+        if(pick.phases&&pick.phases.length)
+          p('  ramp  '+pick.phases.map(function(x){return 'w'+x.w+'='+x.perWeek+'mg/wk';}).join('  '));
+        if(pick.weekly&&pick.weekly.length){
+          p('  predicted weekly means:');
+          p('    '+pick.weekly.map(function(x){return Math.round(x.mean);}).join(' '));
+        }
+      }
+      if(applied.result&&applied.result.notes&&applied.result.notes.length)
+        applied.result.notes.forEach(function(n){p('  note: '+n);});
+    }
+  }catch(e){
+    p('');
+    p('DUMP FAILED: '+(e&&e.message||e));
+    if(e&&e.stack)p(String(e.stack).split('\n').slice(0,4).join('\n'));
+  }
+  return L.join('\n');
+}
+function _tcRunDebugDump(){
+  var out=document.getElementById('tc-debug-out');
+  if(out)out.textContent=_tcDebugDump();
+}
+// Selecting text inside a standalone iOS PWA is fiddly, so the copy is a button.
+// Falls back to selecting the block when the clipboard API is unavailable.
+function _tcCopyDebugDump(){
+  var out=document.getElementById('tc-debug-out');
+  var btn=document.getElementById('tc-debug-copy');
+  if(!out)return;
+  if(!out.textContent||out.textContent==='Tap Build.')out.textContent=_tcDebugDump();
+  var done=function(ok){
+    if(!btn)return;
+    var t=btn.textContent; btn.textContent=ok?'✓ Copied':'Select it manually';
+    setTimeout(function(){btn.textContent=t;},1800);
+  };
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(out.textContent).then(function(){done(true);},function(){done(false);});
+      return;
+    }
+  }catch(e){}
+  try{
+    var r=document.createRange(); r.selectNodeContents(out);
+    var sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    done(false);
+  }catch(e2){ done(false); }
+}
+
 // ── Main build ────────────────────────────────────────────────────────────────
 
 function buildTCalc() {
@@ -4681,6 +4940,26 @@ function buildTCalc() {
     html += '</div>'; // close padding
   }
   html += '</div>'; // close card
+
+  // ── Debug dump — STAGING ONLY ──────────────────────────────────────────────
+  // Same gate TAB_LABELS uses for the Storage tab. This file promotes to prod
+  // unchanged and the path test simply fails there, so the card cannot appear.
+  if (typeof IS_STAGING !== 'undefined' && IS_STAGING) {
+    html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:12px">'
+      + '<div style="padding:14px 16px 0"><div style="font-size:10px;font-weight:700;letter-spacing:1.8px;color:#666">DEBUG DUMP · STAGING ONLY</div></div>'
+      + '<div style="padding:10px 16px 14px">'
+      + '<div style="font-size:12px;color:var(--muted2);margin-bottom:10px;line-height:1.5">'
+      + 'The curve\u2019s inputs as text: the protocol frame, what is scheduled ahead, the '
+      + 'logged tail, the calibration, and the last solve \u2014 with its predicted weekly '
+      + 'means next to the ones actually plotted. Read-only, and it carries nothing to do '
+      + 'with your login.</div>'
+      + '<div style="display:flex;gap:8px;margin-bottom:10px">'
+      + '<button onclick="_tcRunDebugDump()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Build</button>'
+      + '<button id="tc-debug-copy" onclick="_tcCopyDebugDump()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Copy</button>'
+      + '</div>'
+      + '<pre id="tc-debug-out" style="white-space:pre;overflow-x:auto;user-select:text;-webkit-user-select:text;background:#0a0a0a;border:1px solid #2a2a2a;border-radius:8px;padding:10px;font-size:10px;line-height:1.45;color:#ccc;max-height:420px;margin:0">Tap Build.</pre>'
+      + '</div></div>';
+  }
 
   el.innerHTML = html;
 

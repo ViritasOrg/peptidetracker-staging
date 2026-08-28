@@ -5310,6 +5310,70 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     G._tcBwEntries=_bwSave;
   }
 
+  // ── T-Calc debug dump, staging only ───────────────────────────────────────
+  // Henrik, 2026-08-27: "Should t-calc have a debug output window in stage? Then I can
+  // give you data instead of screenshots?" Every bug fixed that day was found by
+  // reconstructing the stack from a screenshot and guessing at the inputs.
+  {
+    const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
+
+    // THE GATE. This file promotes to prod unchanged, so the card must be behind
+    // IS_STAGING or it ships to production.
+    check('the debug card is gated on IS_STAGING', (function(){
+      // The whole card, from its banner to the closing of the guard — not a fixed
+      // window, which was shorter than the markup and failed on a correct gate.
+      const i=src.indexOf('// ── Debug dump — STAGING ONLY');
+      if(i<0) return false;
+      const j=src.indexOf("el.innerHTML = html;", i);
+      if(j<0) return false;
+      const seg=src.slice(i,j);
+      // The guard has to OPEN before any of the markup is appended.
+      const g=seg.indexOf('IS_STAGING'), o=seg.indexOf('tc-debug-out');
+      return g>=0 && o>g;
+    })());
+    check('  …and the dump is the only thing behind that gate in this file',
+      (src.match(/id="tc-debug-out"/g)||[]).length===1);
+
+    // NOTHING AUTHENTICATION-SHAPED. The dump is pasted into a chat.
+    // ⚠️ MATCH IDENTIFIERS, NOT ENGLISH.
+    // The first version banned the substring "session" and failed on the sentence
+    // "none run this session" — prose, not a credential. A word list that cries wolf
+    // on English gets loosened until it protects nothing. These are the actual things
+    // that must never reach a pasted dump.
+    check('the dump reads nothing authentication-shaped', (function(){
+      const m=src.match(/function _tcDebugDump\(\)[\s\S]*?\n\}/);
+      if(!m) return false;
+      return !/(session_token|google_token|google_email|api[_-]?secret|authHeaders|AGENT_URL|\bfetch\s*\(|localStorage)/i.test(m[0]);
+    })());
+    check('  …and neither does the copy handler',
+      (function(){
+        const m=src.match(/function _tcCopyDebugDump\(\)[\s\S]*?\n\}/);
+        return !!m && !/(session_token|google_token|api[_-]?secret|authHeaders|AGENT_URL|\bfetch\s*\()/i.test(m[0]);
+      })());
+
+    // The sections that actually settle a report.
+    const G2=G;
+    const dump=(typeof G2._tcDebugDump==='function')?G2._tcDebugDump():'';
+    check('the dump builds without throwing', !!dump && !/DUMP FAILED/.test(dump), dump.slice(0,200));
+    ['T-CALC DEBUG','PROTOCOL','SCHEDULED AHEAD','LOGGED HISTORY','CALIBRATION',
+     'PLOTTED CURVE','LAST SOLVE'].forEach(function(sec){
+      check('  …and carries the '+sec+' section', dump.indexOf(sec)>=0);
+    });
+
+    // ⚠️ THE PROTOCOL FRAME IS THE POINT — it must never be dropped.
+    // The first version printed "PROTOCOL none selected" and then omitted cycle_start
+    // and every dose_phases block, which is exactly the pairing the ramp-offset bug
+    // turned on. An unresolved target now dumps every stack instead.
+    check('an unresolved target still reports the protocol frame rather than omitting it',
+      /target unresolved|no stacks loaded/.test(dump) || /cycle_start/.test(dump), dump.slice(0,240));
+    check('  …and the source dumps all stacks when the target does not resolve',
+      /var toDump=stk\?\[stk\]:all;/.test(src));
+    // dose_phases are printed with their `w`, because the week ORIGIN was the bug and
+    // is invisible from every other surface.
+    check('  …and labels dose_phases with the origin their w is measured from',
+      /w = weeks from cycle_start/.test(src));
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
