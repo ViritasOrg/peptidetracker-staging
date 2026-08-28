@@ -1305,7 +1305,8 @@ function _tcProtocolInjections(){
       if (unit !== 'mg') return;
       var mg = parseDec(e.dose);
       if (!(mg > 0)) return;
-      out.push({ compId: _tcCanonCompId(e.compound_id), doseMg: String(mg), date: e.date, source: 'protocol' });
+      out.push({ compId: _tcCanonCompId(e.compound_id), doseMg: String(mg), date: e.date,
+                 source: 'protocol', cycleId: e.cycle_id || '' });
     });
   });
   return out;
@@ -4642,20 +4643,39 @@ function _tcDebugDump(){
     var sched=(typeof _tcProtocolInjections==='function')?(_tcProtocolInjections()||[]):[];
     if(!sched.length) p('  none');
     else{
+      // ⚠️ GROUPED BY PROTOCOL, NOT JUST BY COMPOUND.
+      // There is an open bug in which testosterone doses survive a delete that should
+      // reach them — the delete keys on (cycle_id, compound_id) and neither is visible
+      // from the UI. Grouping only by compound hides exactly that: rows left behind by a
+      // deleted protocol look identical to the live ones, and go on driving the curve.
+      // Anyone deleting and recreating a protocol to test would be reading a curve half
+      // built from the protocols they thought they had removed.
+      var live={};
+      all.forEach(function(sx){ if(sx&&sx.id)live[sx.id]=sx.name||sx.id; });
       var byC={};
       sched.forEach(function(e){
-        var k=e.compId||'?'; (byC[k]=byC[k]||[]).push(e);
+        var k=(e.compId||'?')+'\u0000'+(e.cycleId||'');
+        (byC[k]=byC[k]||[]).push(e);
       });
+      var orphans=0;
       Object.keys(byC).sort().forEach(function(k){
+        var parts=k.split('\u0000'), cid=parts[1];
         var rows=byC[k].slice().sort(function(a,b){return a.date<b.date?-1:1;});
         var mgs=rows.map(function(r){return parseDec(r.doseMg)||0;});
         var tot=mgs.reduce(function(a,b){return a+b;},0);
         var lo=Math.min.apply(null,mgs), hi=Math.max.apply(null,mgs);
-        p('  '+pad(k,14)+pad(rows.length+' rows',11)
+        var known=cid&&Object.prototype.hasOwnProperty.call(live,cid);
+        if(!known)orphans++;
+        p('  '+pad(parts[0],14)+pad(rows.length+' rows',11)
           +rows[0].date+' → '+rows[rows.length-1].date
           +'   '+(lo===hi?dnum(lo,1)+' mg':dnum(lo,1)+'–'+dnum(hi,1)+' mg')
           +'   total '+Math.round(tot)+' mg');
+        p('                  from '+(cid||'(no cycle id)')
+          +(known?'  ['+live[cid]+']':'  ⚠ NO SUCH PROTOCOL — orphaned rows still driving the curve'));
       });
+      if(orphans)
+        p('  ⚠ '+orphans+' group(s) belong to no existing protocol. Deleting a protocol is '
+          +'known not to always remove its doses; these are still being injected into the model.');
     }
 
     // ── the logged past, and how stale it is ──
