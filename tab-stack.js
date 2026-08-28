@@ -910,6 +910,21 @@ function trtSolveSet(scope,id,field,val){
   }
   if(!typed)_trtRerender(scope);
 }
+// What this compound actually schedules as things stand, in the user's own terms.
+function _trtCurrentScheduleLabel(c){
+  if(!c)return '';
+  var dose=(c.dose_phases&&c.dose_phases.length)
+    ? 'a ramp of '+c.dose_phases.length+' steps'
+    : ((c.dose?String(c.dose):'')+' '+(c.unit||'mg')).trim();
+  if(!dose)return '';
+  var cad=(typeof _trtCadenceLabel==='function')?_trtCadenceLabel(c):'';
+  if(!cad)return dose;
+  // "125 mg M" is accurate and unreadable. A weekday label needs joining words; an
+  // interval label ("Every 2 days") already reads as one.
+  return /^Every /.test(cad)
+    ? (dose+', '+cad.charAt(0).toLowerCase()+cad.slice(1))
+    : (dose+' on '+cad);
+}
 function _trtDefaultConc(id){
   var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(c){return c.id===id;}):null;
   return (cat&&cat.conc&&cat.conc.length)?cat.conc[0]:250;
@@ -1199,6 +1214,28 @@ function _renderTRTSolve(c,selData,scope){
       +(r.notes||[]).map(function(n){
         return '<div style="font-size:10px;color:var(--muted2);line-height:1.5;margin-top:6px">ℹ '+_esc(n)+'</div>';
       }).join('')
+      // ⚠️ SAY WHAT IS ACTUALLY SCHEDULED RIGHT NOW.
+      // Henrik, 2026-08-28: "Where does the flat 125mg come from? I haven't entered a
+      // single value more than the 1400pmol target."
+      //
+      // He had not. Adding a testosterone seeds the catalogue's defaultDose — 125 mg
+      // once weekly for enanthate — and that is a REAL, SCHEDULED plan from the moment
+      // the compound exists. So the panel could show a solved ramp holding 1400 while
+      // the protocol quietly injected a dose the user never chose, and the curve climbed
+      // to 2349. Solving is not applying, and nothing here said so: the proposal read as
+      // the plan.
+      //
+      // This does not auto-apply. The choice stays the user's — it just stops being an
+      // invisible one.
+      +(function(){
+          var cur=_trtCurrentScheduleLabel(c);
+          if(!cur)return '';
+          return '<div style="margin-top:10px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.45);'
+            +'border-radius:8px;padding:8px 10px;font-size:11px;color:#f59e0b;line-height:1.5">'
+            +'Not applied yet. This protocol is still scheduling <b>'+_esc(cur)+'</b>'
+            +(c.dose_phases&&c.dose_phases.length?'':' — the default it was created with, not this plan')
+            +'. Apply to replace it.</div>';
+        })()
       +'<button onclick="'+q('trtSolveApply',",'best'")+'" style="width:100%;margin-top:10px;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">Apply cadence + ramp</button>'
       +'</div>';
     // THE TRADE-OFF IS THE USER'S TO MAKE. A shorter interval cuts the within-week
