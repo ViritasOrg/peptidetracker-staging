@@ -3059,7 +3059,8 @@ function _wizFoldTrtPlanIntoProto(proto){
 
 function _wizEnsureTrtPlan(){
   if(_wiz.trtPlan) return _wiz.trtPlan;
-  var seed = {compId:'', doseMg:'', cadenceN:0, cadenceUnit:'week', cadenceDays:0, startDate:''};
+  var seed = {compId:'', doseMg:'', cadenceN:0, cadenceUnit:'week', cadenceDays:0, startDate:'',
+              mode:'', targetPmol:''};
   var c=((_wiz.trt&&_wiz.trt.compounds)||[])[0];
   if(c){
     if(!seed.compId) seed.compId=c.id||'';
@@ -3078,7 +3079,13 @@ function _wizEnsureTrtPlan(){
   return _wiz.trtPlan;
 }
 function wizSetTrtPlan(field,value){
-  _wizEnsureTrtPlan()[field]=value;
+  var p=_wizEnsureTrtPlan();
+  p[field]=value;
+  // Seed the solve panel so the next screen opens on the number already given, rather
+  // than asking for it twice.
+  if((field==='targetPmol'||field==='compId')&&p.compId&&typeof _trtSolveSt==='function'){
+    try{ _trtSolveSt(p.compId,'wiz').target=String(p.targetPmol||''); }catch(e){}
+  }
   wizRender();
 }
 // Cadence is two fields but one stored interval — mirrors _tcSetSimplePlanCadence.
@@ -3130,7 +3137,61 @@ function _wizRenderTrtPlanner(body){
     return t?t.name:id;
   };
 
+  // ⚠️ TWO WAYS TO SET A DOSE, BOTH OFFERED UP FRONT.
+  // Henrik, 2026-08-28: "Make the free T target wizard more prominent, present two
+  // choices on this screen for Test. And explain the choices briefly, but details will
+  // be on next screen."
+  //
+  // Solving from a target level was only reachable from a compound's config panel, so
+  // this step implied the only way to start was to already know your milligrams. That
+  // is the harder of the two questions and the one the app can actually answer. The
+  // choice now leads, each option gets one line, and the numbers come after.
+  var mode=p.mode||'';
   var html='<div style="font-size:12px;color:var(--muted2);margin-bottom:14px;line-height:1.55">Your testosterone schedule. This is the same plan T-Calc uses — set it once here and the plasma curve follows it.</div>';
+
+  html+='<label style="'+lSty+'">How do you want to set it?</label>';
+  html+='<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">';
+  [['target','Target a free-T level',
+    'You name the level you want; the app works out the dose and how often, allowing for any ester still clearing from before.'],
+   ['dose','I know the dose',
+    'You already have a protocol: enter the milligrams, how often, and when it starts.']
+  ].forEach(function(o){
+    var on=(mode===o[0]);
+    html+='<div onclick="wizSetTrtPlan(\'mode\',\''+o[0]+'\')" style="cursor:pointer;border:1px solid '
+      +(on?'var(--accent)':'var(--border)')+';background:'+(on?'rgba(232,255,60,0.06)':'var(--surface2)')
+      +';border-radius:10px;padding:12px 14px">'
+      +'<div style="font-size:13.5px;font-weight:700;color:'+(on?'var(--accent)':'var(--text)')+'">'+o[1]+'</div>'
+      +'<div style="font-size:11.5px;color:var(--muted2);line-height:1.5;margin-top:3px">'+o[2]+'</div>'
+      +'</div>';
+  });
+  html+='</div>';
+
+  if(!mode){
+    html+='<div style="font-size:11.5px;color:var(--muted2);line-height:1.55">Pick one to carry on — or skip this step and add testosterone under Compounds later.</div>';
+    html+='<div onclick="wizToggleTrtClassic()" style="text-align:center;font-size:12px;color:var(--muted2);text-decoration:underline;cursor:pointer;padding:14px 8px 4px">Advanced: multi-compound config</div>';
+    body.innerHTML=html;
+    return;
+  }
+
+  if(mode==='target'){
+    html+='<label style="'+lSty+'">1 · Ester</label>';
+    html+='<select onchange="wizSetTrtPlan(\'compId\',this.value)" style="'+iSty+';margin-bottom:14px">';
+    html+='<option value="">Select a testosterone ester…</option>';
+    ids.forEach(function(id){
+      html+='<option value="'+id+'"'+(p.compId===id?' selected':'')+'>'+nameOf(id)+'</option>';
+    });
+    html+='</select>';
+    html+='<label style="'+lSty+'">2 · Target free T (pmol/L)</label>';
+    html+='<input type="text" inputmode="decimal" value="'+_esc(String(p.targetPmol||''))+'" placeholder="e.g. 600" onchange="wizSetTrtPlan(\'targetPmol\',this.value)" style="'+iSty+';margin-bottom:14px">';
+    html+='<label style="'+lSty+'">3 · First injection</label>';
+    html+='<input type="date" value="'+(p.startDate||'')+'" onchange="wizSetTrtPlan(\'startDate\',this.value)" style="'+iSty+'">';
+    html+='<div style="margin-top:14px;font-size:11.5px;color:var(--muted2);line-height:1.55">'
+      +'The schedule itself — how often, and how much to draw each time — is worked out on the next screen, '
+      +'where you can see what it holds before applying it.</div>';
+    html+='<div onclick="wizToggleTrtClassic()" style="text-align:center;font-size:12px;color:var(--muted2);text-decoration:underline;cursor:pointer;padding:14px 8px 4px">Advanced: multi-compound config</div>';
+    body.innerHTML=html;
+    return;
+  }
 
   html+='<label style="'+lSty+'">1 · Ester</label>';
   html+='<select onchange="wizSetTrtPlan(\'compId\',this.value)" style="'+iSty+';margin-bottom:14px">';

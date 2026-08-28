@@ -7509,12 +7509,38 @@ console.log('\n── Wizard TRT step ──────────────
 
     check('the TRT step renders content (was a blank screen)', b.innerHTML.length > 200,
       'rendered '+b.innerHTML.length+' chars');
+    // ⚠️ THE STEP NOW ASKS ONE QUESTION FIRST.
+    // Henrik, 2026-08-28: "present two choices on this screen for Test. And explain the
+    // choices briefly, but details will be on next screen." Solving from a target level
+    // was reachable only from a compound's config panel, so this step used to imply the
+    // only way in was to already know your milligrams. The fields are unchanged — they
+    // are now behind the choice rather than presuming it, so these assertions pick the
+    // mode first instead of being relaxed.
+    check('  …leading with the two ways to set it',
+      /Target a free-T level/.test(b.innerHTML) && /I know the dose/.test(b.innerHTML));
+    check('  …each explained in a line', /works out the dose and how often/.test(b.innerHTML)
+      && /already have a protocol/.test(b.innerHTML));
+    check('  …and no dose fields until one is chosen',
+      !/2 · Dose per injection/.test(b.innerHTML));
+    check('the footer always carries Next', /wizNext\(\)/.test(f.innerHTML));
+    check('the advanced multi-compound config is still reachable', /wizToggleTrtClassic/.test(b.innerHTML));
+
+    // Target mode collects the level and defers the schedule to the next screen.
+    G.wizSetTrtPlan('mode','target'); b=_mkEl(); f=_mkEl(); G.wizStepTRTHandoff(b,f);
+    check('  …target mode asks for the level, not the milligrams',
+      /Target free T \(pmol\/L\)/.test(b.innerHTML) && !/2 · Dose per injection/.test(b.innerHTML));
+    check('  …and says the schedule comes next', /worked out on the next screen/.test(b.innerHTML));
+    check('  …seeding the solver with the level typed here', (function(){
+      G.wizSetTrtPlan('compId','enanthate'); G.wizSetTrtPlan('targetPmol','600');
+      return G._trtSolveSt('enanthate','wiz').target==='600';
+    })());
+
+    // Dose mode is the original four-field planner, unchanged.
+    G.wizSetTrtPlan('mode','dose'); b=_mkEl(); f=_mkEl(); G.wizStepTRTHandoff(b,f);
     check('  …the ester field is there',   /1 · Ester/.test(b.innerHTML));
     check('  …the dose field is there',    /2 · Dose per injection/.test(b.innerHTML));
     check('  …the cadence field is there', /3 · Injection cadence/.test(b.innerHTML));
     check('  …the start-date field is there', /4 · First injection/.test(b.innerHTML));
-    check('the footer always carries Next', /wizNext\(\)/.test(f.innerHTML));
-    check('the advanced multi-compound config is still reachable', /wizToggleTrtClassic/.test(b.innerHTML));
     check('  …and the cadence is the same two-field control as T-Calc',
       /wizSetTrtCadence\('cadenceN'/.test(b.innerHTML) && /wizSetTrtCadence\('cadenceUnit'/.test(b.innerHTML));
     check('  …offering 1 to 20 and day/week/month',
