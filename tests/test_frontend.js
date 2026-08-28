@@ -5552,6 +5552,56 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
         .test(require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8')));
   }
 
+  // ── Deactivating a protocol drops it from the curve at once ───────────────
+  // Henrik, 2026-08-28: "Deactivate a protocol doesn't directly remove it from t-calc
+  // curve render, it requires restarting."
+  //
+  // _tcProtocolInjections read _injectionsCache and trusted it. The cache IS filtered by
+  // active cycle id, but only when refreshInjectionsCache rebuilds it — so between the
+  // toggle and that round trip the curve went on plotting a protocol just switched off.
+  {
+    const ev=(js)=>vm.runInContext(js,sandbox);
+    const svCache=G._injectionsCache, svStacks=ev('_userStacks.slice()'), svAct=ev('_activeStackIndices.slice()');
+    sandbox.__s=[{id:'p4',name:'Protocol 4',cycle_start:'2026-08-28',cycle_length:12,
+      trt:{enabled:true,compounds:[{id:'enanthate',name:'Test E',dose:'125',unit:'mg',
+        freqVal:1,freqUnit:'weeks',days:[1],active:true}]},enhanced:{}}];
+    ev('_userStacks.length=0;__s.forEach(function(x){_userStacks.push(x);});');
+    const cid=ev('_stackCycleId(_userStacks[0])');
+    const cache={};
+    ['2026-08-31','2026-09-07','2026-09-14'].forEach(d=>{ cache[d]=[{cycle_id:cid,date:d,
+      compound_id:'enanthate',tier:'trt',dose:'125',unit:'mg',active:true,logged:false}]; });
+    G._injectionsCache=cache;
+
+    ev('_activeStackIndices=[0];');
+    check('an active protocol feeds the curve', G._tcProtocolInjections().length===3,
+      String(G._tcProtocolInjections().length));
+    ev('_activeStackIndices=[];');
+    check('  …and deactivating drops it immediately, with no cache rebuild',
+      G._tcProtocolInjections().length===0, String(G._tcProtocolInjections().length));
+    check('  …the dropped rows are still reported for diagnosis',
+      G._tcInjExcluded && G._tcInjExcluded.count===3, JSON.stringify(G._tcInjExcluded||{}));
+
+    // ⚠️ An empty stack list means NOT LOADED, not "nothing active" — filtering on it
+    // would blank the curve during boot, which is worse than the bug being fixed.
+    ev('_userStacks.length=0;');
+    check('  …but an unloaded stack list does not blank the curve',
+      G._tcProtocolInjections().length===3, String(G._tcProtocolInjections().length));
+
+    G._injectionsCache=svCache;
+    sandbox.__s=svStacks; ev('_userStacks.length=0;__s.forEach(function(x){_userStacks.push(x);});');
+    sandbox.__a=svAct; ev('_activeStackIndices=__a;');
+  }
+
+  // Next generates in the wizard — the Generate button duplicated the footer's job,
+  // and the copy that mattered was the one below the fold.
+  {
+    const stk=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+    check('the wizard footer runs the solve when a target is set but unsolved',
+      /_needSolve\?'wizTrtGenerate\(\)':'wizNext\(\)'/.test(stk));
+    check('  …and the inline Generate button is suppressed there',
+      /if\(hideRun\)h=h\.replace\(/.test(stk));
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -7576,7 +7626,8 @@ console.log('\n── Wizard TRT step ──────────────
     G.wizSetTrtPlan('mode','target'); b=_mkEl(); f=_mkEl(); G.wizStepTRTHandoff(b,f);
     check('  …target mode asks for the level, not the milligrams',
       /Target free T \(pmol\/L\)/.test(b.innerHTML) && !/2 · Dose per injection/.test(b.innerHTML));
-    check('  …and says the schedule comes next', /worked out on the next screen/.test(b.innerHTML));
+    check('  …and says Next will work the schedule out',
+      /Press Next and the app works out the schedule/.test(b.innerHTML));
     check('  …seeding the solver with the level typed here', (function(){
       G.wizSetTrtPlan('compId','enanthate'); G.wizSetTrtPlan('targetPmol','600');
       return G._trtSolveSt('enanthate','wiz').target==='600';
@@ -7908,6 +7959,17 @@ console.log('\n── T-Calc ← planned TRT protocol ────────�
     // block tests the plan/manual merge in isolation — the history layer has its own
     // block further down.
     var _svHistP = G._tcHistory, _svHStateP = G._tcHistoryState;
+    // ⚠️ THE PLAN NEEDS AN ACTIVE PROTOCOL TO OWN IT.
+    // These rows carry cycle_id 'stack1'. The curve now renders ACTIVE protocols only
+    // (deactivating one used to need a restart), so a cycle no protocol owns is an
+    // orphan and is deliberately excluded. This block is about the plan/manual merge,
+    // not orphan handling, so 'stack1' is registered as a real active protocol.
+    var _svStacksP = vm.runInContext('_userStacks.slice()', sandbox);
+    var _svActP    = vm.runInContext('_activeStackIndices.slice()', sandbox);
+    sandbox.__p1 = [{id:'stack1', name:'stack1', cycle_start:'2026-08-01', cycle_length:26,
+                     trt:{enabled:true,compounds:[]}, enhanced:{}}];
+    vm.runInContext('_userStacks.length=0;__p1.forEach(function(x){_userStacks.push(x);});'
+                    +'_activeStackIndices=[0];', sandbox);
     G._tcHistory = []; G._tcHistoryState = 'ready';
     var _setup = function(cache, manual){
       G._injectionsCache = cache;
@@ -7995,6 +8057,9 @@ console.log('\n── T-Calc ← planned TRT protocol ────────�
     check('a missing injections cache is handled', G._tcProtocolInjections().length === 0);
 
     G._injectionsCache = _svCache; G._tcHistory = _svHistP; G._tcHistoryState = _svHStateP; G._tcp = _svTcp;
+    sandbox.__p1 = _svStacksP;
+    vm.runInContext('_userStacks.length=0;__p1.forEach(function(x){_userStacks.push(x);});', sandbox);
+    sandbox.__a1 = _svActP; vm.runInContext('_activeStackIndices=__a1;', sandbox);
   }else{
     check('_tcCurveLog / _tcProtocolInjections available', false);
   }
@@ -13248,7 +13313,16 @@ console.log('\n── injection deletes: scoped, and never a record ────
   // the FUTURE doubled. The 7 doses were counted as drafts still in manualLog AND
   // as the stored protocol rows they had just become.
   {
-    const _dupSave = { tp: G._tcp, ic: G._injectionsCache, h: G._tcHistory, hs: G._tcHistoryState };
+    const _dupSave = { tp: G._tcp, ic: G._injectionsCache, h: G._tcHistory, hs: G._tcHistoryState,
+      st: vm.runInContext('_userStacks.slice()',sandbox),
+      ac: vm.runInContext('_activeStackIndices.slice()',sandbox) };
+    // ⚠️ Same reason as the plan/manual block above: the curve renders ACTIVE protocols
+    // only now, so these rows need the protocol that owns them to exist and be active.
+    // The subject here is the double count, not orphan handling.
+    sandbox.__dp = [{id:'protocol_2_nostart', name:'protocol_2', cycle_start:'2026-08-01',
+                     cycle_length:26, trt:{enabled:true,compounds:[]}, enhanced:{}}];
+    vm.runInContext('_userStacks.length=0;__dp.forEach(function(x){_userStacks.push(x);});'
+                    +'_activeStackIndices=[0];', sandbox);
     // Relative to today: these were fixed dates when written on 2026-08-15 and have
     // since aged into the past, where the curve legitimately drops them. The point of
     // the check is the double count, not the calendar.
@@ -13284,6 +13358,9 @@ console.log('\n── injection deletes: scoped, and never a record ────
         log2.length === 1, 'got ' + log2.map(function(e){ return e.compId; }).join(','));
     }
     G._tcp=_dupSave.tp; G._injectionsCache=_dupSave.ic; G._tcHistory=_dupSave.h; G._tcHistoryState=_dupSave.hs;
+    sandbox.__dp=_dupSave.st;
+    vm.runInContext('_userStacks.length=0;__dp.forEach(function(x){_userStacks.push(x);});',sandbox);
+    sandbox.__da=_dupSave.ac; vm.runInContext('_activeStackIndices=__da;',sandbox);
   }
 
   // Saving must do what a cold start does: re-read the record, then rebuild. The
