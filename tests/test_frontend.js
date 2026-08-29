@@ -14904,10 +14904,12 @@ if (typeof G._tcDrawManualChart === 'function') {
 }
 
 // ── in/out-of-range label: boundaries and real catalogue values ───────────────
-// Henrik, 2026-08-29: free T 217 pmol/L showed "IN RANGE" against a lab band of
-// 220-800. Two gaps let it through: the backend band was (200,600), and every
+// Henrik, 2026-08-29: free T 217 pmol/L showed "IN RANGE" when the backend band
+// was (200,600). Two gaps let it through: that bound, and the fact that every
 // frontend flag test ran against a MOCK catalogue, so no test ever read a real
-// bound. These cover the boundary arithmetic and pin the real free-T numbers.
+// bound. The band is now derived from citations.FREE_T_REFERENCE (243-804,
+// Bhasin 2011 Framingham, PMID 21697255) — the research value, not a lab's own
+// interval, which may be age-adjusted. These cover the boundary arithmetic.
 console.log('\n── lab flag: boundary conditions and real free-T band ──');
 if (typeof G._labFlag === 'function' && typeof G._labSetCatalogue === 'function') {
   var _lfSaved = G._labMarkers;
@@ -14916,7 +14918,7 @@ if (typeof G._labFlag === 'function' && typeof G._labSetCatalogue === 'function'
     markers:[
       // free_t carries the REAL backend band, so a regression there fails here too.
       {key:'free_t',label:'Free Testosterone',unit:'pmol/L',panel:'hormones',direction:'band',safety:false,
-       ranges:{male:{low:220.0,high:800.0},female:{low:3.0,high:35.0}},
+       ranges:{male:{low:243.0,high:804.0},female:{low:3.0,high:35.0}},
        altUnits:[{unit:'pg/mL',factor:0.288}],meaning:'ft'},
       {key:'hdl',label:'HDL',unit:'mmol/L',panel:'lipids',direction:'higher',safety:true,
        ranges:{male:{low:1.0,high:null},female:{low:1.3,high:null}},altUnits:[],meaning:'h'},
@@ -14933,10 +14935,10 @@ if (typeof G._labFlag === 'function' && typeof G._labSetCatalogue === 'function'
 
   // Boundaries — the arithmetic that decides the label. `low` and `high` are
   // themselves IN range; only strictly outside flags.
-  check('lab flag: exactly at low bound is in range',  G._labFlag(_F('free_t'), 220, 'male') === 'in');
-  check('lab flag: one below low bound is low',        G._labFlag(_F('free_t'), 219.9, 'male') === 'low');
-  check('lab flag: exactly at high bound is in range', G._labFlag(_F('free_t'), 800, 'male') === 'in');
-  check('lab flag: one above high bound is high',      G._labFlag(_F('free_t'), 800.1, 'male') === 'high');
+  check('lab flag: exactly at low bound is in range',  G._labFlag(_F('free_t'), 243, 'male') === 'in');
+  check('lab flag: one below low bound is low',        G._labFlag(_F('free_t'), 242.9, 'male') === 'low');
+  check('lab flag: exactly at high bound is in range', G._labFlag(_F('free_t'), 804, 'male') === 'in');
+  check('lab flag: one above high bound is high',      G._labFlag(_F('free_t'), 804.1, 'male') === 'high');
   check('lab flag: mid-band is in range',              G._labFlag(_F('free_t'), 500, 'male') === 'in');
 
   // direction:'lower' — only the ceiling flags, and the ceiling itself is in.
@@ -14956,6 +14958,9 @@ if (typeof G._labFlag === 'function' && typeof G._labSetCatalogue === 'function'
   check('lab flag: 62 pg/mL flags low (215 pmol/L)', G._labFlag(_F('free_t'), _pg, 'male') === 'low');
   var _pg2 = G._labConvert(_F('free_t'), 100, 'pg/mL');        // ≈ 347 pmol/L
   check('lab flag: 100 pg/mL is in range (347 pmol/L)', G._labFlag(_F('free_t'), _pg2, 'male') === 'in');
+  // 230 pmol/L sat inside the briefly-used 220-800 lab band but below the cited
+  // 2.5th percentile — the discrepancy that made deriving from one source matter.
+  check('lab flag: 230 is low against the research floor', G._labFlag(_F('free_t'), 230, 'male') === 'low');
 
   // Sexes read their own band — 217 is low for a man, high for a woman.
   check('lab flag: 217 is HIGH on the female band', G._labFlag(_F('free_t'), 217, 'female') === 'high');
