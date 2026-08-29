@@ -42,7 +42,13 @@ var _tcSsPeakPmol     = null;  // steady-state peak in pmol/L, read from the val
 var _tcDrawnFT        = null;  // {firstMs,unit,values:[per-day free-T]} cached from the last
                               // CALIBRATED plasma draw — the only source T-History capture may use
 var _tcEditSeriesId = null;   // seriesId currently open in the Edit Series sheet
-var _tcChartZoom   = 'whole'; // active zoom level: 'today' | 'week' | 'month' | 'whole'
+// ⚠️ ONE LIST. Shortest → longest, which is the order the strip renders in.
+// The button strip and the click handler used to hardcode this separately and
+// had drifted: the strip offered 5 levels, the handler styled 4, so clicking
+// 3MO cleared the other four and never lit itself — the strip ended up with
+// nothing selected and the level looked broken. Add a level here, once.
+var TC_ZOOM_LEVELS = ['today','week','month','3mo','whole'];
+var _tcChartZoom   = 'whole'; // active zoom level: 'today' | 'week' | 'month' | '3mo' | 'whole'
 var _tcChartPanOffset = 0;   // horizontal pan in days (float, only used in zoomed modes)
 var _tcGhStack = [];          // [{pepId, startDateStr, interactions, dailyDose}] — SHBG suppressors from active stacks (dailyDose in the compound's doseResponse unit)
 var _tcSysInter = null;       // compounds map from /systemic-interactions
@@ -1783,7 +1789,7 @@ function _tcSetChartZoom(z) {
   var validLog = _tcCurveLog();
   _tcDrawManualChart('tc-main-chart', validLog, z);
   _tcAttachPanListeners(document.getElementById('tc-main-chart'));
-  ['today','week','month','whole'].forEach(function(zz) {
+  TC_ZOOM_LEVELS.forEach(function(zz) {
     var btn = document.getElementById('tc-zoom-' + zz);
     if (!btn) return;
     btn.style.background   = zz === z ? 'rgba(102,136,204,0.25)' : 'none';
@@ -5107,7 +5113,7 @@ function buildTCalc() {
   } else if (validLog.length > 0) {
     html += '<div style="padding:2px 16px 10px">';
     html += '<div style="display:flex;gap:4px;margin-bottom:8px">';
-    ['today','week','month','3mo','whole'].forEach(function(z) {
+    TC_ZOOM_LEVELS.forEach(function(z) {
       var isA = _tcChartZoom === z;
       html += '<button id="tc-zoom-' + z + '" onclick="_tcSetChartZoom(\'' + z + '\')" style="flex:1;background:' + (isA ? 'rgba(102,136,204,0.25)' : 'none') + ';border:1px solid ' + (isA ? '#6688cc66' : 'var(--border)') + ';border-radius:6px;color:' + (isA ? '#6688cc' : 'var(--muted2)') + ';font-size:9px;font-weight:700;letter-spacing:0.8px;cursor:pointer;padding:5px 2px;font-family:inherit">' + z.toUpperCase() + '</button>';
     });
