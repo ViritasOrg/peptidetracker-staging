@@ -3912,10 +3912,26 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   // the average of just what you're looking at. Still makes the "peak differs, average
   // doesn't" point: an infrequent-large schedule peaks far above it, a frequent one hugs it.
   if (calFT && _tcShowAvg()) {
+    // ⚠️ THE AVERAGE STOPS AT THE LAST INJECTION.
+    // Henrik, 2026-08-29: "Average should not include time before first injection in
+    // history or after last planned injection in the current active protocol."
+    //
+    // It ran over the whole visible window, so at Whole zoom it averaged in the washout
+    // tail — a stretch where nothing is being taken and the level is decaying toward
+    // zero by construction. That dragged the figure well below anything the schedule
+    // actually holds: a plan sitting at ~1570 reported avg 1051 because a month of decay
+    // was counted as part of it. logDays is the last injection's day index, and day 0 is
+    // the first, so the series bounds are the answer.
+    //
+    // If the visible window is entirely inside the tail there is nothing to average and
+    // the line is hidden rather than reporting the decay as a level.
+    var _avgTo   = (logDays > 0) ? Math.min(xEnd, logDays) : xEnd;
+    var _avgFrom = Math.max(xStart, 0);
     var _avgSum = 0, _avgN = 0;
-    for (var _ai = xStart; _ai <= xEnd; _ai++) { _avgSum += total[_ai] * (calFT_arr ? calFT_arr[_ai] : scale); _avgN++; }
+    for (var _ai = _avgFrom; _ai <= _avgTo; _ai++) { _avgSum += total[_ai] * (calFT_arr ? calFT_arr[_ai] : scale); _avgN++; }
     var _avgLvl = _avgN > 0 ? _avgSum / _avgN : 0;
-    if (canvas._testAvgHook) canvas._testAvgHook({ avg: _avgLvl, xStart: xStart, xEnd: xEnd });
+    if (canvas._testAvgHook) canvas._testAvgHook({ avg: _avgLvl, xStart: xStart, xEnd: xEnd,
+                                                  avgFrom: _avgFrom, avgTo: _avgTo, logDays: logDays });
     if (_avgLvl > 0 && _avgLvl <= vMax) {
       var _avY = yOf(_avgLvl);
       ctx.strokeStyle = '#5ad1b0cc'; ctx.lineWidth = 1; ctx.setLineDash([1,3]);

@@ -59,10 +59,6 @@ function _wizFlow(){
   var steps=['cycle','goals'];
   if(hasPeps){steps.push('peptides');steps.push('check');steps.push('configure');}
   if(hasTRT)steps.push('trt');
-  // After the testosterone is set, ask whether anything else goes on top. Without this
-  // the only way to reach the Enhanced tier was to have ticked it back on the goals
-  // step, before the user knew what the run would look like.
-  if(hasTRT&&!hasEnhanced)steps.push('moreadv');
   // Testosterone base is chosen first — every enhanced cycle runs on one, and which
   // ester it is changes injection frequency for the whole cycle. Then 'advise' (guided
   // recommendation), then the raw Enhanced compound list.
@@ -71,19 +67,28 @@ function _wizFlow(){
   // the ester, dose and cadence — pushing 'base' as well would ask for testosterone
   // twice in one run and let the two answers disagree. It stays for the path that has
   // enhanced without TRT, which is how an older draft can still arrive here.
-  if(hasEnhanced){
+  // ⚠️ THE GUIDANCE STEP IS REACHED, THEN ASKS.
+  // Henrik, 2026-08-29: "In load of this screen I want an overlay asking if user wants
+  // to add advanced compounds to the protocol or not... Clicking No takes user past
+  // this part of the wizard."
+  //
+  // So a TRT run reaches 'advise' even without the enhanced goal ticked, and the
+  // overlay there decides. Answering No sets advSkipped, which drops these steps again
+  // — the flow is derived, so removing them is how "past this part" is expressed.
+  var wantsAdv=hasEnhanced||(hasTRT&&!(_wiz&&_wiz.advSkipped));
+  if(wantsAdv){
     if(!hasTRT)steps.push('base');
     steps.push('advise');steps.push('enhanced');
   }
   // VALIDATE when combining 2+ tiers so cross-tier conflicts are caught
-  var tierCount=[hasPeps,hasTRT,hasEnhanced].filter(Boolean).length;
+  var tierCount=[hasPeps,hasTRT,wantsAdv].filter(Boolean).length;
   if(tierCount>=2)steps.push('validate');
   steps.push('nutrition');
   steps.push('review');
   return steps;
 }
-var _WIZ_STEP_LABELS={base:'TEST BASE',advise:'GUIDANCE',nutrition:'MACROS',moreadv:'ANYTHING ELSE'};
-var _WIZ_RENDERERS={cycle:function(b,f){wizStep1(b,f);},goals:wizStepGoals,base:function(b,f){wizStepBase(b,f);},peptides:wizStepPeptides,check:wizStepCheck,configure:wizStepConfig,trt:wizStepTRTHandoff,moreadv:wizStepMoreAdvanced,advise:wizStepAdvise,enhanced:wizStepEnhanced,validate:wizStepValidate,nutrition:wizStepNutrition,review:wizStepReview};
+var _WIZ_STEP_LABELS={base:'TEST BASE',advise:'GUIDANCE',nutrition:'MACROS'};
+var _WIZ_RENDERERS={cycle:function(b,f){wizStep1(b,f);},goals:wizStepGoals,base:function(b,f){wizStepBase(b,f);},peptides:wizStepPeptides,check:wizStepCheck,configure:wizStepConfig,trt:wizStepTRTHandoff,advise:wizStepAdvise,enhanced:wizStepEnhanced,validate:wizStepValidate,nutrition:wizStepNutrition,review:wizStepReview};
 function wizRender(){
   var flow=_wizFlow();
   var idx=Math.min(_wiz.step,flow.length-1);
@@ -3215,35 +3220,6 @@ async function wizTrtGenerate(){
   try{ wizRender(); }
   catch(e){ if(typeof _logErr==='function')_logErr('wizTrtGenerateRender',e); }
 }
-// Does anything go on top of the testosterone? Asked after the dose is set, when the
-// user can actually see what they are adding to.
-function wizSetMoreAdvanced(yes){
-  if(!_wiz.goals)_wiz.goals=[];
-  var i=_wiz.goals.indexOf('enhanced');
-  if(yes){ if(i<0)_wiz.goals.push('enhanced');
-           if(!_wiz.enhanced)_wiz.enhanced={enabled:true,compounds:[]};
-           _wiz.enhanced.enabled=true; }
-  else if(i>=0){ _wiz.goals.splice(i,1); }
-  _wiz.moreAdvAnswered=true;
-  wizNext();
-}
-function wizStepMoreAdvanced(body,footer){
-  var b='background:var(--surface2);border:1px solid var(--border);border-radius:10px;'
-    +'padding:14px;font-size:14px;font-weight:700;color:var(--text);cursor:pointer;'
-    +'font-family:inherit;width:100%;text-align:left';
-  body.innerHTML='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;line-height:1.55">'
-    +'Your testosterone is set. Do you want to add anything on top of it — an oral, a '
-    +'second injectable, or a GH-axis compound?</div>'
-    +'<div style="display:flex;flex-direction:column;gap:10px">'
-    +'<button onclick="wizSetMoreAdvanced(true)" style="'+b+'">Yes, add compounds'
-      +'<div style="font-size:11.5px;font-weight:400;color:var(--muted2);margin-top:3px;line-height:1.5">'
-      +'Adds a guidance step and the compound list.</div></button>'
-    +'<button onclick="wizSetMoreAdvanced(false)" style="'+b+'">No, testosterone only'
-      +'<div style="font-size:11.5px;font-weight:400;color:var(--muted2);margin-top:3px;line-height:1.5">'
-      +'You can still add compounds later from the protocol.</div></button>'
-    +'</div>';
-  footer.innerHTML='';
-}
 function wizStepTRTHandoff(body,footer){
   if(_wizTrtClassic) return wizStepTRT(body,footer);
   // The footer goes in FIRST and the body build is wrapped: this step reads helpers
@@ -4368,6 +4344,49 @@ function _wizAdviseFemaleHtml(res){
   return h;
 }
 
+// Yes dismisses and the wizard carries on. No drops the enhanced steps from the flow
+// and lands on whatever comes next, which is what "past this part" means.
+function wizAdvAnswer(yes){
+  _wiz.advAsked=true;
+  if(yes){
+    if(!_wiz.goals)_wiz.goals=[];
+    if(_wiz.goals.indexOf('enhanced')<0)_wiz.goals.push('enhanced');
+    if(!_wiz.enhanced)_wiz.enhanced={enabled:true,compounds:[]};
+    _wiz.enhanced.enabled=true;
+    _wiz.advSkipped=false;
+    wizRender();
+    return;
+  }
+  _wiz.advSkipped=true;
+  var g=_wiz.goals||[]; var i=g.indexOf('enhanced'); if(i>=0)g.splice(i,1);
+  if(_wiz.enhanced)_wiz.enhanced.enabled=false;
+  var flow=_wizFlow();
+  var idx=flow.indexOf('nutrition');
+  if(idx<0)idx=flow.indexOf('review');
+  _wiz.step=(idx>=0)?idx:Math.max(0,flow.length-1);
+  wizRender();
+}
+function _wizAdvOverlayHtml(){
+  var b='background:var(--surface2);border:1px solid var(--border);border-radius:10px;'
+    +'padding:14px;font-size:14px;font-weight:700;color:var(--text);cursor:pointer;'
+    +'font-family:inherit;width:100%;text-align:left';
+  return '<div style="position:fixed;inset:0;z-index:200;background:rgba(0,0,0,0.92);'
+    +'display:flex;align-items:center;justify-content:center;padding:24px">'
+    +'<div style="max-width:420px;width:100%">'
+    +'<div style="font-size:17px;font-weight:700;color:var(--text);margin-bottom:8px">'
+    +'Add advanced compounds?</div>'
+    +'<div style="font-size:12.5px;color:var(--muted2);line-height:1.55;margin-bottom:18px">'
+    +'Your testosterone is set. Do you want to add anything on top of it — an oral, a '
+    +'second injectable, or a GH-axis compound?</div>'
+    +'<div style="display:flex;flex-direction:column;gap:10px">'
+    +'<button onclick="wizAdvAnswer(true)" style="'+b+'">Yes, add compounds'
+      +'<div style="font-size:11.5px;font-weight:400;color:var(--muted2);margin-top:3px;line-height:1.5">'
+      +'Continues to guidance and the compound list.</div></button>'
+    +'<button onclick="wizAdvAnswer(false)" style="'+b+'">No, testosterone only'
+      +'<div style="font-size:11.5px;font-weight:400;color:var(--muted2);margin-top:3px;line-height:1.5">'
+      +'Skips the rest of this section. You can still add compounds later from the protocol.</div></button>'
+    +'</div></div></div>';
+}
 function wizStepAdvise(body,footer){
   var st=_wizAdviseState();
   var inp=_wizAdviseInputs();
@@ -4457,7 +4476,9 @@ function wizStepAdvise(body,footer){
     html+='<div style="font-size:11px;color:var(--muted2);margin-top:8px;line-height:1.5;">You can fine-tune doses and add anything else on the next step.</div>';
     html+=_renderSafetyNote('enhanced');
   }
-  body.innerHTML=html;
+  // The overlay rides on top of the fully-rendered step, so answering Yes just drops it
+  // and the guidance behind it is already there — no second render, no flicker.
+  body.innerHTML=html+((!_wiz.advAsked&&!_wiz.advSkipped)?_wizAdvOverlayHtml():'');
   // Doc 07 §9 constraint 5: the pregnancy prompt BLOCKS. Every other warning in this
   // wizard is passive; this one gates the step, because an absolute contraindication
   // that a user can scroll past is not a contraindication.

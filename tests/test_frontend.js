@@ -397,16 +397,29 @@ check('_wizFlow: peps-only has no validate',!t1flow.includes('validate'));
 // _wizFlow: TRT-only (T2, trt enabled, no pep goals)
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
 var trtOnlyFlow=G._wizFlow();
-// The 'moreadv' step ("anything else on top?") is asked after the testosterone is set,
-// so a TRT-only flow is one step longer than before.
-check('_wizFlow: TRT-only has 6 steps', trtOnlyFlow.length===6, 'got '+trtOnlyFlow.length);
-check('_wizFlow: TRT-only steps', trtOnlyFlow.join(',')===('cycle,goals,trt,moreadv,nutrition,review'),
+// "Anything else on top?" is no longer a step of its own — since 2026-08-29 it is an
+// overlay drawn on top of the fully-built 'advise' step, so the guidance is already
+// on screen behind the question. The advanced steps are therefore in the flow by
+// default and only leave it once the user answers No (_wiz.advSkipped).
+check('_wizFlow: TRT-only has 8 steps', trtOnlyFlow.length===8, 'got '+trtOnlyFlow.length);
+check('_wizFlow: TRT-only steps',
+  trtOnlyFlow.join(',')===('cycle,goals,trt,advise,enhanced,validate,nutrition,review'),
   trtOnlyFlow.join(','));
-check('_wizFlow: TRT-only asks about more compounds', trtOnlyFlow.includes('moreadv'));
+check('_wizFlow: TRT-only reaches the advise step that carries the overlay',
+  trtOnlyFlow.includes('advise'));
+// Answering No drops the advanced steps entirely.
+G._wiz.advSkipped=true;
+var trtSkipFlow=G._wizFlow();
+G._wiz.advSkipped=false;
+check('_wizFlow: TRT-only after No has 5 steps', trtSkipFlow.length===5, 'got '+trtSkipFlow.length);
+check('_wizFlow: TRT-only after No steps',
+  trtSkipFlow.join(',')===('cycle,goals,trt,nutrition,review'), trtSkipFlow.join(','));
+check('_wizFlow: TRT-only after No has no enhanced', !trtSkipFlow.includes('enhanced'));
+check('_wizFlow: TRT-only after No has no validate', !trtSkipFlow.includes('validate'));
 // _wizFlow: Peps + TRT (T2, trt enabled, pep goal selected)
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
 var pepTrtFlow=G._wizFlow();
-check('_wizFlow: peps+TRT has 10 steps', pepTrtFlow.length===10, 'got '+pepTrtFlow.length);
+check('_wizFlow: peps+TRT has 11 steps', pepTrtFlow.length===11, 'got '+pepTrtFlow.length);
 check('_wizFlow: peps+TRT has validate', pepTrtFlow.includes('validate'));
 check('_wizFlow: peps+TRT ends with review', pepTrtFlow[pepTrtFlow.length-1]==='review');
 // _wizFlow: TRT + Enhanced (T3, trt enabled, enhanced goal, no pep goals)
@@ -482,13 +495,14 @@ G._wiz.step=2;G.wizBack();check('wizBack: 2→1', G._wiz.step===1);
 // peps-only: wizNext from last step stays clamped
 G._userTier=1;G.initWizard();G._wiz.step=6;G.wizNext();
 check('wizNext: peps-only does not exceed step 6', G._wiz.step===6);
-// TRT-only: step through all 5 steps (cycle,goals,trt,nutrition,review)
+// TRT-only: cycle,goals,trt,advise,enhanced,validate,nutrition,review — the advanced
+// steps are in the flow until the overlay on 'advise' is answered No.
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
 G.wizNext();G.wizNext();G.wizNext();G.wizNext();
-check('wizNext: TRT-only after 4 calls = step 4 (nutrition)', G._wiz.step===4);
-G.wizNext();G.wizNext();
-check('wizNext: TRT-only does not exceed step 5 (review)', G._wiz.step===5);
-G.wizBack();check('wizBack: TRT-only 5→4 (nutrition)', G._wiz.step===4);
+check('wizNext: TRT-only after 4 calls = step 4 (enhanced)', G._wiz.step===4);
+G.wizNext();G.wizNext();G.wizNext();G.wizNext();
+check('wizNext: TRT-only does not exceed step 7 (review)', G._wiz.step===7);
+G.wizBack();check('wizBack: TRT-only 7→6 (nutrition)', G._wiz.step===6);
 // TRT+Enhanced (no peps): cycle,goals,trt,advise,enhanced,validate,nutrition,review.
 // 'base' is gone from this path as of 2026-08-20 — the single Compounds toggle sets
 // both flags, so the 'trt' step already asked for the testosterone an enhanced cycle
@@ -6907,15 +6921,21 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 2: TRT only (T2, trt.enabled=true, no pep goals)
   G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
   var f2=G._wizFlow();
-  check('flow TRT-only: 6 steps', f2.length===6, 'got '+f2.length);
+  check('flow TRT-only: 8 steps', f2.length===8, 'got '+f2.length);
   check('flow TRT-only: has trt', f2.includes('trt'));
   check('flow TRT-only: no peptides step', !f2.includes('peptides'));
-  check('flow TRT-only: no validate', !f2.includes('validate'));
+  check('flow TRT-only: has advise, the overlay host step', f2.includes('advise'));
+  // ...and answering No to the overlay strips the advanced steps back out.
+  G._wiz.advSkipped=true;
+  var f2b=G._wizFlow();
+  G._wiz.advSkipped=false;
+  check('flow TRT-only after No: 5 steps', f2b.length===5, 'got '+f2b.length);
+  check('flow TRT-only after No: no validate', !f2b.includes('validate'));
 
   // Flow 3: Peps + TRT (T2, trt.enabled, pep goal)
   G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
   var f3=G._wizFlow();
-  check('flow peps+TRT: 10 steps', f3.length===10, 'got '+f3.length);
+  check('flow peps+TRT: 11 steps', f3.length===11, 'got '+f3.length);
   check('flow peps+TRT: has peptides', f3.includes('peptides'));
   check('flow peps+TRT: has trt', f3.includes('trt'));
   check('flow peps+TRT: has validate', f3.includes('validate'));
@@ -10849,8 +10869,12 @@ if (typeof G._tcDrawManualChart === 'function' && typeof G._tcFreeTSeries === 'f
   } catch(e){ _awThrew=true; console.error('  avg-window test threw:', e.message); }
   check('avg window: hook fires with a window', !_awThrew && _awWhole && _awMonth);
   if (_awWhole && _awMonth) {
-    check('avg window: reported average equals the mean of its own visible window',
-      Math.abs(_awWhole.avg - _awWinMean(_awWhole.xStart, _awWhole.xEnd)) < 0.5);
+    // Since 2026-08-29 the window is clamped to the dosed span (day 0 .. last injection),
+    // so the reported figure is the mean of avgFrom..avgTo, not of the raw visible window.
+    check('avg window: reported average equals the mean of the span it says it averaged',
+      Math.abs(_awWhole.avg - _awWinMean(_awWhole.avgFrom, _awWhole.avgTo)) < 0.5);
+    check('avg window: whole zoom does not average past the last injection',
+      _awWhole.avgTo <= _awWhole.logDays, 'avgTo='+_awWhole.avgTo+' logDays='+_awWhole.logDays);
     check('avg window: zoom changes the window (month narrower than whole)',
       (_awMonth.xEnd - _awMonth.xStart) < (_awWhole.xEnd - _awWhole.xStart));
     check('avg window: the two zooms yield different averages (not a stale global value)',
@@ -14816,4 +14840,65 @@ console.log('\n── Supplier-list groups and the new ester ──────�
   (G.TRT_CAT || []).forEach(function(c){
     check('  …' + c.id + ' has dose guidance', !!(G.TRT_GUIDE && G.TRT_GUIDE[c.id]));
   });
+}
+
+// ── average window: stops at the last injection ────────────────────────────────
+// Henrik, 2026-08-29: "Average should not include time before furst injection in
+// history or after last planned injection in the current active protocol."
+// At Whole zoom the visible window runs past the last dose into the washout tail,
+// where the level decays toward zero by construction. Averaging that in reported a
+// plan holding ~1570 as avg 1051. The average must be taken over the dosed span only.
+console.log('\n── average line: dosed span only, no washout tail ──');
+if (typeof G._tcDrawManualChart === 'function') {
+  var _azSavedFT  = G._tcp.measuredFT;
+  var _azSavedBw  = G._tcBwEntries;
+  var _azSavedGet = G.document.getElementById;
+
+  G._tcp.measuredFT = '217';
+  G._tcBwEntries = [{date:'2026-06-26', free_t:'217', total_t:'17', shbg:'45', unit:'pmol/L'}];
+
+  var _azCtx = {
+    scale:noop, beginPath:noop, arc:noop, fill:noop, stroke:noop,
+    fillText:noop, closePath:noop, save:noop, restore:noop, fillRect:noop,
+    setLineDash:noop, strokeRect:noop, translate:noop, rotate:noop,
+    moveTo:noop, lineTo:noop, clip:noop, rect:noop, clearRect:noop,
+    quadraticCurveTo:noop, bezierCurveTo:noop,
+    measureText:function(){ return {width:0}; },
+    createLinearGradient:function(){ return {addColorStop:noop}; }
+  };
+  var _azSeen = null;
+  function _azKey(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  var _azLog = [], _azS0 = new Date('2026-06-26T12:00:00');
+  for (var _azI = 0; _azI < 84; _azI++) {
+    _azLog.push({compId:'enanthate', doseMg:'20', date:_azKey(new Date(_azS0.getTime()+_azI*86400000))});
+  }
+  G.document.getElementById = function(id){
+    if (id === 'tc-manual-chart') return {
+      style:{}, classList:{add:noop,remove:noop,contains:function(){return false;}},
+      offsetWidth:350, offsetHeight:250,
+      _testAvgHook: function(o){ _azSeen = o; },
+      getContext: function(){ return _azCtx; }
+    };
+    return _azSavedGet(id);
+  };
+  var _azThrew = null;
+  try { G._tcDrawManualChart('tc-manual-chart', _azLog.slice()); }
+  catch (e) { _azThrew = e; }
+  G.document.getElementById = _azSavedGet;
+
+  check('avg window: chart draws without throwing', !_azThrew, _azThrew && _azThrew.message);
+  check('avg window: the hook fired', !!_azSeen);
+  if (_azSeen) {
+    check('avg window: the visible window runs past the last injection',
+      _azSeen.xEnd > _azSeen.logDays, 'xEnd='+_azSeen.xEnd+' logDays='+_azSeen.logDays);
+    check('avg window: averaging stops at the last injection',
+      _azSeen.avgTo === _azSeen.logDays, 'avgTo='+_azSeen.avgTo+' logDays='+_azSeen.logDays);
+    check('avg window: averaging starts no earlier than the first injection',
+      _azSeen.avgFrom >= 0, 'avgFrom='+_azSeen.avgFrom);
+    check('avg window: the reported average is a real level, not a decay',
+      _azSeen.avg > 0);
+  }
+
+  G._tcp.measuredFT = _azSavedFT;
+  G._tcBwEntries    = _azSavedBw;
 }
