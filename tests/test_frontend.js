@@ -14902,3 +14902,69 @@ if (typeof G._tcDrawManualChart === 'function') {
   G._tcp.measuredFT = _azSavedFT;
   G._tcBwEntries    = _azSavedBw;
 }
+
+// ── in/out-of-range label: boundaries and real catalogue values ───────────────
+// Henrik, 2026-08-29: free T 217 pmol/L showed "IN RANGE" against a lab band of
+// 220-800. Two gaps let it through: the backend band was (200,600), and every
+// frontend flag test ran against a MOCK catalogue, so no test ever read a real
+// bound. These cover the boundary arithmetic and pin the real free-T numbers.
+console.log('\n── lab flag: boundary conditions and real free-T band ──');
+if (typeof G._labFlag === 'function' && typeof G._labSetCatalogue === 'function') {
+  var _lfSaved = G._labMarkers;
+  G._labSetCatalogue({
+    version:'2', panels:[{key:'hormones',label:'Hormones'},{key:'lipids',label:'Lipids'}],
+    markers:[
+      // free_t carries the REAL backend band, so a regression there fails here too.
+      {key:'free_t',label:'Free Testosterone',unit:'pmol/L',panel:'hormones',direction:'band',safety:false,
+       ranges:{male:{low:220.0,high:800.0},female:{low:3.0,high:35.0}},
+       altUnits:[{unit:'pg/mL',factor:0.288}],meaning:'ft'},
+      {key:'hdl',label:'HDL',unit:'mmol/L',panel:'lipids',direction:'higher',safety:true,
+       ranges:{male:{low:1.0,high:null},female:{low:1.3,high:null}},altUnits:[],meaning:'h'},
+      {key:'ldl',label:'LDL',unit:'mmol/L',panel:'lipids',direction:'lower',safety:true,
+       ranges:{male:{low:0,high:3.0},female:{low:0,high:3.0}},altUnits:[],meaning:'l'}
+    ]
+  });
+  var _F = function(k){ return G._labMarkerIndex[k]; };
+
+  // The reported bug, exactly.
+  check('lab flag: free T 217 pmol/L is LOW, not in range',
+    G._labFlag(_F('free_t'), 217, 'male') === 'low',
+    'got ' + G._labFlag(_F('free_t'), 217, 'male'));
+
+  // Boundaries — the arithmetic that decides the label. `low` and `high` are
+  // themselves IN range; only strictly outside flags.
+  check('lab flag: exactly at low bound is in range',  G._labFlag(_F('free_t'), 220, 'male') === 'in');
+  check('lab flag: one below low bound is low',        G._labFlag(_F('free_t'), 219.9, 'male') === 'low');
+  check('lab flag: exactly at high bound is in range', G._labFlag(_F('free_t'), 800, 'male') === 'in');
+  check('lab flag: one above high bound is high',      G._labFlag(_F('free_t'), 800.1, 'male') === 'high');
+  check('lab flag: mid-band is in range',              G._labFlag(_F('free_t'), 500, 'male') === 'in');
+
+  // direction:'lower' — only the ceiling flags, and the ceiling itself is in.
+  check('lab flag lower: exactly at ceiling is in',    G._labFlag(_F('ldl'), 3.0, 'male') === 'in');
+  check('lab flag lower: just over ceiling is high',   G._labFlag(_F('ldl'), 3.01, 'male') === 'high');
+  check('lab flag lower: far below never flags low',   G._labFlag(_F('ldl'), -5, 'male') === 'in');
+
+  // direction:'higher' — only the floor flags, and the floor itself is in.
+  check('lab flag higher: exactly at floor is in',     G._labFlag(_F('hdl'), 1.0, 'male') === 'in');
+  check('lab flag higher: just under floor is low',    G._labFlag(_F('hdl'), 0.99, 'male') === 'low');
+  check('lab flag higher: open ceiling never flags',   G._labFlag(_F('hdl'), 999, 'male') === 'in');
+
+  // A value entered in an alternate unit must be converted BEFORE flagging —
+  // flagging the raw number would compare pg/mL against a pmol/L band.
+  var _pg = G._labConvert(_F('free_t'), 62, 'pg/mL');          // 62 / 0.288 ≈ 215 pmol/L
+  check('lab flag: pg/mL converts before flagging', Math.abs(_pg - 215.3) < 1, 'got ' + _pg);
+  check('lab flag: 62 pg/mL flags low (215 pmol/L)', G._labFlag(_F('free_t'), _pg, 'male') === 'low');
+  var _pg2 = G._labConvert(_F('free_t'), 100, 'pg/mL');        // ≈ 347 pmol/L
+  check('lab flag: 100 pg/mL is in range (347 pmol/L)', G._labFlag(_F('free_t'), _pg2, 'male') === 'in');
+
+  // Sexes read their own band — 217 is low for a man, high for a woman.
+  check('lab flag: 217 is HIGH on the female band', G._labFlag(_F('free_t'), 217, 'female') === 'high');
+
+  // The label the user actually sees for each flag.
+  check('lab label: low → "Low"',        G._labFlagMeta('low', false).label === 'Low');
+  check('lab label: high → "High"',      G._labFlagMeta('high', false).label === 'High');
+  check('lab label: in → "In range"',    G._labFlagMeta('in', false).label === 'In range');
+  check('lab label: unknown → no label', G._labFlagMeta(null, false).label === '');
+
+  if (_lfSaved) G._labSetCatalogue(_lfSaved);
+}
