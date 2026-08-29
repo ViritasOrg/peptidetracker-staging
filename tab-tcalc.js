@@ -1803,32 +1803,52 @@ function _tcSetChartZoom(z) {
 // back into true, so check the string directly). Default = shown.
 // ── Whole-view tail trim ──────────────────────────────────────────────────────
 // A plan that ends washes back toward the anchor and then sits there for months.
-// On Whole that flat run ate most of the width — the report that prompted this
-// had ~10 months of dead tail against ~4 months of signal.
+// On Whole that flat run ate most of the width.
 //
-// ⚠️ THE OLD TRIM COULD NEVER FIRE. It took the last day the curve was >= the
-// anchor, but the model's endogenous baseline IS the anchor: the curve
-// approaches it from above and never crosses. Every day passed the test, so
-// xDays was always totalDays and nothing was ever trimmed, for anyone.
-// "Close enough" needs a tolerance, not an equality.
+// ⚠️ TWO CRITERIA HAVE FAILED HERE. Do not reach for a third without measuring.
 //
-// Nothing is discarded — the trim sets the WINDOW, and Whole can now be panned
-// out to totalDays, so the full washout is still there to scroll to.
-var TC_SETTLE_TOL = 0.10;   // within 10% of the last lab counts as settled. Free-T
-                            // assay precision is no better than this, so a gap
-                            // under it is not one the user could act on anyway.
-var TC_SETTLE_PAD = 0.05;   // keep a little past it, so a plateau reads as a plateau.
+// 1. "last day the curve is >= the anchor" — could never fire, for anyone. The
+//    model's endogenous baseline IS the anchor, so the curve approaches it from
+//    above and never crosses. Every day passed; nothing was ever trimmed.
+//
+// 2. "last day the curve is >10% above the anchor" — fired, but nowhere near
+//    far enough on a long ester. Measured on the reported case (nebido, washout
+//    sized from its 75-day high-end half-life, totalDays 472): it cut at day 414,
+//    14 Aug 2027, still months of dead flat. Landing on the wanted date needed a
+//    ~50% tolerance, which is not a defensible reading of "close to the last lab"
+//    and would savage a short ester, whose curve really does reach the anchor.
+//
+// The mistake both share is measuring PROXIMITY to a number. What makes the tail
+// dead is that nothing is HAPPENING in it. So measure that instead: the curve is
+// done when the next 30 days barely move it, relative to its own full range. That
+// is scale-free — it reads the same on a propionate plan and a nebido depot — and
+// it needs no assumption about where the curve eventually lands.
+//
+// Nothing is discarded: this sets the WINDOW, and Whole pans out to totalDays.
+var TC_FLAT_WINDOW = 30;    // days to look ahead
+var TC_FLAT_FRAC   = 0.02;  // of (peak - final). 2% over 30 days on the reported
+                            // case cuts at day 216, 28 Jan 2027 — the ask was
+                            // "anything around 1 Feb". 3% cuts to 19 Dec, which
+                            // eats the washout itself; 1% only reaches 13 Apr.
 
-// valueAt(t) → free T on day t. floorDay: a day the window must always reach
-// (the last injection) so trimming can never hide the plan itself.
-function _tcSettleDay(valueAt, baseline, totalDays, floorDay) {
-  if (!(baseline > 0) || !(totalDays > 0)) return totalDays;
-  var thresh = baseline * (1 + TC_SETTLE_TOL), last = -1;
-  for (var t = totalDays; t >= 0; t--) { if (valueAt(t) > thresh) { last = t; break; } }
-  if (last < 0) return totalDays;          // never rises above the anchor — trim nothing
-  var end = last + Math.round(last * TC_SETTLE_PAD);
-  if (floorDay > end) end = floorDay;
-  return Math.max(1, Math.min(totalDays, end));
+// valueAt(t) → free T on day t. floorDay: a day the window must always reach (the
+// last injection) so the plan can never be trimmed away, and so the scan starts
+// after dosing stops — a mid-plan steady plateau is also "flat" and would
+// otherwise cut the protocol in half.
+function _tcSettleDay(valueAt, totalDays, floorDay) {
+  if (!(totalDays > 0)) return totalDays;
+  var peak = 0, peakDay = 0, t;
+  for (t = 0; t <= totalDays; t++) { var vv = valueAt(t); if (vv > peak) { peak = vv; peakDay = t; } }
+  var range = peak - valueAt(totalDays);
+  if (!(range > 0)) return totalDays;            // nothing rises and falls — nothing to trim
+  var thresh = range * TC_FLAT_FRAC;
+  var from = (floorDay > 0) ? floorDay : peakDay;
+  from = Math.max(0, Math.min(totalDays, from));
+  for (t = from; t <= totalDays; t++) {
+    var ahead = valueAt(Math.min(totalDays, t + TC_FLAT_WINDOW));
+    if (Math.abs(valueAt(t) - ahead) < thresh) return Math.max(1, Math.min(totalDays, t));
+  }
+  return totalDays;
 }
 
 function _tcShowAvg() {
@@ -3772,7 +3792,7 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   if (_mftNum && calFT) {
     xDays = _tcSettleDay(function (t) {
       return total[t] * (calFT_arr ? calFT_arr[t] : scale);
-    }, _mftNum, totalDays, logDays);
+    }, totalDays, logDays);
   }
 
   // Zoom window
