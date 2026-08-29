@@ -5720,6 +5720,39 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       suspects.length===0, suspects.slice(0,5).join(' | '));
   }
 
+  // ── Generate & continue must not be a dead button ─────────────────────────
+  // Reported: "App hangs at 'Generate and continue' or button doesn't work, clicking it
+  // does nothing." Three faults: _trtRerender('wiz') rendered the CLASSIC step, wiping
+  // the planner's body and footer (and throwing); trtSolveRun re-renders outside its own
+  // try/catch so that rejection escaped an onclick handler silently; and applying clears
+  // st.result, which flipped the footer back to "Generate" — a loop with no way forward.
+  {
+    const stk=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+    check('the wizard re-render targets the current TRT step, not the classic one',
+      /wizStepTRTHandoff==='function'\)\?wizStepTRTHandoff/.test(stk));
+    check('  …and generate cannot reject silently out of an onclick',
+      /_logErr\('wizTrtGenerate',e\)/.test(stk) && /Could not generate a schedule/.test(stk));
+    check('  …an applied plan counts as solved, so the footer advances',
+      /return !q\.result&&!q\.running&&!q\._applied;/.test(stk));
+    check('  …and the plan stays on screen after the wizard applies it',
+      /st\.result=_res;/.test(stk));
+    // The box must stop claiming "not applied yet" once it has been applied.
+    if(typeof G._renderTRTSolve==='function'){
+      const comp={id:'enanthate',name:'Test E',dose:'20',unit:'mg',cadence:'interval',
+        freqVal:1,freqUnit:'days',dose_phases:[{w:0,d:'10',u:'mg'},{w:4,d:'20',u:'mg'}]};
+      const res={best:{cadence:{label:'Daily, dose varies by day',dithered:true,freqVal:1,freqUnit:'days'},
+        lowPmol:1400,highPmol:1500,ripple:.04,drift:.02,worst:.05,meanErr:10,settleWeeks:3,stepPmol:100,
+        phases:[{w:0,mg:7,ml:0.03,perWeek:50,iv:1,pattern:[12.5,0,12.5,0,12.5,12.5,0]}],
+        weekly:[{week:0,mean:1450}]},alternatives:[],target:1500,concMgPerMl:250,stepMl:0.05,weeks:12,notes:[]};
+      G._trtSolveState={enanthate:{target:'1500',conc:'250',weeks:12,step:'0.05',
+        running:false,error:'',result:res,_applied:res.best}};
+      const h=G._renderTRTSolve(comp,{},'wiz',true);
+      check('  …and the panel says applied, not "not applied yet"',
+        /Applied\. This protocol now schedules/.test(h) && !/Not applied yet/.test(h));
+      G._trtSolveState={};
+    }
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });

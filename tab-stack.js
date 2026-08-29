@@ -743,8 +743,16 @@ function _scopeCycleStart(scope){
 // first or an in-progress dose edit is lost by the redraw.
 function _trtRerender(scope){
   if(scope==='wiz'){
-    if(typeof wizStepTRT==='function')
-      wizStepTRT(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
+    // ⚠️ THE HANDOFF, NOT THE CLASSIC STEP.
+    // This called wizStepTRT — the multi-compound step — so any re-render from the
+    // wizard replaced the planner's body AND footer with the classic view, taking the
+    // button that triggered it with it. Written when the classic step was the only
+    // wizard TRT step; reachable the moment the planner started running a solve, where
+    // it read as "clicking Generate does nothing". wizStepTRTHandoff renders whichever
+    // step is actually current, and still honours _wizTrtClassic.
+    var _fn=(typeof wizStepTRTHandoff==='function')?wizStepTRTHandoff
+           :((typeof wizStepTRT==='function')?wizStepTRT:null);
+    if(_fn)_fn(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
     return;
   }
   if(typeof _collectEditInputs==='function')_collectEditInputs();
@@ -1221,6 +1229,11 @@ function _renderTRTSolve(c,selData,scope,hideRun){
     h+=(function(){
           var cur=_trtCurrentScheduleLabel(c);
           if(!cur)return '';
+          if(st._applied){
+            return '<div style="background:rgba(90,209,176,0.10);border:1px solid rgba(90,209,176,0.4);'
+              +'border-radius:8px;padding:8px 10px;font-size:11px;color:#5ad1b0;line-height:1.5;margin-bottom:8px">'
+              +'Applied. This protocol now schedules <b>'+_esc(cur)+'</b>.</div>';
+          }
           var body=(cur==='NONE')
             ? 'Not applied yet. This compound has no dose set, so <b>nothing is being '
               +'scheduled</b>. Apply to use this plan.'
@@ -3171,10 +3184,20 @@ function _wizEnsureTrtCompound(p){
 async function wizTrtGenerate(){
   var p=_wizEnsureTrtPlan();
   if(!p.compId)return;
-  _wizEnsureTrtCompound(p);
   var st=_trtSolveSt(p.compId,'wiz');
-  st.target=String(p.targetPmol||'');
-  await trtSolveRun('wiz',p.compId);
+  // ⚠️ NOTHING HERE MAY REJECT SILENTLY.
+  // This is an onclick handler returning a promise: an unhandled rejection anywhere
+  // leaves the button looking dead, with no error and no state change. trtSolveRun
+  // re-renders OUTSIDE its own try/catch, so a render fault propagated straight out.
+  try{
+    _wizEnsureTrtCompound(p);
+    st.target=String(p.targetPmol||'');
+    await trtSolveRun('wiz',p.compId);
+  }catch(e){
+    st.running=false;
+    st.error='Could not generate a schedule: '+String((e&&e.message)||e);
+    if(typeof _logErr==='function')_logErr('wizTrtGenerate',e);
+  }
   // ⚠️ GENERATE AND APPLY ARE ONE ACTION HERE.
   // "The 'generate and next' need to do this in one step." In the wizard nothing is
   // saved until the end, so applying is not a commitment — and leaving it unapplied is
@@ -3182,10 +3205,15 @@ async function wizTrtGenerate(){
   // button stays in the protocol editor, where a plan REPLACES a schedule already
   // running and the choice is real.
   if(st.result&&st.result.best&&typeof trtSolveApply==='function'){
+    var _res=st.result;
     try{ trtSolveApply('wiz',p.compId,'best'); }
     catch(e){ if(typeof _logErr==='function')_logErr('wizTrtAutoApply',e); }
+    // Apply clears the result. In the wizard the plan is the thing the user is being
+    // shown, so put it back — otherwise the step blanks out the schedule it just made.
+    st.result=_res;
   }
-  wizRender();
+  try{ wizRender(); }
+  catch(e){ if(typeof _logErr==='function')_logErr('wizTrtGenerateRender',e); }
 }
 // Does anything go on top of the testosterone? Asked after the dose is set, when the
 // user can actually see what they are adding to.
@@ -3225,8 +3253,12 @@ function wizStepTRTHandoff(body,footer){
   // Next is the only forward action on this step, so in target mode it runs the solve
   // first and stays put to show the result; pressing it again moves on.
   var _tp=(typeof _wizEnsureTrtPlan==='function')?_wizEnsureTrtPlan():null;
+  // ⚠️ APPLIED COUNTS AS SOLVED. trtSolveApply clears st.result, so testing result
+  // alone flipped the footer back to "Generate" the instant the plan was applied —
+  // an endless loop with no way forward.
   var _needSolve=!!(_tp&&_tp.mode==='target'&&_tp.compId&&parseDec(_tp.targetPmol)>0
-                    &&(function(){var q=_trtSolveSt(_tp.compId,'wiz');return !q.result&&!q.running;})());
+                    &&(function(){var q=_trtSolveSt(_tp.compId,'wiz');
+                        return !q.result&&!q.running&&!q._applied;})());
   footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="'
     +(_needSolve?'wizTrtGenerate()':'wizNext()')+'">'
     +(_needSolve?'Generate &amp; continue →':'Next →')+'</button>';
