@@ -15071,3 +15071,55 @@ if (typeof G._tcDrawManualChart === 'function') {
   G.document.getElementById = _twGet;
   G._tcp.measuredFT = _twSaveFT; G._tcBwEntries = _twSaveBw; G._tcChartPanOffset = _twSavePan;
 }
+
+// ── zoom strip: every level the strip offers must also get styled ────────────
+// The strip rendered 5 levels while the click handler styled 4. Clicking 3MO
+// cleared the highlight from the other four and never set its own, so the strip
+// showed NOTHING selected — the level looked broken. The existing tests checked
+// that selecting 3mo did not throw and that _tcChartZoom changed, neither of
+// which touches the button styling, which is how it shipped on 15 Aug.
+console.log('\n── zoom strip: offered levels are styled levels ──');
+{
+  var _zsSrc = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('there is a single zoom-level list', /var TC_ZOOM_LEVELS\s*=\s*\['today','week','month','3mo','whole'\]/.test(_zsSrc));
+  // No second hardcoded list may reappear alongside it.
+  var _zsLists = _zsSrc.match(/\['today','week','month'[^\]]*\]/g) || [];
+  check('the level list is declared exactly once', _zsLists.length === 1,
+    'found ' + _zsLists.length + ': ' + _zsLists.join(' | '));
+  check('the button strip iterates the shared list',
+    /TC_ZOOM_LEVELS\.forEach\(function\(z\)/.test(_zsSrc));
+  check('the click handler iterates the shared list',
+    /TC_ZOOM_LEVELS\.forEach\(function\(zz\)/.test(_zsSrc));
+
+  // Behavioural: selecting each level must leave exactly that button highlighted.
+  // The suite's getElementById hands back a FRESH mock each call, so styles set on
+  // one lookup are invisible to the next. Give the zoom buttons a persistent
+  // registry for this block, else every read comes back blank whatever the code does.
+  if (typeof G._tcSetChartZoom === 'function' && Array.isArray(G.TC_ZOOM_LEVELS)) {
+    var _zsSaveZoom = G._tcChartZoom, _zsSaveGet = G.document.getElementById;
+    var _zsBtns = {};
+    G.TC_ZOOM_LEVELS.forEach(function (z) { _zsBtns['tc-zoom-' + z] = {style:{}}; });
+    G.document.getElementById = function (id) {
+      return Object.prototype.hasOwnProperty.call(_zsBtns, id) ? _zsBtns[id] : _zsSaveGet(id);
+    };
+    // Sanity: the registry really does persist, or the assertions below prove nothing.
+    _zsBtns['tc-zoom-whole'].style.color = '__probe__';
+    check('zoom strip: the test registry persists between lookups',
+      G.document.getElementById('tc-zoom-whole').style.color === '__probe__');
+    _zsBtns['tc-zoom-whole'].style.color = '';
+
+    G.TC_ZOOM_LEVELS.forEach(function (z) {
+      var threw = false;
+      try { G._tcSetChartZoom(z); } catch (e) { threw = true; }
+      if (threw) { check('zoom strip: selecting ' + z + ' does not throw', false); return; }
+      var lit = G.TC_ZOOM_LEVELS.filter(function (zz) {
+        return _zsBtns['tc-zoom-' + zz].style.color === '#6688cc';
+      });
+      check('zoom strip: selecting ' + z + ' lights exactly ' + z,
+        lit.length === 1 && lit[0] === z, 'lit: [' + lit.join(',') + ']');
+    });
+
+    G.document.getElementById = _zsSaveGet;
+    try { G._tcSetChartZoom(_zsSaveZoom || 'whole'); } catch (e) {}
+  }
+}
