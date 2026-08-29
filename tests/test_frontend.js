@@ -397,12 +397,16 @@ check('_wizFlow: peps-only has no validate',!t1flow.includes('validate'));
 // _wizFlow: TRT-only (T2, trt enabled, no pep goals)
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
 var trtOnlyFlow=G._wizFlow();
-check('_wizFlow: TRT-only has 5 steps', trtOnlyFlow.length===5, 'got '+trtOnlyFlow.length);
-check('_wizFlow: TRT-only steps', trtOnlyFlow.join(',')===('cycle,goals,trt,nutrition,review'));
+// The 'moreadv' step ("anything else on top?") is asked after the testosterone is set,
+// so a TRT-only flow is one step longer than before.
+check('_wizFlow: TRT-only has 6 steps', trtOnlyFlow.length===6, 'got '+trtOnlyFlow.length);
+check('_wizFlow: TRT-only steps', trtOnlyFlow.join(',')===('cycle,goals,trt,moreadv,nutrition,review'),
+  trtOnlyFlow.join(','));
+check('_wizFlow: TRT-only asks about more compounds', trtOnlyFlow.includes('moreadv'));
 // _wizFlow: Peps + TRT (T2, trt enabled, pep goal selected)
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
 var pepTrtFlow=G._wizFlow();
-check('_wizFlow: peps+TRT has 9 steps', pepTrtFlow.length===9, 'got '+pepTrtFlow.length);
+check('_wizFlow: peps+TRT has 10 steps', pepTrtFlow.length===10, 'got '+pepTrtFlow.length);
 check('_wizFlow: peps+TRT has validate', pepTrtFlow.includes('validate'));
 check('_wizFlow: peps+TRT ends with review', pepTrtFlow[pepTrtFlow.length-1]==='review');
 // _wizFlow: TRT + Enhanced (T3, trt enabled, enhanced goal, no pep goals)
@@ -481,9 +485,10 @@ check('wizNext: peps-only does not exceed step 6', G._wiz.step===6);
 // TRT-only: step through all 5 steps (cycle,goals,trt,nutrition,review)
 G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
 G.wizNext();G.wizNext();G.wizNext();G.wizNext();
-check('wizNext: TRT-only after 4 calls = step 4 (review)', G._wiz.step===4);
-G.wizNext();check('wizNext: TRT-only does not exceed step 4', G._wiz.step===4);
-G.wizBack();check('wizBack: TRT-only 4→3 (nutrition)', G._wiz.step===3);
+check('wizNext: TRT-only after 4 calls = step 4 (nutrition)', G._wiz.step===4);
+G.wizNext();G.wizNext();
+check('wizNext: TRT-only does not exceed step 5 (review)', G._wiz.step===5);
+G.wizBack();check('wizBack: TRT-only 5→4 (nutrition)', G._wiz.step===4);
 // TRT+Enhanced (no peps): cycle,goals,trt,advise,enhanced,validate,nutrition,review.
 // 'base' is gone from this path as of 2026-08-20 — the single Compounds toggle sets
 // both flags, so the 'trt' step already asked for the testosterone an enhanced cycle
@@ -1349,8 +1354,15 @@ console.log(`\n${'─'.repeat(59)}`);
   check('toggling a protocol on starts it', /_activeStackIndices=\[idx\];\s*_ensureCycleStart\(idx\);/.test(rawScript));
   check('useStack starts it too',
     (rawScript.match(/_activeStackIndices=\[idx\];\s*_ensureCycleStart\(idx\);/g) || []).length === 2);
-  check('a first protocol from the wizard starts it',
-    /if\(_userStacks\.length===1\)\{_activeStackIndices=\[0\];if\(typeof _ensureCycleStart==='function'\)_ensureCycleStart\(0\);\}/.test(stackJs));
+  // ⚠️ NOT JUST THE FIRST ONE. cycle_start was set only when the new protocol was the
+  // user's first, and generateAndPushInjections is gated on it — so with any existing
+  // protocol the wizard saved a protocol that generated no injections and drew no curve.
+  check('every new protocol from the wizard gets a start date',
+    /if\(typeof _ensureCycleStart==='function'\)_ensureCycleStart\(_wiz\.stackIndex\);/.test(stackJs));
+  // Activated only when nothing else is running: the new protocol usually starts after
+  // the current one ends, so switching that off would leave a gap nobody asked for.
+  check('  …and is activated only when nothing else is',
+    /if\(!\(_activeStackIndices&&_activeStackIndices\.length\)\)_activeStackIndices=\[_wiz\.stackIndex\];/.test(stackJs));
   check('starting from a template starts it',
     /_activeStackIndices=\[_idx\];\s*if\(typeof _ensureCycleStart==='function'\)_ensureCycleStart\(_idx\);/.test(stackJs));
 }
@@ -5650,6 +5662,64 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     }
   }
 
+  // ── No swallowed ReferenceErrors ──────────────────────────────────────────
+  // _renderTRTGuide referenced `id` where its parameter is `cId`. It threw on every
+  // render and a try/catch calling _logErr swallowed it, so the female dosing guard was
+  // silently absent from the whole TRT tier for as long as it took someone to notice a
+  // stray log line. A catch that logs and continues is right for a render helper — it
+  // just means a typo'd identifier can hide indefinitely, so the class is pinned here.
+  {
+    const fsx=require('fs'), pathx=require('path');
+    const files=['index.html','tab-stack.js','tab-tcalc.js','tab-blood.js','tab-today.js',
+      'tab-labs.js','tab-recon.js','tab-schedule.js','tab-supplements.js','tab-thist.js',
+      'tab-timeline.js','tab-macros.js','tab-body.js','tab-cycles.js','inj-writer.js']
+      .map(f=>pathx.join(__dirname,'..',f)).filter(f=>fsx.existsSync(f));
+    const srcMap={};
+    files.forEach(f=>{ let t=fsx.readFileSync(f,'utf8');
+      if(f.endsWith('.html')) t=(t.match(/<script>[\s\S]*?<\/script>/g)||[]).map(b=>b.slice(8,-9)).join('\n');
+      srcMap[pathx.basename(f)]=t; });
+    const ALLSRC=Object.keys(srcMap).map(k=>srcMap[k]).join('\n');
+    const isDeclared=n=>new RegExp('(?:function|var|let|const|class)\\s+'+n+'\\b').test(ALLSRC)
+      || new RegExp('function[^(]*\\([^)]*\\b'+n+'\\b[^)]*\\)').test(ALLSRC)
+      || new RegExp('\\b'+n+'\\s*(?:=>|:)').test(ALLSRC)
+      || new RegExp('catch\\s*\\(\\s*'+n+'\\b').test(ALLSRC)
+      || new RegExp('\\b'+n+'\\s*=[^=]').test(ALLSRC);
+    const KNOWN=new Set(('Math JSON Date Object Array String Number Boolean RegExp Error Set Map Promise '
+      +'console window document localStorage sessionStorage navigator location fetch setTimeout clearTimeout '
+      +'setInterval clearInterval requestAnimationFrame parseInt parseFloat isNaN isFinite AbortController '
+      +'encodeURIComponent decodeURIComponent NaN Infinity undefined true false typeof instanceof new delete '
+      +'void in of return if else for while do switch case break continue function var let const try catch '
+      +'finally throw yield await async this arguments null Intl Symbol Blob URL FormData TextEncoder '
+      +'performance crypto structuredClone RE').split(/\s+/));
+    const suspects=[];
+    Object.keys(srcMap).forEach(function(fname){
+      const t=srcMap[fname], re=/try\s*\{/g; let m;
+      while((m=re.exec(t))){
+        let i=m.index+m[0].length, d=1;
+        while(i<t.length&&d>0){const c=t[i]; if(c==='{')d++; else if(c==='}')d--; i++;}
+        const body=t.slice(m.index+m[0].length,i-1);
+        if(!/catch\s*\([\s\S]{0,40}\)\s*\{[\s\S]{0,200}_logErr/.test(t.slice(i,i+300))) continue;
+        const clean=body
+          .replace(/\/\*[\s\S]*?\*\//g,' ').replace(/(^|[^:])\/\/[^\n]*/g,'$1 ')
+          .replace(/'(?:\\.|[^'\\])*'/g,"''").replace(/"(?:\\.|[^"\\])*"/g,'""')
+          .replace(/`(?:\\.|[^`\\])*`/g,'``')
+          .replace(/([=(,:!&|?{;[+]\s*)\/(?![*\/])(?:\\.|\[(?:\\.|[^\]\\])*\]|[^\/\\\n])+\/[gimsuy]*/g,'$1RE')
+          .replace(/\.\s*[A-Za-z_$][\w$]*/g,'.')
+          .replace(/[A-Za-z_$][\w$]*\s*:/g,' ');
+        const seen={};
+        let idm; const idre=/\b([A-Za-z_$][\w$]*)\b/g;
+        while((idm=idre.exec(clean))){
+          const n=idm[1];
+          if(KNOWN.has(n)||seen[n]) continue; seen[n]=1;
+          if(isDeclared(n)) continue;
+          suspects.push(fname+':~'+t.slice(0,m.index).split('\n').length+' uses `'+n+'`');
+        }
+      }
+    });
+    check('no _logErr-guarded block references an undeclared identifier',
+      suspects.length===0, suspects.slice(0,5).join(' | '));
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
@@ -6804,7 +6874,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 2: TRT only (T2, trt.enabled=true, no pep goals)
   G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;
   var f2=G._wizFlow();
-  check('flow TRT-only: 5 steps', f2.length===5, 'got '+f2.length);
+  check('flow TRT-only: 6 steps', f2.length===6, 'got '+f2.length);
   check('flow TRT-only: has trt', f2.includes('trt'));
   check('flow TRT-only: no peptides step', !f2.includes('peptides'));
   check('flow TRT-only: no validate', !f2.includes('validate'));
@@ -6812,7 +6882,7 @@ console.log('\n── Three-tier wizard — HGH & tier-aware steps ────�
   // Flow 3: Peps + TRT (T2, trt.enabled, pep goal)
   G._userTier=2;G.initWizard();G._wiz.trt.enabled=true;G._wiz.goals=['muscle'];
   var f3=G._wizFlow();
-  check('flow peps+TRT: 9 steps', f3.length===9, 'got '+f3.length);
+  check('flow peps+TRT: 10 steps', f3.length===10, 'got '+f3.length);
   check('flow peps+TRT: has peptides', f3.includes('peptides'));
   check('flow peps+TRT: has trt', f3.includes('trt'));
   check('flow peps+TRT: has validate', f3.includes('validate'));
