@@ -59,6 +59,10 @@ function _wizFlow(){
   var steps=['cycle','goals'];
   if(hasPeps){steps.push('peptides');steps.push('check');steps.push('configure');}
   if(hasTRT)steps.push('trt');
+  // After the testosterone is set, ask whether anything else goes on top. Without this
+  // the only way to reach the Enhanced tier was to have ticked it back on the goals
+  // step, before the user knew what the run would look like.
+  if(hasTRT&&!hasEnhanced)steps.push('moreadv');
   // Testosterone base is chosen first — every enhanced cycle runs on one, and which
   // ester it is changes injection frequency for the whole cycle. Then 'advise' (guided
   // recommendation), then the raw Enhanced compound list.
@@ -78,8 +82,8 @@ function _wizFlow(){
   steps.push('review');
   return steps;
 }
-var _WIZ_STEP_LABELS={base:'TEST BASE',advise:'GUIDANCE',nutrition:'MACROS'};
-var _WIZ_RENDERERS={cycle:function(b,f){wizStep1(b,f);},goals:wizStepGoals,base:function(b,f){wizStepBase(b,f);},peptides:wizStepPeptides,check:wizStepCheck,configure:wizStepConfig,trt:wizStepTRTHandoff,advise:wizStepAdvise,enhanced:wizStepEnhanced,validate:wizStepValidate,nutrition:wizStepNutrition,review:wizStepReview};
+var _WIZ_STEP_LABELS={base:'TEST BASE',advise:'GUIDANCE',nutrition:'MACROS',moreadv:'ANYTHING ELSE'};
+var _WIZ_RENDERERS={cycle:function(b,f){wizStep1(b,f);},goals:wizStepGoals,base:function(b,f){wizStepBase(b,f);},peptides:wizStepPeptides,check:wizStepCheck,configure:wizStepConfig,trt:wizStepTRTHandoff,moreadv:wizStepMoreAdvanced,advise:wizStepAdvise,enhanced:wizStepEnhanced,validate:wizStepValidate,nutrition:wizStepNutrition,review:wizStepReview};
 function wizRender(){
   var flow=_wizFlow();
   var idx=Math.min(_wiz.step,flow.length-1);
@@ -135,7 +139,9 @@ var _WIZ_LOADING_HTML='<div class="today-spinner"><div class="today-spinner-dot"
 async function wizSave(){
   var btn=document.querySelector('.wiz-footer .btn.btn-primary');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
-  var proto={name:_wiz.stackName,cycle_length:_wiz.cycle_length,peptides:_wiz.peptides,trt:(_wiz.trt&&_wiz.trt.enabled)?_wiz.trt:{},enhanced:((_wiz.goals||[]).includes('enhanced')&&_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length)?_wiz.enhanced:{}};
+  // The target-free-T step asks for a first injection; that is the protocol's start.
+  if(_wiz.trtPlan&&_wiz.trtPlan.startDate&&!_wiz.cycle_start)_wiz.cycle_start=_wiz.trtPlan.startDate;
+  var proto={name:_wiz.stackName,cycle_length:_wiz.cycle_length,cycle_start:_wiz.cycle_start||undefined,peptides:_wiz.peptides,trt:(_wiz.trt&&_wiz.trt.enabled)?_wiz.trt:{},enhanced:((_wiz.goals||[]).includes('enhanced')&&_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length)?_wiz.enhanced:{}};
   // Preserve the stable id when editing (proto is rebuilt from the wizard state);
   // assign one for a brand-new stack. Keeps this stack's injections linked.
   if(_wiz.stackIndex>=0&&_wiz.stackIndex<_userStacks.length&&_userStacks[_wiz.stackIndex]&&_userStacks[_wiz.stackIndex].id)proto.id=_userStacks[_wiz.stackIndex].id;
@@ -145,7 +151,17 @@ async function wizSave(){
   } else {
     _userStacks.push(proto);
     _wiz.stackIndex=_userStacks.length-1; // prevent double-push on retry
-    if(_userStacks.length===1){_activeStackIndices=[0];if(typeof _ensureCycleStart==='function')_ensureCycleStart(0);}
+    // ⚠️ EVERY NEW PROTOCOL NEEDS A START DATE, NOT JUST THE FIRST ONE.
+    // generateAndPushInjections below is gated on _savedStack.cycle_start, and this only
+    // set one when the protocol was the user's FIRST. With any existing protocol the new
+    // one saved with no start date, generated no injections, and rendered no curve —
+    // "the wizard still never copy the injections to the saved protocol".
+    // _nextFreeStartDate puts it the day after the current protocol ends.
+    if(typeof _ensureCycleStart==='function')_ensureCycleStart(_wiz.stackIndex);
+    // Activate it only when nothing else is running. Switching a live protocol off
+    // because a new one was drafted is not something the user asked for — and the new
+    // one usually starts after the current one ends, so it would leave a gap.
+    if(!(_activeStackIndices&&_activeStackIndices.length))_activeStackIndices=[_wiz.stackIndex];
   }
   _userStacks=_userStacks.slice(0,4);
   // ── THE WIZARD'S TESTOSTERONE STEP WRITES INTO THE PROTOCOL ───────────────
@@ -3159,7 +3175,46 @@ async function wizTrtGenerate(){
   var st=_trtSolveSt(p.compId,'wiz');
   st.target=String(p.targetPmol||'');
   await trtSolveRun('wiz',p.compId);
+  // ⚠️ GENERATE AND APPLY ARE ONE ACTION HERE.
+  // "The 'generate and next' need to do this in one step." In the wizard nothing is
+  // saved until the end, so applying is not a commitment — and leaving it unapplied is
+  // how a protocol reached the review step carrying no dose at all. The separate Apply
+  // button stays in the protocol editor, where a plan REPLACES a schedule already
+  // running and the choice is real.
+  if(st.result&&st.result.best&&typeof trtSolveApply==='function'){
+    try{ trtSolveApply('wiz',p.compId,'best'); }
+    catch(e){ if(typeof _logErr==='function')_logErr('wizTrtAutoApply',e); }
+  }
   wizRender();
+}
+// Does anything go on top of the testosterone? Asked after the dose is set, when the
+// user can actually see what they are adding to.
+function wizSetMoreAdvanced(yes){
+  if(!_wiz.goals)_wiz.goals=[];
+  var i=_wiz.goals.indexOf('enhanced');
+  if(yes){ if(i<0)_wiz.goals.push('enhanced');
+           if(!_wiz.enhanced)_wiz.enhanced={enabled:true,compounds:[]};
+           _wiz.enhanced.enabled=true; }
+  else if(i>=0){ _wiz.goals.splice(i,1); }
+  _wiz.moreAdvAnswered=true;
+  wizNext();
+}
+function wizStepMoreAdvanced(body,footer){
+  var b='background:var(--surface2);border:1px solid var(--border);border-radius:10px;'
+    +'padding:14px;font-size:14px;font-weight:700;color:var(--text);cursor:pointer;'
+    +'font-family:inherit;width:100%;text-align:left';
+  body.innerHTML='<div style="font-size:12px;color:var(--muted2);margin-bottom:16px;line-height:1.55">'
+    +'Your testosterone is set. Do you want to add anything on top of it — an oral, a '
+    +'second injectable, or a GH-axis compound?</div>'
+    +'<div style="display:flex;flex-direction:column;gap:10px">'
+    +'<button onclick="wizSetMoreAdvanced(true)" style="'+b+'">Yes, add compounds'
+      +'<div style="font-size:11.5px;font-weight:400;color:var(--muted2);margin-top:3px;line-height:1.5">'
+      +'Adds a guidance step and the compound list.</div></button>'
+    +'<button onclick="wizSetMoreAdvanced(false)" style="'+b+'">No, testosterone only'
+      +'<div style="font-size:11.5px;font-weight:400;color:var(--muted2);margin-top:3px;line-height:1.5">'
+      +'You can still add compounds later from the protocol.</div></button>'
+    +'</div>';
+  footer.innerHTML='';
 }
 function wizStepTRTHandoff(body,footer){
   if(_wizTrtClassic) return wizStepTRT(body,footer);
