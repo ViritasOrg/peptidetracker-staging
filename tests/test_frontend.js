@@ -14985,26 +14985,62 @@ if (typeof G._labFlag === 'function' && typeof G._labSetCatalogue === 'function'
 // from above and never crosses. Every day passed, xDays was always totalDays.
 console.log('\n── whole zoom: settled-tail trim + pan ──');
 if (typeof G._tcSettleDay === 'function') {
-  // A curve that decays toward 100 and asymptotes just above it — the shape that
-  // defeated the old test. Rises to 1000 by day 50, back near baseline by ~250.
-  var _stV = function (t) { return t < 50 ? 100 + 18 * t : 100 + 900 * Math.pow(0.5, (t - 50) / 30); };
-  check('settle: an asymptotic tail is trimmed (old >= test never fired)',
-    G._tcSettleDay(_stV, 100, 600, 0) < 600, 'got ' + G._tcSettleDay(_stV, 100, 600, 0));
-  check('settle: the trim lands after the curve comes down',
-    G._tcSettleDay(_stV, 100, 600, 0) > 50);
-  check('settle: within tolerance of the anchor counts as settled',
-    _stV(G._tcSettleDay(_stV, 100, 600, 0)) < 100 * 1.2);
+  // Rebuilt from the reported dump: totalDays 472 (washout sized from nebido's
+  // 75-day high-end half-life), logDays 148, weekly means 1485/1107/599/441/380
+  // from week 12, then an asymptotic approach to the 217 anchor.
+  var _stTotal = 472, _stLog = 148, _stAnchor = 217, _stKw = Math.pow(0.5, 7 / 75);
+  var _stWk = [[12,1485],[13,1107],[14,599],[15,441],[16,380]];
+  var _stArr = new Float64Array(_stTotal + 1);
+  for (var _sti = 0; _sti <= _stTotal; _sti++) {
+    if (_sti <= 64) { _stArr[_sti] = 217 + (1384-217) * Math.min(1, _sti/64); continue; }
+    var _stw = (_sti - 64) / 7;
+    if (_stw <= 12) { _stArr[_sti] = 1384 + (1485-1384) * (_stw/12); continue; }
+    if (_stw < 16) {
+      for (var _stk = 0; _stk < _stWk.length-1; _stk++) {
+        if (_stw >= _stWk[_stk][0] && _stw < _stWk[_stk+1][0]) {
+          var _stf = (_stw - _stWk[_stk][0]) / (_stWk[_stk+1][0] - _stWk[_stk][0]);
+          _stArr[_sti] = _stWk[_stk][1] + (_stWk[_stk+1][1] - _stWk[_stk][1]) * _stf;
+        }
+      }
+      continue;
+    }
+    _stArr[_sti] = _stAnchor + (380 - _stAnchor) * Math.pow(_stKw, _stw - 16);
+  }
+  var _stV = function (t) { return _stArr[Math.max(0, Math.min(_stTotal, Math.round(t)))]; };
+  var _stCut = G._tcSettleDay(_stV, _stTotal, _stLog);
 
-  // Never cut the plan itself, however flat it looks.
-  check('settle: floorDay is never trimmed away',
-    G._tcSettleDay(_stV, 100, 600, 500) >= 500);
-  // A curve that never rises above the anchor has no tail to trim.
-  check('settle: a flat-at-baseline curve trims nothing',
-    G._tcSettleDay(function () { return 100; }, 100, 600, 0) === 600);
-  // Degenerate inputs must not produce an empty or negative window.
-  check('settle: no baseline → no trim', G._tcSettleDay(_stV, 0, 600, 0) === 600);
-  check('settle: result always inside the series',
-    G._tcSettleDay(_stV, 100, 600, 0) <= 600 && G._tcSettleDay(_stV, 100, 600, 0) >= 1);
+  // "Anything around 1 Feb should be cut out" — 1 Feb 2027 is day 220 from 26 Jun 2026.
+  check('settle: the reported case cuts around 1 Feb (day 220)',
+    _stCut >= 200 && _stCut <= 245, 'cut at day ' + _stCut);
+  // The criterion this replaced cut at day 414 on this same curve — barely a trim.
+  check('settle: it cuts far earlier than the old 10%-above-anchor rule did',
+    _stCut < 414, 'cut at day ' + _stCut);
+  check('settle: most of the washout is off the default view',
+    (_stTotal - _stCut) > _stTotal / 2, 'hidden ' + (_stTotal - _stCut) + ' of ' + _stTotal);
+  // ...but the washout must still START on screen; the user wants to see it happen.
+  check('settle: the plan is never trimmed away', _stCut >= _stLog);
+  check('settle: some washout is still drawn past the last injection',
+    (_stCut - _stLog) > 30, 'only ' + (_stCut - _stLog) + ' d shown');
+
+  // A SHORT ester genuinely reaches the anchor — it must not be over-trimmed.
+  var _stShort = function (t) {
+    return t <= 90 ? 200 + 1300 * Math.min(1, t/60) : 200 + 1300 * Math.pow(0.5, (t-90)/4.5);
+  };
+  var _stSc = G._tcSettleDay(_stShort, 200, 90);
+  check('settle: a short ester still shows its washout', _stSc > 90 && (_stSc - 90) >= 15,
+    'cut at ' + _stSc);
+  check('settle: a short ester still gets trimmed', _stSc < 200, 'cut at ' + _stSc);
+
+  // Only flatness AFTER dosing counts — a mid-plan plateau is flat too, and
+  // scanning from 0 would cut the protocol in half.
+  check('settle: the scan starts at the last injection, not at a mid-plan plateau',
+    G._tcSettleDay(_stV, _stTotal, _stLog) >= _stLog);
+
+  // Degenerate inputs must not produce an empty or nonsense window.
+  check('settle: a curve that never moves trims nothing',
+    G._tcSettleDay(function () { return 217; }, _stTotal, _stLog) === _stTotal);
+  check('settle: totalDays 0 is returned untouched', G._tcSettleDay(_stV, 0, 0) === 0);
+  check('settle: result always inside the series', _stCut >= 1 && _stCut <= _stTotal);
 }
 
 // End-to-end through the real chart: window trimmed, tail still reachable.
