@@ -14973,3 +14973,101 @@ if (typeof G._labFlag === 'function' && typeof G._labSetCatalogue === 'function'
 
   if (_lfSaved) G._labSetCatalogue(_lfSaved);
 }
+
+// ── Whole zoom: trim the settled tail, keep it reachable by panning ──────────
+// Henrik, 2026-08-29: "The Whole zoom should still cut most of the long tail
+// here, to better use the available window size. Once close enough to latest lab
+// stop drawing more, keep the data avail so the user can scroll to see the full
+// washout."
+//
+// The old trim took the last day the curve was >= the anchor. It could never
+// fire: the model's endogenous baseline IS the anchor, so the curve approaches
+// from above and never crosses. Every day passed, xDays was always totalDays.
+console.log('\n── whole zoom: settled-tail trim + pan ──');
+if (typeof G._tcSettleDay === 'function') {
+  // A curve that decays toward 100 and asymptotes just above it — the shape that
+  // defeated the old test. Rises to 1000 by day 50, back near baseline by ~250.
+  var _stV = function (t) { return t < 50 ? 100 + 18 * t : 100 + 900 * Math.pow(0.5, (t - 50) / 30); };
+  check('settle: an asymptotic tail is trimmed (old >= test never fired)',
+    G._tcSettleDay(_stV, 100, 600, 0) < 600, 'got ' + G._tcSettleDay(_stV, 100, 600, 0));
+  check('settle: the trim lands after the curve comes down',
+    G._tcSettleDay(_stV, 100, 600, 0) > 50);
+  check('settle: within tolerance of the anchor counts as settled',
+    _stV(G._tcSettleDay(_stV, 100, 600, 0)) < 100 * 1.2);
+
+  // Never cut the plan itself, however flat it looks.
+  check('settle: floorDay is never trimmed away',
+    G._tcSettleDay(_stV, 100, 600, 500) >= 500);
+  // A curve that never rises above the anchor has no tail to trim.
+  check('settle: a flat-at-baseline curve trims nothing',
+    G._tcSettleDay(function () { return 100; }, 100, 600, 0) === 600);
+  // Degenerate inputs must not produce an empty or negative window.
+  check('settle: no baseline → no trim', G._tcSettleDay(_stV, 0, 600, 0) === 600);
+  check('settle: result always inside the series',
+    G._tcSettleDay(_stV, 100, 600, 0) <= 600 && G._tcSettleDay(_stV, 100, 600, 0) >= 1);
+}
+
+// End-to-end through the real chart: window trimmed, tail still reachable.
+if (typeof G._tcDrawManualChart === 'function') {
+  var _twGet = G.document.getElementById;
+  var _twCtx = {
+    scale:noop, beginPath:noop, arc:noop, fill:noop, stroke:noop, fillText:noop,
+    closePath:noop, save:noop, restore:noop, fillRect:noop, setLineDash:noop,
+    strokeRect:noop, translate:noop, rotate:noop, moveTo:noop, lineTo:noop,
+    clip:noop, rect:noop, clearRect:noop, quadraticCurveTo:noop, bezierCurveTo:noop,
+    measureText:function(){ return {width:0}; },
+    createLinearGradient:function(){ return {addColorStop:noop}; }
+  };
+  var _twCanvas = {
+    style:{}, classList:{add:noop,remove:noop,contains:function(){return false;}},
+    offsetWidth:350, offsetHeight:250, getContext:function(){ return _twCtx; },
+    addEventListener:noop, removeEventListener:noop,
+    getBoundingClientRect:function(){ return {left:0,top:0,width:350,height:250}; }
+  };
+  var _twSaveFT = G._tcp.measuredFT, _twSaveBw = G._tcBwEntries, _twSavePan = G._tcChartPanOffset;
+  G._tcp.measuredFT = '217';
+  G._tcBwEntries = [{date:'2026-06-26', free_t:'217', total_t:'17', shbg:'45', unit:'pmol/L'}];
+  G.document.getElementById = function(id){
+    return id === 'tc-main-chart' ? _twCanvas : _twGet(id);
+  };
+  function _twKey(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  // A long-ester course that stops: months of flat washout follow.
+  var _twLog = [], _twS0 = new Date('2026-06-27T12:00:00');
+  for (var _twi = 0; _twi < 30; _twi++) {
+    _twLog.push({compId:'nebido', doseMg:'100', date:_twKey(new Date(_twS0.getTime()+_twi*2*86400000))});
+  }
+  function _twDraw(zoom, pan){
+    G._tcChartPanOffset = pan || 0;
+    try { G._tcDrawManualChart('tc-main-chart', _twLog.slice(), zoom); } catch (e) { return null; }
+    return _twCanvas._tcPanState;
+  }
+  var _twWhole = _twDraw('whole', 0);
+  check('whole: the chart reports a pan window', !!_twWhole);
+  if (_twWhole) {
+    var _twFullEnd = _twDraw('whole', 1e6).xEnd;   // pan hard right = the true end
+    check('whole: the settled tail is trimmed from the default view',
+      _twWhole.xEnd < _twFullEnd, 'xEnd=' + _twWhole.xEnd + ' full=' + _twFullEnd);
+    check('whole: the window still starts at day 0', _twWhole.xStart === 0);
+
+    // "keep the data avail so the user can scroll to see the full washout"
+    var _twR = _twDraw('whole', 1e6);
+    check('whole: panning right reaches the very end of the washout',
+      _twR.xEnd === _twFullEnd);
+    check('whole: panning preserves the window width',
+      (_twR.xEnd - _twR.xStart) === (_twWhole.xEnd - _twWhole.xStart),
+      'panned ' + (_twR.xEnd-_twR.xStart) + ' vs ' + (_twWhole.xEnd-_twWhole.xStart));
+    check('whole: it is marked pannable when a tail is hidden', _twWhole.canPan === true);
+
+    // A flick past either end must not invert or collapse the window.
+    var _twL = _twDraw('whole', -1e6);
+    check('whole: panning hard left clamps to day 0', _twL.xStart === 0);
+    check('whole: panning hard left keeps the width',
+      (_twL.xEnd - _twL.xStart) === (_twWhole.xEnd - _twWhole.xStart));
+    var _tw3 = _twDraw('3mo', 1e6);
+    check('3mo: panning hard right does not invert the window', _tw3.xEnd > _tw3.xStart,
+      _tw3.xStart + '..' + _tw3.xEnd);
+    check('3mo: panning hard right reaches the end', _tw3.xEnd === _twFullEnd);
+  }
+  G.document.getElementById = _twGet;
+  G._tcp.measuredFT = _twSaveFT; G._tcBwEntries = _twSaveBw; G._tcChartPanOffset = _twSavePan;
+}
