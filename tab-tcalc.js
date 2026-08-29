@@ -1795,6 +1795,36 @@ function _tcSetChartZoom(z) {
 // Steady-state average reference line — shown by default, hideable via the chart
 // checkbox. Read the raw flag (getData's `|| default` would turn a stored false
 // back into true, so check the string directly). Default = shown.
+// ── Whole-view tail trim ──────────────────────────────────────────────────────
+// A plan that ends washes back toward the anchor and then sits there for months.
+// On Whole that flat run ate most of the width — the report that prompted this
+// had ~10 months of dead tail against ~4 months of signal.
+//
+// ⚠️ THE OLD TRIM COULD NEVER FIRE. It took the last day the curve was >= the
+// anchor, but the model's endogenous baseline IS the anchor: the curve
+// approaches it from above and never crosses. Every day passed the test, so
+// xDays was always totalDays and nothing was ever trimmed, for anyone.
+// "Close enough" needs a tolerance, not an equality.
+//
+// Nothing is discarded — the trim sets the WINDOW, and Whole can now be panned
+// out to totalDays, so the full washout is still there to scroll to.
+var TC_SETTLE_TOL = 0.10;   // within 10% of the last lab counts as settled. Free-T
+                            // assay precision is no better than this, so a gap
+                            // under it is not one the user could act on anyway.
+var TC_SETTLE_PAD = 0.05;   // keep a little past it, so a plateau reads as a plateau.
+
+// valueAt(t) → free T on day t. floorDay: a day the window must always reach
+// (the last injection) so trimming can never hide the plan itself.
+function _tcSettleDay(valueAt, baseline, totalDays, floorDay) {
+  if (!(baseline > 0) || !(totalDays > 0)) return totalDays;
+  var thresh = baseline * (1 + TC_SETTLE_TOL), last = -1;
+  for (var t = totalDays; t >= 0; t--) { if (valueAt(t) > thresh) { last = t; break; } }
+  if (last < 0) return totalDays;          // never rises above the anchor — trim nothing
+  var end = last + Math.round(last * TC_SETTLE_PAD);
+  if (floorDay > end) end = floorDay;
+  return Math.max(1, Math.min(totalDays, end));
+}
+
 function _tcShowAvg() {
   try { return localStorage.getItem('tc-avg-line') !== 'false'; } catch (e) { return true; }
 }
@@ -1818,7 +1848,7 @@ function _tcAttachPanListeners(canvas) {
     canvas._tcTouchStart = null;
   }
   var state = canvas._tcPanState;
-  if (!state || state.zoom === 'whole') { canvas.style.cursor = ''; canvas.style.touchAction = ''; return; }
+  if (!state || (state.zoom === 'whole' && !state.canPan)) { canvas.style.cursor = ''; canvas.style.touchAction = ''; return; }
   canvas.style.cursor = 'grab';
   canvas.style.touchAction = 'pan-y';
   var _pDX = null, _pDY = null, _pOff = null;
@@ -3734,22 +3764,40 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   // Clip x-axis to where free T last crosses back down to baseline (the interesting area)
   var xDays = totalDays;
   if (_mftNum && calFT) {
-    for (var _xi = totalDays; _xi > 0; _xi--) {
-      if (total[_xi] * (calFT_arr ? calFT_arr[_xi] : scale) >= _mftNum) { xDays = _xi; break; }
-    }
+    xDays = _tcSettleDay(function (t) {
+      return total[t] * (calFT_arr ? calFT_arr[t] : scale);
+    }, _mftNum, totalDays, logDays);
   }
 
   // Zoom window
   var _zoom = zoom3 || _tcChartZoom || 'whole';
   var nowDay = Math.round((Date.now() - firstDate.getTime()) / 86400000);
-  var panDays = _zoom !== 'whole' ? Math.round(_tcChartPanOffset || 0) : 0;
+  // Panning applies to Whole as well now: the trim decides the window, not what
+  // exists, so dragging must still reach the washout. Every clamp is totalDays
+  // rather than xDays for the same reason — otherwise a tighter trim would
+  // silently shorten how far the other zooms can be dragged.
+  // The window is built UNPANNED first (panDays 0 below), then slid by an offset
+  // clamped to what the data actually holds. Applying a raw offset inside these
+  // expressions let a fast flick push xStart past xEnd and invert the window —
+  // 3mo dragged hard right produced xStart 10017 against xEnd 237.
+  var panDays = 0;
   var xStart = 0, xEnd = xDays;
-  if (_zoom === 'today')       { xStart = Math.max(0, nowDay - 2 + panDays); xEnd = Math.min(xDays, nowDay + 2 + panDays); }
-  else if (_zoom === 'week')   { xStart = Math.max(0, nowDay - 3 + panDays); xEnd = Math.min(xDays, nowDay + 4 + panDays); }
-  else if (_zoom === 'month')  { xStart = Math.max(0, nowDay - 15 + panDays); xEnd = Math.min(xDays, nowDay + 15 + panDays); }
+  if (_zoom === 'today')       { xStart = Math.max(0, nowDay - 2 + panDays); xEnd = Math.min(totalDays, nowDay + 2 + panDays); }
+  else if (_zoom === 'week')   { xStart = Math.max(0, nowDay - 3 + panDays); xEnd = Math.min(totalDays, nowDay + 4 + panDays); }
+  else if (_zoom === 'month')  { xStart = Math.max(0, nowDay - 15 + panDays); xEnd = Math.min(totalDays, nowDay + 15 + panDays); }
   // 3 months: the span a titration decision actually plays out over — long enough to see
   // accumulation trend, short enough to still resolve individual injections.
-  else if (_zoom === '3mo')    { xStart = Math.max(0, nowDay - 45 + panDays); xEnd = Math.min(xDays, nowDay + 45 + panDays); }
+  else if (_zoom === '3mo')    { xStart = Math.max(0, nowDay - 45 + panDays); xEnd = Math.min(totalDays, nowDay + 45 + panDays); }
+  else                         { xStart = 0; xEnd = Math.min(totalDays, xDays); }
+
+  // Slide it. Whole pans too now: the trim chose the window, not what exists, so
+  // the hidden washout must stay reachable by dragging. The clamped value is
+  // written back so a flick past the end does not bank an offset the user then
+  // has to drag all the way back.
+  panDays = Math.max(-xStart, Math.min(Math.round(_tcChartPanOffset || 0), totalDays - xEnd));
+  if (!(panDays === panDays)) panDays = 0;               // NaN guard
+  _tcChartPanOffset = panDays;
+  xStart += panDays; xEnd += panDays;
   // Whole view: make sure "today" is inside the window so its marker/level show
   // even when the curve has already washed back to baseline before today.
   if (_zoom === 'whole' && nowDay > xEnd && nowDay <= totalDays) xEnd = nowDay;
@@ -4069,7 +4117,9 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
     var lbl = labelDate.getDate() + ' ' + _MONTHS[labelDate.getMonth()];
     ctx.fillText(lbl, lx, PAD.top + cH + 18);
   }
-  canvas._tcPanState = {xStart: xStart, xEnd: xEnd, cW: cW, zoom: _zoom};
+  // canPan: Whole is draggable only when the trim actually hid something.
+  canvas._tcPanState = {xStart: xStart, xEnd: xEnd, cW: cW, zoom: _zoom,
+                        canPan: (xEnd < totalDays || xStart > 0)};
 }
 
 // ── OPTIMIZER ─────────────────────────────────────────────────────────────────
