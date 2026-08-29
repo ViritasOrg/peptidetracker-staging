@@ -2980,8 +2980,12 @@ function _renderTRTGuide(cId,weeklyDoseMg){
   var femHtml='';
   try{
     if(typeof _femaleGuardHtml==='function'){
-      var _fc=(typeof TRT_CAT!=='undefined'&&TRT_CAT)?TRT_CAT.find(function(x){return x&&x.id===id;}):null;
-      femHtml=_femaleGuardHtml(_fc||{id:id,unit:'mg/week'},weeklyDoseMg,'mg/week');
+      // ⚠️ cId, NOT id. The parameter is cId; `id` is undefined here, so this threw on
+      // every render and the catch below swallowed it — leaving the female dosing guard
+      // silently absent from the whole TRT tier, which is exactly what the note above
+      // says must not happen. Found 2026-08-29 via a stray [pep:trtFemaleGuard] log.
+      var _fc=(typeof TRT_CAT!=='undefined'&&TRT_CAT)?TRT_CAT.find(function(x){return x&&x.id===cId;}):null;
+      femHtml=_femaleGuardHtml(_fc||{id:cId,unit:'mg/week'},weeklyDoseMg,'mg/week');
     }
   }catch(e){if(typeof _logErr==='function')_logErr('trtFemaleGuard',e);}
   return'<div class="cfg-row" style="display:block;margin-top:10px">'
@@ -3118,9 +3122,40 @@ function _wizTrtPlanComplete(){
   return !!(p.compId && parseDec(p.doseMg)>0 && parseDec(p.cadenceDays)>0 && p.startDate);
 }
 
+// ⚠️ THE SOLVER NEEDS A COMPOUND, NOT A PLAN.
+// Reported: "The free T generator fails with unknown ester?" — "Compound not found."
+// with an ester plainly selected.
+//
+// In target mode the ester lives only in _wiz.trtPlan.compId. It does not become an
+// entry in _wiz.trt.compounds until save, when _wizFoldTrtPlanIntoProto runs. But
+// trtSolveRun resolves the compound through _trtComp, which reads that array — so it
+// had nothing to attach to and refused. trtSolveApply reads the same array, so applying
+// would have failed identically a moment later.
+//
+// Materialise it from the plan before solving. Dose stays EMPTY: a testosterone never
+// arrives with an invented dose, and Apply is what writes the ramp.
+function _wizEnsureTrtCompound(p){
+  if(!p||!p.compId)return null;
+  if(typeof _wiz==='undefined'||!_wiz)return null;
+  if(!_wiz.trt)_wiz.trt={enabled:true,compounds:[]};
+  if(!_wiz.trt.compounds)_wiz.trt.compounds=[];
+  _wiz.trt.enabled=true;                 // or wizSave drops the block entirely
+  var c=_wiz.trt.compounds.find(function(x){return x&&x.id===p.compId;});
+  if(!c){
+    var meta=(typeof TRT_CAT!=='undefined'&&TRT_CAT)
+      ? TRT_CAT.find(function(t){return t.id===p.compId;}) : null;
+    c={id:p.compId, name:(meta&&meta.name)||p.compId, dose:'', unit:'mg',
+       cadence:'interval', freqVal:1, freqUnit:'days',
+       dot:(meta&&meta.dot)||'#b84a4a', active:true};
+    _wiz.trt.compounds.push(c);
+  }
+  if(p.startDate)c.start_date=p.startDate;
+  return c;
+}
 async function wizTrtGenerate(){
   var p=_wizEnsureTrtPlan();
   if(!p.compId)return;
+  _wizEnsureTrtCompound(p);
   var st=_trtSolveSt(p.compId,'wiz');
   st.target=String(p.targetPmol||'');
   await trtSolveRun('wiz',p.compId);

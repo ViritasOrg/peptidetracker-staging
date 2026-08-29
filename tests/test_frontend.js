@@ -5602,6 +5602,54 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       /if\(hideRun\)h=h\.replace\(/.test(stk));
   }
 
+  // ── The wizard solve needs a compound, not just a plan ────────────────────
+  // Reported: "The free T generator fails with unknown ester?" — "Compound not found."
+  // with an ester plainly selected. In target mode the ester lives only in
+  // _wiz.trtPlan.compId and does not become an entry in _wiz.trt.compounds until save,
+  // but trtSolveRun (and trtSolveApply) resolve through that array.
+  {
+    const ev=(js)=>vm.runInContext(js,sandbox);
+    const svWiz=ev('typeof _wiz!=="undefined"?_wiz:null');
+    ev('_wiz={step:0,goals:["trt"],trt:{enabled:false,compounds:[]},enhanced:{},cycle_length:12};');
+    const p=G._wizEnsureTrtPlan();
+    p.mode='target'; p.compId='enanthate'; p.targetPmol='1500'; p.startDate='2026-08-29';
+    check('generating materialises the compound the solver resolves',
+      (function(){ G._wizEnsureTrtCompound(p); return ev('_wiz.trt.compounds.length')===1; })(),
+      String(ev('_wiz.trt.compounds.length')));
+    check('  …and it is the ester that was chosen',
+      ev('_wiz.trt.compounds[0].id')==='enanthate');
+    // ⚠️ Still no invented dose — Apply is what writes the ramp.
+    check('  …carrying no dose of its own', ev('_wiz.trt.compounds[0].dose')==='',
+      JSON.stringify(ev('_wiz.trt.compounds[0].dose')));
+    check('  …with the TRT block enabled so wizSave keeps it',
+      ev('_wiz.trt.enabled')===true);
+    check('  …and the first-injection date carried across',
+      ev('_wiz.trt.compounds[0].start_date')==='2026-08-29');
+    check('  …calling it twice does not duplicate the compound',
+      (function(){ G._wizEnsureTrtCompound(p); return ev('_wiz.trt.compounds.length')===1; })());
+    sandbox.__w=svWiz; if(svWiz) ev('_wiz=__w;');
+  }
+
+  // ── The female guard reaches the TRT tier ─────────────────────────────────
+  // _renderTRTGuide takes cId, but its female-guard block referenced `id` — undefined,
+  // so it threw on every render and the try/catch swallowed it. The guard was therefore
+  // silently absent from the whole TRT tier, which is where topical and test_e live and
+  // exactly what that block's own comment says must not happen.
+  {
+    const stk=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
+    const m=stk.match(/function _renderTRTGuide\(cId[\s\S]*?\n\}/);
+    check('the TRT guide resolves the female table on cId, not an undefined id',
+      !!m && /x\.id===cId/.test(m[0]) && !/x\.id===id;/.test(m[0]));
+    check('  …and passes cId to the guard itself',
+      !!m && /_femaleGuardHtml\(_fc\|\|\{id:cId,/.test(m[0]));
+    // It must actually produce something rather than throw into the catch.
+    if(typeof G._renderTRTGuide==='function'){
+      let threw=false, out='';
+      try{ out=G._renderTRTGuide('enanthate',150)||''; }catch(e){ threw=true; }
+      check('  …and the guide renders without throwing', !threw && out.length>0);
+    }
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
