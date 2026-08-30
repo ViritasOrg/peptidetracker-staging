@@ -13,12 +13,13 @@
 //     viewer that did the same would be lying about the past, so this tab holds
 //     its own cache over its own, much wider date span and keeps everything,
 //     labelling each lane with the protocol that owns it.
-//  2. It does not log injections. Tapping a dose mark opens a read-only detail
-//     sheet — dose, protocol, whether it was taken — and Today remains the only
-//     place an injection is ticked off. What logging the tab does have goes
-//     through the existing flows rather than re-implementing them: a supplement
-//     ticks through toggleSupplementDose, and "+" hands off to the past-injection
-//     sheet with the compound and date already filled in.
+//  2. IT WRITES NOTHING. Not a dose, not a supplement, not a new row. Tapping a
+//     mark opens a read-only detail sheet and that is the whole of its
+//     interaction model; Today is where anything gets ticked off. The per-dose
+//     tick, the supplement slot buttons and the "+" that opened the
+//     past-injection sheet were all removed on request (2026-08-30). Keep it
+//     that way: this is a history view, and at four pixels a day a mis-tap here
+//     writes a false claim about what went into your body.
 
 // Plain-language "What this means" line for the cycle progress bar — derived only
 // from the cycle's own position (weeks in / left, before-start / complete). No
@@ -406,18 +407,6 @@ function _tlTrack(L,from,n,expanded){
   return h+'</div></div>';
 }
 
-// The "+" entry point, aligned with the current day (spec §4.2). It sits in its
-// own row under the track rather than on it: aligned to today INSIDE the track it
-// covered the very dose mark it stands next to, and that mark is the tap target
-// for ticking the dose off. Injections only — a supplement is ticked per slot
-// from its own sheet.
-function _tlAddRow(L,from,n){
-  if(L.tier==='supplement')return '';
-  var B=_tlBleed(n),ti=_tlDiff(NOW,from);
-  if(ti<-B||ti>=n+B)return '';
-  return '<div class="tl-addrow"><div class="tl-strip"><div class="tl-plus" style="left:'+_tlX(ti+0.5,n)+'%" onclick="event.stopPropagation();_tlAddDose(\''+_tlEsc(L.key)+'\')" title="Log a dose">+</div></div></div>';
-}
-
 // Per-week totals for an expanded lane (spec §4.2, "Wk 4: 750mg"). Weeks are
 // counted from the owning protocol's start where there is one, so the number
 // matches what every other tab calls week 4 — not an arbitrary window offset.
@@ -470,7 +459,7 @@ function _tlLaneHtml(L,from,n){
       '<span class="tl-caret">'+(expanded?'▾':'▸')+'</span>'+
     '</div>'+
     _tlTrack(L,from,n,expanded)+
-    (expanded?(_tlAddRow(L,from,n)+'<div class="tl-lane-foot">'+_tlWeekSummary(L,_tlViewFrom(),n)+(owners?'<div class="tl-ownrow">'+owners+'</div>':'')+'</div>'):'')+
+    (expanded?('<div class="tl-lane-foot">'+_tlWeekSummary(L,_tlViewFrom(),n)+(owners?'<div class="tl-ownrow">'+owners+'</div>':'')+'</div>'):'')+
   '</div>';
 }
 
@@ -706,18 +695,21 @@ function _tlOpenDose(markKey){
     '<button class="tl-sheet-x" onclick="_tlCloseSheet()">×</button></div>';
 
   if(L.tier==='supplement'){
+    // ⚠️ NO TICK BOX HERE EITHER — the slot buttons that used to sit below these
+    // rows were removed with the injection ones (2026-08-30). A supplement is
+    // ticked off on Today. The Status row is what the buttons used to convey by
+    // reading "Undo AM" rather than "Mark AM as taken"; without it, removing them
+    // would have taken the state away along with the control.
     var slots=day.slots||['AM'];
     h+='<div class="tl-sheet-rows">'+(day.doseText?('<div class="tl-row"><span>Dose</span><b>'+_tlEsc(day.doseText)+'</b></div>'):'')+
-      '<div class="tl-row"><span>Type</span><b>Supplement</b></div></div>';
-    if(isFuture){
-      h+='<div class="tl-sheet-note">Not due yet — you can tick this off on the day.</div>';
-    }else{
-      h+=slots.map(function(sl){
-        var taken=(typeof _suppIsTaken==='function')&&_suppIsTaken(L.compId,m.dk,sl);
-        return '<button class="tl-cta'+(taken?' is-off':'')+'" onclick="_tlToggleSupp(\''+_tlEsc(L.compId)+'\',\''+_tlEsc(m.dk)+'\',\''+_tlEsc(sl)+'\')">'+
-          (taken?'Undo '+sl:'Mark '+sl+' as taken')+'</button>';
-      }).join('');
-    }
+      '<div class="tl-row"><span>Type</span><b>Supplement</b></div>'+
+      (slots.length>1?('<div class="tl-row"><span>Slots</span><b>'+_tlEsc(slots.join(' · '))+'</b></div>'):'')+
+      '<div class="tl-row"><span>Status</span><b>'+(day.logged>=day.n?'Taken':(day.logged?day.logged+' of '+day.n+' taken':'Not taken'))+'</b></div></div>';
+    h+='<div class="tl-sheet-note">'+
+       (isFuture ? 'Scheduled. Tick it off on the day, from Today.'
+                 : (day.logged>=day.n ? 'Recorded as taken.'
+                    : 'Today is where supplements are ticked off.'))+
+       '</div>';
     _tlSheet(h);
     return;
   }
@@ -743,30 +735,4 @@ function _tlOpenDose(markKey){
                                 : 'Not recorded as taken. Today is where doses are ticked off.')))+
      '</div>';
   _tlSheet(h);
-}
-
-function _tlToggleSupp(suppId,dk,slot){
-  if(typeof toggleSupplementDose==='function')toggleSupplementDose(suppId,dk,slot);
-  _tlCloseSheet();
-  buildTimeline();
-}
-
-// "+" → the existing past-injection sheet, with the lane's compound, tier and
-// today's date already filled in. Nothing about logging is re-implemented here.
-function _tlAddDose(laneKey){
-  var from=_tlAnchorDate();
-  var L=_tlFindLane(laneKey,from,_tlWin);
-  if(!L||typeof openPastInjection!=='function')return;
-  var tier=(L.tier==='peptide'||L.tier==='enhanced')?L.tier:'trt';
-  openPastInjection(tier);
-  if(typeof _piDraft!=='undefined'&&_piDraft){
-    // Only pre-select a compound the sheet's own catalogue actually offers —
-    // T-Calc canonicalises some ids on write, so a lane id is not guaranteed to
-    // be a catalogue id.
-    if(typeof _piCatEntry==='function'&&_piCatEntry(tier,L.compId))_piDraft.compId=L.compId;
-    _piDraft.date=dateKey(NOW);
-    var dk=dateKey(NOW),day=L.days[dk]||L.days[Object.keys(L.days).sort().pop()];
-    if(day&&day.dose!==null){_piDraft.dose=_tlFmtNum(day.dose);if(day.unit)_piDraft.unit=_tlUnit(day.unit);}
-    if(typeof _piRerender==='function')_piRerender();
-  }
 }

@@ -11414,11 +11414,13 @@ if (typeof G._blBuildLines === 'function') {
     var _openTr = G._tlTrack(_byKey['trt|test_e'], _tlFrom, _tlN, true);
     check('timeline: the today rule is drawn on every lane',
       _closed.indexOf('tl-grid-today') > -1);
-    check('timeline: "+" sits beside the today mark, never on top of it',
+    // ⚠️ THE TAB WRITES NOTHING. The "+" that opened the past-injection sheet is
+    // gone (2026-08-30), along with the per-dose tick and the supplement slot
+    // buttons before it. An expanded lane offers no control at all.
+    check('timeline: an expanded lane offers no "+" — the tab writes nothing',
+      typeof G._tlAddRow === 'undefined' && typeof G._tlAddDose === 'undefined' &&
       _closed.indexOf('tl-plus') === -1 && _openTr.indexOf('tl-plus') === -1 &&
-      G._tlAddRow(_byKey['trt|test_e'], _tlFrom, _tlN).indexOf('tl-plus') > -1);
-    check('  …and a supplement lane gets no injection "+"',
-      G._tlAddRow({tier:'supplement'}, _tlFrom, _tlN) === '');
+      _tlSrc.indexOf('tl-plus') === -1 && _tlSrc.indexOf('tl-addrow') === -1);
     check('timeline: dose marks are tappable',
       _closed.indexOf('_tlOpenDose(') > -1);
     check('timeline: supplements are dotted lanes in their own group',
@@ -11528,8 +11530,14 @@ if (typeof G._blBuildLines === 'function') {
         G._tlState === 'idle' && G._tlSpan === null);
       G._tlRows = _niRows; G._tlState = _niState; G._tlSpan = _niSpan; G._currentTab = _niTab;
     }
-    check('timeline: what logging it has reuses the existing flows',
-      _tlJs3.indexOf('toggleSupplementDose(') > -1 && _tlJs3.indexOf('openPastInjection(') > -1);
+    // The one invariant that matters most here: no path in this file writes to
+    // the record. Not a dose, not a supplement, not a new row.
+    check('timeline: no code path in the tab writes to the record',
+      !/\btoggleInjection\s*\(/.test(_tlJs3) && !/\btoggleSupplementDose\s*\(/.test(_tlJs3) &&
+      !/\bopenPastInjection\s*\(/.test(_tlJs3) && _tlJs3.indexOf('_tlToggleSupp') === -1 &&
+      !/method\s*:\s*'(POST|PUT|DELETE)'/.test(_tlJs3));
+    check('  …and no button styles are left over from the controls that went',
+      !/\.tl-cta|\.tl-plus|\.tl-addrow/.test(fs.readFileSync(path.join(__dirname,'../css/main.css'),'utf8')));
     // ⚠️ An injection is ticked off on Today and NOWHERE else. The dose sheet used
     // to carry per-dose "Mark as taken" / "Mark as not taken" buttons; Henrik had
     // them removed (2026-08-30) because a mis-tap on a history view showing months
