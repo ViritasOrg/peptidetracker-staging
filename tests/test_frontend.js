@@ -11340,6 +11340,62 @@ if (typeof G._blBuildLines === 'function') {
       _lanes[0].group === 'anabolics' && _lanes[_lanes.length-1].group === 'peptides');
     check('timeline: continuous TRT is pinned above the enhanced compounds',
       _lanes[0].tier === 'trt');
+    // ── Lane colour ─────────────────────────────────────────────────────────
+    // Two rules, both reported 2026-08-30: testosterone is always red, and no
+    // lane may change colour because the window moved.
+    if (typeof G._tlCompoundColor === 'function') {
+      var _clCat = G._COMPOUND_CATALOG, _clRows = G._tlRows;
+      G._COMPOUND_CATALOG = [
+        { id:'neb_x',  name:'Nebido (Testosterone Undecanoate)', isTestosterone:true, dot:'#ffb03c' },
+        { id:'mast_e', name:'Masteron Enanthate', dot:'#c084fc' },
+        { id:'hgh',    name:'HGH (Somatropin)',   dot:'#3cffa0' },
+      ];
+      G._tlColorCache = {};
+      check('timeline: a TRT-tier dose is red',
+        G._tlCompoundColor('trt','enanthate','Testosterone Enanthate') === '#e05050');
+      // The case from the screenshot: Nebido sat in the ENHANCED tier carrying an
+      // amber dot, so it drew amber next to a red Test Ena.
+      check('  …and so is testosterone the catalogue flags, whatever tier it sits in',
+        G._tlCompoundColor('enhanced','neb_x','Nebido (Testosterone Undecanoate)') === '#e05050');
+      G._tlColorCache = {};
+      var _clSaveCat = G._COMPOUND_CATALOG; G._COMPOUND_CATALOG = [];
+      check('  …and the name carries it when the catalogue has not loaded',
+        G._tlCompoundColor('enhanced','zzz','Testosterone Cypionate') === '#e05050' &&
+        G._tlCompoundColor('enhanced','zzz2','Nebido') === '#e05050');
+      G._COMPOUND_CATALOG = _clSaveCat; G._tlColorCache = {};
+      // ⚠️ NOT keyed on a bare ester. "Masteron Enanthate" and "Nandrolone
+      // Decanoate" are not testosterone and must not be painted as it.
+      check('  …but an ester on another molecule is NOT testosterone',
+        G._tlCompoundColor('enhanced','mast_e','Masteron Enanthate') === '#c084fc' &&
+        G._tlCompoundColor('enhanced','nand','Nandrolone Decanoate') !== '#e05050');
+
+      // The regression that matters: rows for one compound do not all carry the
+      // same dot, and the lane used to take whichever landed in the window first.
+      G._tlColorCache = {};
+      var _clD = function(n){ return G.dateKey(G._tlAdd(_tlNow, n)); };
+      G._tlRows = [
+        { id:'p1', date:_clD(-20), cycle_id:'stk1', compound_id:'mast_e', compound_name:'Masteron Enanthate', tier:'enhanced', dose:'100', unit:'mg', dot:'#c084fc', logged:true },
+        { id:'p2', date:_clD(20),  cycle_id:'stk1', compound_id:'mast_e', compound_name:'Masteron Enanthate', tier:'enhanced', dose:'100', unit:'mg', dot:'#3b9eff', logged:false },
+        { id:'n1', date:_clD(-20), cycle_id:'stk1', compound_id:'neb_x',  compound_name:'Nebido (Testosterone Undecanoate)', tier:'enhanced', dose:'1000', unit:'mg', dot:'#ffb03c', logged:true },
+        { id:'n2', date:_clD(20),  cycle_id:'stk1', compound_id:'neb_x',  compound_name:'Nebido (Testosterone Undecanoate)', tier:'enhanced', dose:'1000', unit:'mg', dot:'#3b9eff', logged:false },
+      ];
+      var _clPast = G._tlBuildLanes(G._tlAdd(_tlNow,-28), G._tlAdd(_tlNow,-1));
+      var _clFut  = G._tlBuildLanes(G._tlAdd(_tlNow,1),   G._tlAdd(_tlNow,28));
+      var _clPick = function(lanes,id){ var r=null; lanes.forEach(function(L){ if(L.compId===id)r=L; }); return r; };
+      check('timeline: a lane keeps its colour when the window moves',
+        !!_clPick(_clPast,'mast_e') && !!_clPick(_clFut,'mast_e') &&
+        _clPick(_clPast,'mast_e').color === _clPick(_clFut,'mast_e').color,
+        'past ' + (_clPick(_clPast,'mast_e')||{}).color + ' vs future ' + (_clPick(_clFut,'mast_e')||{}).color);
+      check('  …even when its rows disagree about their dot',
+        G._tlRows[0].dot !== G._tlRows[1].dot);
+      check('  …and testosterone stays red in both windows',
+        _clPick(_clPast,'neb_x').color === '#e05050' && _clPick(_clFut,'neb_x').color === '#e05050');
+      check('  …because the colour is resolved from the compound, not the visible rows',
+        _tlSrc.indexOf('_tlCompoundColor(tier,e.compound_id,e.compound_name)') > -1 &&
+        !/color:\(tier==='trt'/.test(_tlSrc));
+      G._COMPOUND_CATALOG = _clCat; G._tlRows = _clRows; G._tlColorCache = {};
+    }
+
     // ── Lane labels ─────────────────────────────────────────────────────────
     // "Nebido (Testosterone Undecanoate)" truncated mid-word in a lane header at
     // every window size. Henrik, 2026-08-30: shorten Testosterone to Test, and

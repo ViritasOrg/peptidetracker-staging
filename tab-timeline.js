@@ -49,6 +49,9 @@ var _tlDragEndedAt=0;     // ms timestamp of the last pan, to swallow its traili
 var _tlGroupClosed=null;  // group key → true when collapsed; loaded from storage on first use
 
 var _TL_WINDOWS=[{d:14,l:'2W'},{d:28,l:'4W'},{d:56,l:'8W'},{d:84,l:'12W'}];
+// The app's testosterone red — the colour every TRT_CAT entry carries and the one
+// Today paints a tier-'trt' dose with.
+var _TL_TESTO_RED='#e05050';
 // Supplements carry no colour of their own (the catalogue is a plain list), so a
 // lane gets a stable one from its id — same supplement, same colour, every render.
 var _TL_SUPP_COLORS=['#6fb3d6','#7fc99b','#c9a86a','#b58fd6','#d68fa8','#8fd6cf'];
@@ -148,6 +151,7 @@ async function _tlLoad(){
   _tlRows=rows||[];
   _tlSpan=need;
   _tlState='ready';
+  _tlColorCache={};
   if(document.getElementById('timeline-body'))buildTimeline();
 }
 
@@ -212,6 +216,73 @@ function _tlStackId(st){
 // for the injectables you take on a handful of days (Test E, Anadrol), dots on a
 // continuous line for the everyday small-volume ones (HGH, peptides,
 // supplements).
+// ── lane colour ──────────────────────────────────────────────────────────────
+// ⚠️ A LANE'S COLOUR IS A PROPERTY OF THE COMPOUND, NOT OF THE ROWS IN VIEW.
+// This used to be taken from whichever row happened to be first inside the window
+// (`lane()` only applies its init once). Rows for one compound do not all carry
+// the same `dot` — T-Calc and the protocol generator write their own — so panning
+// changed which row came first and the lane changed colour underneath you.
+// Reported 2026-08-30: "no compounds should change color due to scrolling the
+// timeline". Everything below is derived from the compound id and the catalogue,
+// both of which are window-independent.
+var _tlColorCache={};
+function _tlCanonId(compId){
+  return (typeof _tcCanonCompId==='function')?_tcCanonCompId(compId):String(compId==null?'':compId);
+}
+function _tlCatEntry(compId){
+  var id=_tlCanonId(compId);
+  if(!id)return null;
+  var lists=[];
+  if(typeof _COMPOUND_CATALOG!=='undefined'&&_COMPOUND_CATALOG)lists.push(_COMPOUND_CATALOG);
+  if(typeof TRT_CAT!=='undefined'&&TRT_CAT)lists.push(TRT_CAT);
+  if(typeof PEPTIDE_CAT!=='undefined'&&PEPTIDE_CAT)lists.push(PEPTIDE_CAT);
+  if(typeof ENHANCEMENT_COMPOUNDS!=='undefined'&&ENHANCEMENT_COMPOUNDS)lists.push(ENHANCEMENT_COMPOUNDS);
+  for(var i=0;i<lists.length;i++){
+    for(var j=0;j<lists[i].length;j++){
+      if(lists[i][j]&&lists[i][j].id===id)return lists[i][j];
+    }
+  }
+  return null;
+}
+// Testosterone, from the authoritative source first: the tier, then the backend
+// catalogue's own isTestosterone flag, then TRT_CAT membership. The name check is
+// a fallback for a row whose catalogue entry has not loaded (the catalogue is
+// fetched async) or no longer exists. Deliberately NOT keyed on a bare ester —
+// "Masteron Enanthate" and "Nandrolone Decanoate" are not testosterone.
+var _TL_TESTO_BRANDS=['testosterone','nebido','testoviron','sustanon','omnadren','aveed'];
+function _tlIsTesto(tier,compId,name){
+  if(tier==='trt')return true;
+  var c=_tlCatEntry(compId);
+  if(c&&c.isTestosterone)return true;
+  // By id, not by object identity — _tlCatEntry searches the merged backend
+  // catalogue first, so the entry it returns is usually not the TRT_CAT object.
+  var id=_tlCanonId(compId);
+  if(id&&typeof TRT_CAT!=='undefined'&&TRT_CAT){
+    for(var t=0;t<TRT_CAT.length;t++){if(TRT_CAT[t]&&TRT_CAT[t].id===id)return true;}
+  }
+  var n=String(name==null?'':name).toLowerCase();
+  for(var i=0;i<_TL_TESTO_BRANDS.length;i++){if(n.indexOf(_TL_TESTO_BRANDS[i])>=0)return true;}
+  return false;
+}
+function _tlCompoundColor(tier,compId,name){
+  var ck=tier+'|'+_tlCanonId(compId);
+  if(_tlColorCache[ck])return _tlColorCache[ck];
+  if(_tlIsTesto(tier,compId,name))return (_tlColorCache[ck]=_TL_TESTO_RED);
+  var c=_tlCatEntry(compId);
+  if(c&&c.dot)return (_tlColorCache[ck]=c.dot);
+  // No catalogue entry — an archived or backend-only compound. Fall back to a row
+  // dot, but read it off the WHOLE loaded record in fetch order rather than the
+  // rows in view, so the answer does not move when the window does. Not cached:
+  // the catalogue arrives asynchronously and should win once it does.
+  var raw=String(compId==null?'':compId);
+  var rows=_tlRows||[];
+  for(var i=0;i<rows.length;i++){
+    var e=rows[i];
+    if(e&&e.dot&&(e.compound_id===raw||_tlCanonId(e.compound_id)===_tlCanonId(raw)))return e.dot;
+  }
+  return 'var(--accent)';
+}
+
 function _tlLaneStyle(tier){return (tier==='peptide'||tier==='supplement')?'dots':'blocks';}
 function _tlGroupOf(tier){
   if(tier==='trt'||tier==='enhanced')return 'anabolics';
@@ -238,7 +309,7 @@ function _tlBuildLanes(from,to){
     var tier=e.tier||'peptide';
     var key=tier+'|'+(e.compound_id||e.compound_name||'?');
     var L=lane(key,{key:key,name:e.compound_name||e.compound_id||'Compound',
-      color:(tier==='trt'&&!e.dot)?'#e05050':(e.dot||'var(--accent)'),
+      color:_tlCompoundColor(tier,e.compound_id,e.compound_name),
       tier:tier,style:_tlLaneStyle(tier),group:_tlGroupOf(tier),unit:e.unit||'',compId:e.compound_id||''});
     L.owners[owner]=true;
     var day=L.days[e.date]||(L.days[e.date]={dose:null,unit:e.unit||'',n:0,logged:0,entries:[]});
