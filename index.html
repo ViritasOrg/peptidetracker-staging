@@ -70,7 +70,7 @@
   <div class="content hidden" id="tab-macros">
     <div id="macros-body"></div>
   </div>
-  <div class="content hidden" id="tab-timeline"><div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">MILESTONES</div></div></div><div class="timeline" id="timeline-body"></div></div></div>
+  <div class="content hidden" id="tab-timeline"><div id="timeline-body" style="display:flex;flex-direction:column;gap:14px"></div></div>
   <div class="content hidden" id="tab-body">
     <div style="padding:16px 20px;border-bottom:1px solid var(--border)">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
@@ -196,6 +196,7 @@
   <nav class="navbar" id="navbar">
     <button class="navbtn active" id="navbtn-today"  onclick="switchPrimary('today')"><span class="navic">◉</span>Today</button>
     <button class="navbtn"        id="navbtn-plan"   onclick="switchPrimary('plan')"><span class="navic">▤</span>Plan</button>
+    <button class="navbtn"        id="navbtn-timeline" onclick="switchPrimary('timeline')"><span class="navic">▦</span>Timeline</button>
     <button class="navbtn"        id="navbtn-levels" onclick="switchPrimary('levels')"><span class="navic">∿</span>Levels</button>
     <button class="navbtn"        id="navbtn-labs"   onclick="switchPrimary('labs')"><span class="navic">⬡</span>Labs</button>
     <button class="navbtn"        id="navbtn-more"   onclick="switchPrimary('more')"><span class="navic">≡</span>More</button>
@@ -342,12 +343,12 @@ let _stackViewTab='peptides';let _editInnerTab='peptides';
 let _reconStackIdx=0;let _reconStackPicked=false;let _reconState={};
 const TAB_LABELS=Object.assign({today:'Today',stacks:'Protocols',blood:'Levels',tcalc:'T-Calc',thist:'T-History',labs:'Labs',supplements:'Supplements',recon:'Recon',schedule:'Schedule',macros:'Macros',timeline:'Timeline',body:'Body Comp'},IS_STAGING?{storage:'Storage'}:{});
 const TAB_DEFAULTS=Object.assign({today:true,stacks:true,blood:true,tcalc:true,thist:true,labs:true,supplements:true,recon:true,schedule:false,macros:true,timeline:true,body:true},IS_STAGING?{storage:true}:{});
-// Two-tier navigation (usability study): 5 bottom "primary" tabs, each grouping
+// Two-tier navigation (usability study): 6 bottom "primary" tabs, each grouping
 // several of the existing destinations as a secondary sub-tab strip. Every legacy
 // tab id and switchTab(id,el) call is preserved — this is an additive nav layer.
-const PRIMARY_GROUPS={today:['today','macros','schedule'],plan:['stacks','supplements','timeline','recon'],levels:['blood','tcalc','thist'],labs:['labs','body'],more:['settings','storage']};
-const PRIMARY_LABELS={today:'Today',plan:'Plan',levels:'Levels',labs:'Labs',more:'More'};
-const PRIMARY_ORDER=['today','plan','levels','labs','more'];
+const PRIMARY_GROUPS={today:['today','macros','schedule'],plan:['stacks','supplements','recon'],timeline:['timeline'],levels:['blood','tcalc','thist'],labs:['labs','body'],more:['settings','storage']};
+const PRIMARY_LABELS={today:'Today',plan:'Plan',timeline:'Timeline',levels:'Levels',labs:'Labs',more:'More'};
+const PRIMARY_ORDER=['today','plan','timeline','levels','labs','more'];
 // Human surface names for the sub-tabs (T-Calc→Testosterone, Recon→Reconstitution…).
 const SUBTAB_LABELS={today:'Today',supplements:'Supplements',schedule:'Schedule',stacks:'Protocols',timeline:'Timeline',recon:'Reconstitution',blood:'Blood Levels',tcalc:'Testosterone',thist:'T-History',labs:'Bloodwork',body:'Body Comp',macros:'Macros',settings:'Settings',storage:'Storage'};
 function primaryOf(id){for(var _p in PRIMARY_GROUPS){if(PRIMARY_GROUPS[_p].indexOf(id)>=0)return _p;}return '';}
@@ -2085,15 +2086,16 @@ function obSetSex(g){
     b.classList.toggle('ob-sel',(g==='male'&&b.textContent.indexOf('Male')>-1)||(g==='female'&&b.textContent.indexOf('Female')>-1));
   });
 }
-// Quick orientation for the 5-tab nav — one line per primary, no interaction needed.
+// Quick orientation for the 6-tab nav — one line per primary, no interaction needed.
 function _obHtmlTour(){
   var rows=[
     ['◉','Today','Your daily checklist — doses due, supplements, adherence'],
-    ['▤','Plan','Your stacks, cycle timeline and reconstitution math'],
+    ['▤','Plan','Your stacks, supplements and reconstitution math'],
+    ['▦','Timeline','Every cycle, dose and supplement drawn across time'],
     ['∿','Levels','Predicted plasma levels from your protocol'],
     ['⬡','Labs','Bloodwork results and body composition'],
     ['≡','More','Macros, settings and extras']];
-  var html='<div style="margin-bottom:18px"><div style="font-family:var(--font-display);font-size:30px;letter-spacing:1px;color:var(--text)">Where things live</div><div style="font-size:13px;color:var(--muted);margin-top:4px">Five tabs along the bottom — that\'s the whole app.</div></div>';
+  var html='<div style="margin-bottom:18px"><div style="font-family:var(--font-display);font-size:30px;letter-spacing:1px;color:var(--text)">Where things live</div><div style="font-size:13px;color:var(--muted);margin-top:4px">Six tabs along the bottom — that\'s the whole app.</div></div>';
   rows.forEach(function(r){
     html+='<div style="display:flex;align-items:center;gap:14px;border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px">'
       +'<div style="font-size:24px;color:var(--accent);width:28px;text-align:center;flex-shrink:0">'+r[0]+'</div>'
@@ -2350,7 +2352,7 @@ function _groupVisibleSubs(p){var ids=PRIMARY_GROUPS[p]||[];var vis=ids.filter(_
 // Show only the active primary's sub-tabs in the strip; hide the strip when the
 // group has fewer than two visible sub-tabs (nothing to switch between).
 function _applySubtabVis(p){var vis=_groupVisibleSubs(p);document.querySelectorAll('.tabs .tab').forEach(function(t){var tid=(t.id||'').replace('tab-btn-','');t.style.display=(primaryOf(tid)===p&&vis.indexOf(tid)>=0)?'':'none';});var strip=document.querySelector('.tabs');if(strip)strip.style.display=vis.length>1?'':'none';}
-// The five primary tabs are ALWAYS visible — per-tab visibility only affects the
+// The six primary tabs are ALWAYS visible — per-tab visibility only affects the
 // sub-tab strip within a group, never whether a primary shows. Refresh the strip.
 function applyTabVis(){if(_currentPrimary)_applySubtabVis(_currentPrimary);}
 // Give the sub-tab buttons their human labels (once, at startup).
