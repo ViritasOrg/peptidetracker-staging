@@ -142,18 +142,6 @@
   .tl-axis-tick{position:absolute;top:0;font-size:10px;color:var(--muted2);white-space:nowrap;border-left:1px solid var(--border);padding-left:4px;height:100%;}
   .tl-axis-today{position:absolute;top:0;transform:translateX(-50%);font-size:9px;font-weight:700;letter-spacing:1px;color:var(--accent);white-space:nowrap;}
 
-  .tl-bands{margin-bottom:6px;}
-  .tl-band{position:relative;height:20px;margin-bottom:3px;overflow:hidden;}
-  .tl-band-bar{position:absolute;top:6px;height:8px;border-radius:4px;background:var(--border-strong);opacity:0.45;}
-  .tl-band.is-active .tl-band-bar{background:var(--accent);opacity:0.55;}
-  .tl-band-label{position:absolute;top:2px;font-size:10px;font-weight:700;letter-spacing:0.5px;color:var(--muted2);white-space:nowrap;padding-left:5px;pointer-events:none;}
-  .tl-band.is-active .tl-band-label{color:var(--text);}
-
-  .tl-msrow{position:relative;height:15px;margin-bottom:4px;overflow:hidden;}
-  .tl-ms{position:absolute;top:0;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;}
-  .tl-ms-dot{width:7px;height:7px;background:var(--accent4);transform:rotate(45deg);display:block;}
-  .tl-ms-txt{display:none;}
-
   .tl-group{font-size:9.5px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin:10px 0 4px;}
   .tl-lane{border-radius:8px;margin-bottom:4px;}
   .tl-lane.is-open{background:var(--surface2);padding:2px 4px 6px;}
