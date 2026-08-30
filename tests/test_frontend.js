@@ -11452,9 +11452,53 @@ if (typeof G._blBuildLines === 'function') {
       /Math\.abs\(dx\)<=Math\.abs\(dy\)/.test(_tlJs3) && /touch-action:pan-y/.test(fs.readFileSync(path.join(__dirname,'../css/main.css'),'utf8')));
     check('timeline: reads the whole record, not just the active cycle',
       _tlJs3.indexOf('fetchInjectionsForRange') > -1);
-    check('timeline: logging reuses the existing flows rather than re-implementing them',
-      _tlJs3.indexOf('toggleInjection(') > -1 && _tlJs3.indexOf('toggleSupplementDose(') > -1 &&
-      _tlJs3.indexOf('openPastInjection(') > -1);
+    check('timeline: what logging it has reuses the existing flows',
+      _tlJs3.indexOf('toggleSupplementDose(') > -1 && _tlJs3.indexOf('openPastInjection(') > -1);
+    // ⚠️ An injection is ticked off on Today and NOWHERE else. The dose sheet used
+    // to carry per-dose "Mark as taken" / "Mark as not taken" buttons; Henrik had
+    // them removed (2026-08-30) because a mis-tap on a history view showing months
+    // at four pixels a day writes a false claim about what went into his body, and
+    // that claim feeds the free-T curve. This pins the removal.
+    check('timeline: cannot tick an injection off — that lives on Today',
+      _tlJs3.indexOf('toggleInjection') === -1 && _tlJs3.indexOf('_tlToggleInj') === -1);
+    if (typeof G._tlOpenDose === 'function' && typeof G._tlPaint === 'function') {
+      var _dsRows = G._tlRows, _dsSupp = G._supplements, _dsStacks = G._userStacks,
+          _dsAct = G._activeStackIndices, _dsProto = G._tlProto, _dsOpen = G._tlOpen,
+          _dsWin = G._tlWin, _dsAnchor = G._tlAnchor, _dsOffSv = G._tlOff,
+          _dsSheet = G._tlSheet, _capHtml = null;
+      var _dsNow = new Date(), _dsDay = G.dateKey(G._tlAdd(_dsNow, -3));
+      G._tlSheet = function(html){ _capHtml = html; };
+      G._tlRows = [{ id:'ds1', date:_dsDay, cycle_id:'stk1', compound_id:'test_e',
+                     compound_name:'Test E', tier:'trt', dose:'125', unit:'mg',
+                     dot:'#e05050', logged:false }];
+      G._supplements = [];
+      G._userStacks = [{ id:'stk1', name:'Blast 1', cycle_start:G.dateKey(G._tlAdd(_dsNow,-21)),
+                         cycle_length:12, peptides:[] }];
+      G._activeStackIndices = [0];
+      G._tlProto = 'all'; G._tlOpen = {}; G._tlWin = 28; G._tlOff = 0;
+      G._tlAnchor = G._tlAdd(_dsNow, -7);
+      G._tlMarks = {}; G._tlPaint();          // repopulates the mark registry
+      var _mk = Object.keys(G._tlMarks)[0];
+      G._tlDragEndedAt = 0;
+      if (_mk) {
+        G._tlOpenDose(_mk);
+        check('  …and the dose sheet it opens carries no action button at all',
+          !!_capHtml && _capHtml.indexOf('tl-cta') === -1,
+          _capHtml ? '' : 'no sheet rendered');
+        check('  …while still reporting dose, protocol and whether it was taken',
+          !!_capHtml && _capHtml.indexOf('Protocol') > -1 && _capHtml.indexOf('Status') > -1 &&
+          _capHtml.indexOf('125 mg') > -1);
+        // A past dose that is NOT ticked is exactly where a user would reach for
+        // the tick, so this is the case that has to send them to Today instead.
+        check('  …and an unticked past dose points at Today rather than offering a tick',
+          !!_capHtml && /Not recorded as taken/.test(_capHtml) && /Today/.test(_capHtml));
+      } else {
+        check('  …and the dose sheet it opens carries no action button at all', false, 'no mark registered');
+      }
+      G._tlSheet = _dsSheet; G._tlRows = _dsRows; G._supplements = _dsSupp;
+      G._userStacks = _dsStacks; G._activeStackIndices = _dsAct; G._tlProto = _dsProto;
+      G._tlOpen = _dsOpen; G._tlWin = _dsWin; G._tlAnchor = _dsAnchor; G._tlOff = _dsOffSv;
+    }
   }
 
   // Semantic chart palette — canvas hues mirror the CSS tokens.

@@ -12,10 +12,12 @@
 //     viewer that did the same would be lying about the past, so this tab holds
 //     its own cache over its own, much wider date span and keeps everything,
 //     labelling each lane with the protocol that owns it.
-//  2. It is read-mostly. Taps open the existing log/tick flows rather than
-//     re-implementing them — a dose mark ticks through toggleInjection, a
-//     supplement through toggleSupplementDose, and "+" hands off to the
-//     past-injection sheet with the compound and date already filled in.
+//  2. It does not log injections. Tapping a dose mark opens a read-only detail
+//     sheet — dose, protocol, whether it was taken — and Today remains the only
+//     place an injection is ticked off. What logging the tab does have goes
+//     through the existing flows rather than re-implementing them: a supplement
+//     ticks through toggleSupplementDose, and "+" hands off to the past-injection
+//     sheet with the compound and date already filled in.
 
 // Plain-language "What this means" line for the cycle progress bar — derived only
 // from the cycle's own position (weeks in / left, before-start / complete). No
@@ -730,25 +732,19 @@ function _tlOpenDose(markKey){
     '<div class="tl-row"><span>Protocol</span><b>'+_tlEsc(_tlOwnerName(_tlOwnerId(e0)))+'</b></div>'+
     '<div class="tl-row"><span>Status</span><b>'+(day.logged>=day.n?'Taken':(day.logged?day.logged+' of '+day.n+' taken':'Planned'))+'</b></div>'+
   '</div>';
-  if(isFuture){
-    h+='<div class="tl-sheet-note">Scheduled — tick it off on the day, from Today or here.</div>';
-  }else{
-    var allLogged=day.logged>=day.n;
-    h+=day.entries.filter(function(e){return e.id;}).map(function(e){
-      var lbl=day.n>1?((e.time_of_day||'Dose')+(e.logged?' · undo':' · mark taken')):(e.logged?'Mark as not taken':'Mark as taken');
-      return '<button class="tl-cta'+(e.logged?' is-off':'')+'" onclick="_tlToggleInj(\''+_tlEsc(e.id)+'\','+(e.logged?'true':'false')+')">'+_tlEsc(lbl)+'</button>';
-    }).join('')||('<div class="tl-sheet-note">'+(allLogged?'Recorded as taken.':'This dose has no editable record — log it from Today.')+'</div>');
-  }
+  // ⚠️ NO TICK BOX HERE. An injection is ticked off on Today, and nowhere else.
+  // This sheet used to carry "Mark as taken" / "Mark as not taken" buttons per
+  // dose; Henrik had them removed (2026-08-30). Ticking a dose is a claim about
+  // what went into your body, and the timeline is a history viewer showing months
+  // at four pixels a day — far too easy to hit the wrong mark, and a mis-tick
+  // here propagates straight into the free-T curve. Do not add it back.
+  h+='<div class="tl-sheet-note">'+
+     (isFuture ? 'Scheduled. Tick it off on the day, from Today.'
+               : (day.logged>=day.n ? 'Recorded as taken.'
+                  : (day.logged ? 'Partly recorded. Today is where doses are ticked off.'
+                                : 'Not recorded as taken. Today is where doses are ticked off.')))+
+     '</div>';
   _tlSheet(h);
-}
-
-function _tlToggleInj(id,wasLogged){
-  // Keep the timeline's own copy in step: it is a separate fetch from
-  // _injectionsCache, so toggleInjection's cache patch never reaches these rows.
-  (_tlRows||[]).forEach(function(e){if(e&&e.id===id)e.logged=!wasLogged;});
-  if(typeof toggleInjection==='function')toggleInjection(id,wasLogged);
-  _tlCloseSheet();
-  buildTimeline();
 }
 
 function _tlToggleSupp(suppId,dk,slot){
