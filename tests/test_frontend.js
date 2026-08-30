@@ -6429,8 +6429,10 @@ console.log('\n── dose dedup migration ────────────�
       _bloodJs2.includes('Build your first protocol') && /switchPrimary\(\\?'plan\\?'\)/.test(_bloodJs2) && _bloodJs2.includes('createNewStack()'));
     check('Levels empty state branches on whether stacks exist', _bloodJs2.includes('_hasStacks'));
     check('Timeline empty state coaches with a CTA',
-      _tlJs2.includes('No milestones yet') && /switchPrimary\(\\?'plan\\?'\)/.test(_tlJs2) && _tlJs2.includes('createNewStack()'));
-    check('Timeline empty state branches on whether stacks exist', _tlJs2.includes('_hasStk'));
+      _tlJs2.includes('No cycles to show yet') && /switchPrimary\(\\?'plan\\?'\)/.test(_tlJs2) && _tlJs2.includes('createNewStack()'));
+    check('Timeline empty state branches on whether stacks exist', _tlJs2.includes('hasStk'));
+    check('  …and an empty WINDOW offers a jump back to today, not a protocol pitch',
+      _tlJs2.includes('Nothing in this date range') && _tlJs2.includes('Jump to today'));
   }
 
   // Protocol templates — fetched from the backend, instantiated into a stack.
@@ -11300,6 +11302,142 @@ if (typeof G._blBuildLines === 'function') {
       /week[s]? left/.test(G._tlWhatThisMeans(6, 12, 42, 84)));
   }
 
+  // ── Timeline: the layered cycle viewer ────────────────────────────────────
+  // The tab is no longer a milestone list — it draws every cycle, dose and
+  // supplement as colour-coded lanes across a date window. These pin the parts
+  // a wrong render would quietly get wrong: which lane a compound lands in, how
+  // a day's doses aggregate, whose protocol a row belongs to, and what week the
+  // summary calls it.
+  if (typeof G._tlBuildLanes === 'function') {
+    var _tlSvRows = G._tlRows, _tlSvSupp = G._supplements, _tlSvStacks = G._userStacks,
+        _tlSvAct = G._activeStackIndices, _tlSvProto = G._tlProto, _tlSvOpen = G._tlOpen,
+        _tlSvWin = G._tlWin, _tlSvAnchor = G._tlAnchor, _tlSvState = G._tlState;
+    // NOW is a top-level `const` in index.html, so it is NOT a sandbox property —
+    // reading G.NOW gives undefined and every date below silently becomes NaN.
+    var _tlNow = new Date();
+    var _tlD = function(n){ return G.dateKey(G._tlAdd(_tlNow, n)); };
+    var _tlFrom = G._tlAdd(_tlNow, -7), _tlN = 28, _tlTo = G._tlAdd(_tlFrom, _tlN - 1);
+
+    G._tlProto = 'all';
+    G._supplements = [];
+    G._userStacks = [{ id:'stk1', name:'Blast 1', cycle_start:G.dateKey(G._tlAdd(_tlNow,-21)), cycle_length:12, peptides:[] }];
+    G._activeStackIndices = [0];
+    G._tlRows = [
+      { id:'i1', date:_tlD(-3), cycle_id:'stk1', compound_id:'test_e', compound_name:'Test E',  tier:'trt',      dose:'125', unit:'mg',  dot:'#e05050', logged:true  },
+      { id:'i2', date:_tlD(0),  cycle_id:'stk1', compound_id:'test_e', compound_name:'Test E',  tier:'trt',      dose:'125', unit:'mg',  dot:'#e05050', logged:false },
+      { id:'i3', date:_tlD(0),  cycle_id:'stk1', compound_id:'test_e', compound_name:'Test E',  tier:'trt',      dose:'75',  unit:'mg',  dot:'#e05050', logged:true, time_of_day:'PM' },
+      { id:'i4', date:_tlD(-1), cycle_id:'stk1', compound_id:'hgh',    compound_name:'HGH',     tier:'peptide',  dose:'2',   unit:'IU',  dot:'#3cffa0', logged:true  },
+      { id:'i5', date:_tlD(-2), cycle_id:'stk1', compound_id:'anadrol',compound_name:'Anadrol', tier:'enhanced', dose:'50',  unit:'mg',  dot:'#c084fc', logged:true  },
+      { id:'i6', date:_tlD(-4), cycle_id:'ghost',compound_id:'deca',   compound_name:'Deca',    tier:'enhanced', dose:'200', unit:'mg',  dot:'#ffb03c', logged:true  }
+    ];
+    var _lanes = G._tlBuildLanes(_tlFrom, _tlTo);
+    var _byKey = {}; _lanes.forEach(function(L){ _byKey[L.key] = L; });
+
+    check('timeline: one lane per compound, merged across days',
+      _lanes.length === 4 && !!_byKey['trt|test_e'] && !!_byKey['peptide|hgh']);
+    check('timeline: lanes are ordered anabolics → peptides (spec §3 hierarchy)',
+      _lanes[0].group === 'anabolics' && _lanes[_lanes.length-1].group === 'peptides');
+    check('timeline: continuous TRT is pinned above the enhanced compounds',
+      _lanes[0].tier === 'trt');
+    check('timeline: injectables draw as blocks, daily peptides as dots',
+      _byKey['trt|test_e'].style === 'blocks' && _byKey['peptide|hgh'].style === 'dots');
+    check('timeline: two doses on one day aggregate into one mark',
+      _byKey['trt|test_e'].days[_tlD(0)].n === 2 && _byKey['trt|test_e'].days[_tlD(0)].dose === 200);
+    check('timeline: a part-logged day is neither taken nor planned',
+      _byKey['trt|test_e'].days[_tlD(0)].logged === 1);
+    check('timeline: a row from a protocol that no longer exists still shows',
+      !!_byKey['enhanced|deca'] && G._tlOwnerName('ghost') === 'Archived protocol');
+
+    check('timeline: T-Calc and manual rows are named, not dropped',
+      G._tlOwnerId({cycle_id:'tcalc'}) === '_tcalc' &&
+      G._tlOwnerId({cycle_id:'tcalc:stk1'}) === 'stk1' &&
+      G._tlOwnerName('_manual') === 'Logged manually');
+
+    // Filtering to one protocol hides the others' lanes entirely.
+    G._tlProto = 'stk1';
+    check('timeline: the protocol filter drops other cycles',
+      G._tlBuildLanes(_tlFrom, _tlTo).length === 3);
+    G._tlProto = 'all';
+
+    // Week numbers come from the owning protocol's start, so "Wk 4" here means
+    // the same week every other tab calls week 4.
+    var _wk = G._tlWeekSummary(_byKey['trt|test_e'], _tlFrom, _tlN);
+    check('timeline: the weekly summary counts cycle weeks, not window offsets',
+      /Wk \d+/.test(_wk) && /mg/.test(_wk));
+
+    var _axis = G._tlAxis(_tlFrom, _tlN);
+    check('timeline: the axis labels week boundaries and marks today',
+      (_axis.match(/tl-axis-tick/g) || []).length === 4 && _axis.indexOf('TODAY') > -1);
+
+    var _closed = G._tlTrack(_byKey['trt|test_e'], _tlFrom, _tlN, false);
+    var _openTr = G._tlTrack(_byKey['trt|test_e'], _tlFrom, _tlN, true);
+    check('timeline: the today rule is drawn on every lane',
+      _closed.indexOf('tl-grid-today') > -1);
+    check('timeline: "+" sits beside the today mark, never on top of it',
+      _closed.indexOf('tl-plus') === -1 && _openTr.indexOf('tl-plus') === -1 &&
+      G._tlAddRow(_byKey['trt|test_e'], _tlFrom, _tlN).indexOf('tl-plus') > -1);
+    check('  …and a supplement lane gets no injection "+"',
+      G._tlAddRow({tier:'supplement'}, _tlFrom, _tlN) === '');
+    check('timeline: dose marks are tappable',
+      _closed.indexOf('_tlOpenDose(') > -1);
+    check('timeline: supplements are dotted lanes in their own group',
+      G._tlLaneStyle('supplement') === 'dots' && G._tlGroupOf('supplement') === 'supplements');
+
+    var _bands = G._tlBands(_tlFrom, _tlN);
+    check('timeline: the owning cycle is drawn as a band over the lanes',
+      _bands.indexOf('tl-band-bar') > -1 && _bands.indexOf('Blast 1') > -1);
+    check('  …and an active cycle is marked as such', _bands.indexOf('is-active') > -1);
+
+    // A supplement lane is built from the regimen + its taken-log, not /injections.
+    G._supplements = [{ supp_id:'creatine', name:'Creatine', dose:'5 g', freq:'daily', timing:'AM',
+                        start_date:G.dateKey(G._tlAdd(_tlNow,-10)) }];
+    var _withSupp = G._tlBuildLanes(_tlFrom, _tlTo);
+    check('timeline: supplements get their own lanes at the bottom',
+      _withSupp[_withSupp.length-1].group === 'supplements' &&
+      _withSupp[_withSupp.length-1].key === 'supplement|creatine');
+    check('  …and a supplement lane carries a stable colour',
+      G._tlSuppColor('creatine') === G._tlSuppColor('creatine'));
+
+    // The whole render must survive the mock DOM without throwing.
+    G._tlState = 'ready'; G._tlSpan = { from:G._tlAdd(_tlNow,-400), to:G._tlAdd(_tlNow,400) };
+    var _tlThrew = null;
+    try { G.buildTimeline(); } catch (e) { _tlThrew = e; }
+    check('timeline: buildTimeline renders without throwing', _tlThrew === null,
+      _tlThrew ? String(_tlThrew && _tlThrew.message) : '');
+
+    G._tlRows = _tlSvRows; G._supplements = _tlSvSupp; G._userStacks = _tlSvStacks;
+    G._activeStackIndices = _tlSvAct; G._tlProto = _tlSvProto; G._tlOpen = _tlSvOpen;
+    G._tlWin = _tlSvWin; G._tlAnchor = _tlSvAnchor; G._tlState = _tlSvState;
+  } else {
+    check('timeline viewer helpers present', false);
+  }
+
+  // Timeline is a top-level destination now, sitting directly after Plan.
+  {
+    const _tlJs3 = fs.readFileSync(path.join(__dirname, '../tab-timeline.js'), 'utf8');
+    check('timeline nav: it is its own primary group',
+      /PRIMARY_GROUPS=\{[^;]*timeline:\['timeline'\]/.test(rawScript));
+    check('timeline nav: and no longer a sub-tab of Plan',
+      /plan:\['stacks','supplements','recon'\]/.test(rawScript));
+    check('timeline nav: it sits immediately after Plan',
+      /PRIMARY_ORDER=\['today','plan','timeline','levels','labs','more'\]/.test(rawScript));
+    check('timeline nav: the bottom-nav button is placed after Plan',
+      html.indexOf('id="navbtn-timeline"') > html.indexOf('id="navbtn-plan"') &&
+      html.indexOf('id="navbtn-timeline"') < html.indexOf('id="navbtn-levels"'));
+    check('timeline: the tab body is the viewer\'s own canvas, not a milestone card',
+      /id="tab-timeline"[^>]*>\s*<div id="timeline-body"/.test(html) &&
+      !/id="tab-timeline"[\s\S]{0,200}MILESTONES/.test(html));
+    // The app's own left/right swipe changes primary tabs; inside the timeline a
+    // horizontal drag has to mean "move in time" instead, so the canvas opts out.
+    check('timeline: the canvas opts out of the tab-swipe nav',
+      _tlJs3.indexOf('data-noswipe') > -1 && _tlJs3.indexOf('_tlWireSwipe') > -1);
+    check('timeline: reads the whole record, not just the active cycle',
+      _tlJs3.indexOf('fetchInjectionsForRange') > -1);
+    check('timeline: logging reuses the existing flows rather than re-implementing them',
+      _tlJs3.indexOf('toggleInjection(') > -1 && _tlJs3.indexOf('toggleSupplementDose(') > -1 &&
+      _tlJs3.indexOf('openPastInjection(') > -1);
+  }
+
   // Semantic chart palette — canvas hues mirror the CSS tokens.
   {
     const _bloodJs = fs.readFileSync(path.join(__dirname, '../tab-blood.js'), 'utf8');
@@ -11879,14 +12017,14 @@ if (typeof G.switchPrimary === 'function' && typeof G.primaryOf === 'function') 
   G._tabVis = _svVis;
   G.switchTab = _origSwitch;
   // switchTab records the active primary + its last sub-tab (bookkeeping runs before any builder)
-  G._lastSub = {}; try { G.switchTab('timeline', G.document.getElementById('tab-btn-timeline')); } catch(e){}
+  G._lastSub = {}; try { G.switchTab('recon', G.document.getElementById('tab-btn-recon')); } catch(e){}
   check('switchTab: sets _currentPrimary from the tab', G._currentPrimary === 'plan');
-  check('switchTab: remembers the last sub for that primary', G._lastSub['plan'] === 'timeline');
+  check('switchTab: remembers the last sub for that primary', G._lastSub['plan'] === 'recon');
 } else {
   check('switchPrimary / primaryOf present', false);
 }
 {
-  check('bottom nav has all 5 primary buttons', ['today','plan','levels','labs','more'].every(function(p){ return html.includes('id="navbtn-'+p+'"'); }));
+  check('bottom nav has all 6 primary buttons', ['today','plan','timeline','levels','labs','more'].every(function(p){ return html.includes('id="navbtn-'+p+'"'); }));
   const _navcss = fs.readFileSync(path.join(__dirname, '../css/main.css'), 'utf8');
   check('.navbar is fixed to the bottom',        /\.navbar\{[^}]*position:fixed[^}]*bottom:0/.test(_navcss));
   check('content clears the fixed bottom bar',   /\.content\{[^}]*padding:[^;]*116px/.test(_navcss));
@@ -12022,11 +12160,12 @@ console.log('\n── PLASMA theme tokens ────────────�
 console.log('\n── PLASMA nav + boundaries ────────────────────────────────');
 {
   const _css = fs.readFileSync(path.join(__dirname, '../css/main.css'), 'utf8');
-  check('all 5 nav buttons carry a glyph icon', ['today','plan','levels','labs','more'].every(function(p){
+  check('all 6 nav buttons carry a glyph icon', ['today','plan','timeline','levels','labs','more'].every(function(p){
     return new RegExp('id="navbtn-'+p+'"[^>]*>\\s*<span class="navic">.+?</span>').test(html);
   }));
   check('nav icon is 26px block above an 11px label', /\.navic\{[^}]*display:block[^}]*font-size:26px/.test(_css) && /\.navbtn\{[^}]*font-size:11px/.test(_css));
-  check('navbar insets clear the rounded phone corners', /\.navbar\{[^}]*padding-left:max\(22px,env\(safe-area-inset-left\)\)[^}]*padding-right:max\(22px,env\(safe-area-inset-right\)\)/.test(_css));
+  check('navbar insets clear the rounded phone corners', /\.navbar\{[^}]*padding-left:max\(\d+px,env\(safe-area-inset-left\)\)[^}]*padding-right:max\(\d+px,env\(safe-area-inset-right\)\)/.test(_css));
+  check('  …and the 6-tab row keeps labels on one line', /\.navbtn\{[^}]*white-space:nowrap/.test(_css));
   check('active nav tab gets a lime top indicator (color is not the only cue)', /\.navbtn\.active::before\{[^}]*background:var\(--accent\)/.test(_css));
   check('checkboxes use --border-strong', /\.check-box\{[^}]*border:2px solid var\(--border-strong\)/.test(_css) && /\.pep-chk\{[^}]*border:2px solid var\(--border-strong\)/.test(_css));
   check('toggle off-track uses --border-strong', /\.toggle-sw\{[^}]*background:var\(--border-strong\)/.test(_css));
