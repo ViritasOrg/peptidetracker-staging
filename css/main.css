@@ -142,7 +142,11 @@
   .tl-axis-tick{position:absolute;top:0;font-size:10px;color:var(--muted2);white-space:nowrap;border-left:1px solid var(--border);padding-left:4px;height:100%;}
   .tl-axis-today{position:absolute;top:0;transform:translateX(-50%);font-size:9px;font-weight:700;letter-spacing:1px;color:var(--accent);white-space:nowrap;}
 
-  .tl-group{font-size:9.5px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin:10px 0 4px;}
+  /* Group heading doubles as the fold control for its section: the whole row is
+     the tap target, with a +/− on the right saying which way it goes. Padded so
+     it is a thumb-sized row rather than a 12px strip of text. */
+  .tl-group{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12.5px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin:10px 0 2px;padding:4px 2px;cursor:pointer;user-select:none;-webkit-user-select:none;}
+  .tl-group-tog{font-size:16px;line-height:1;width:18px;text-align:center;flex-shrink:0;}
   .tl-lane{border-radius:8px;margin-bottom:4px;}
   .tl-lane.is-open{background:var(--surface2);padding:2px 4px 6px;}
   .tl-lane-hd{display:flex;align-items:center;gap:7px;padding:5px 2px 3px;cursor:pointer;min-width:0;}
