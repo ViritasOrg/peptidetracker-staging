@@ -11340,6 +11340,36 @@ if (typeof G._blBuildLines === 'function') {
       _lanes[0].group === 'anabolics' && _lanes[_lanes.length-1].group === 'peptides');
     check('timeline: continuous TRT is pinned above the enhanced compounds',
       _lanes[0].tier === 'trt');
+    // ── Lane labels ─────────────────────────────────────────────────────────
+    // "Nebido (Testosterone Undecanoate)" truncated mid-word in a lane header at
+    // every window size. Henrik, 2026-08-30: shorten Testosterone to Test, and
+    // esters / names like Nebido or Depot to three characters.
+    if (typeof G._tlShortName === 'function') {
+      check('timeline: Testosterone shortens to Test',
+        G._tlShortName('Testosterone Enanthate') === 'Test Ena');
+      check('  …esters go to three characters',
+        G._tlShortName('Testosterone Cypionate') === 'Test Cyp' &&
+        G._tlShortName('Testosterone Phenylpropionate') === 'Test Phe' &&
+        G._tlShortName('Nandrolone Decanoate') === 'Nandrolone Dec');
+      check('  …as do brand and formulation words',
+        G._tlShortName('Nebido (Testosterone Undecanoate)') === 'Neb (Test Und)' &&
+        G._tlShortName('Testoviron Depot') === 'Tes Dep');
+      check('  …numbers and hyphens survive',
+        G._tlShortName('Sustanon 250') === 'Sus 250' &&
+        G._tlShortName('Depo-Testosterone') === 'Depo-Test');
+      // ⚠️ NOT A BLANKET TRUNCATION. Cutting every long word to three characters
+      // would invent collisions in a medical app — Enanthate and Estradiol both
+      // becoming "Est" — so only the testosterone vocabulary is touched.
+      check('  …and nothing outside that vocabulary is touched',
+        G._tlShortName('HGH (Somatropin)') === 'HGH (Somatropin)' &&
+        G._tlShortName('Magnesium (Glycinate)') === 'Magnesium (Glycinate)' &&
+        G._tlShortName('Retatrutide') === 'Retatrutide' &&
+        G._tlShortName('Anadrol') === 'Anadrol');
+      check('  …the shortening is display-only — the lane keeps the stored name',
+        _tlSrc.indexOf('_tlShortName(L.name)') > -1 &&
+        /tl-sheet-title[^;]*_tlEsc\(L\.name\)/.test(_tlSrc));
+    }
+
     check('timeline: injectables draw as blocks, daily peptides as dots',
       _byKey['trt|test_e'].style === 'blocks' && _byKey['peptide|hgh'].style === 'dots');
     check('timeline: two doses on one day aggregate into one mark',

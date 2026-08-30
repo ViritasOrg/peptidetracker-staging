@@ -60,6 +60,41 @@ function _tlUnit(u){return (typeof UNIT_LABELS!=='undefined'&&UNIT_LABELS[u])?UN
 function _tlEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function _tlShortDate(d){return d.toLocaleDateString('en-GB',{day:'numeric',month:'short'});}
 
+// ── lane labels ──────────────────────────────────────────────────────────────
+// Long compound names do not fit a lane header: "Nebido (Testosterone
+// Undecanoate)" truncated mid-word at every window size. Henrik, 2026-08-30:
+// "Shorten Testosterone to Test. Also truncate esters to first three characters
+// same with names like Nebido or Depot."
+//
+// A WORD LIST, NOT A BLANKET TRUNCATION. Cutting every long word to three
+// characters would read well on the esters and badly everywhere else, and in a
+// medical app it invents collisions — "Enanthate" and "Estradiol" would both
+// become "Est". Only the testosterone vocabulary named in the request is
+// shortened; every other name is left exactly as it is, so HGH (Somatropin),
+// Anadrol and the supplements are untouched.
+//
+// Display only. The stored name is not changed, and the dose sheet still shows
+// it in full — tap the mark and you get "Nebido (Testosterone Undecanoate)"
+// back. ENHANCEMENT_COMPOUNDS is served by the backend, so a new ester that is
+// not on this list simply stays long; that is a cosmetic miss, not a wrong label.
+var _TL_SHORT_WORDS={
+  testosterone:'Test',
+  // esters
+  enanthate:'Ena', cypionate:'Cyp', undecanoate:'Und', propionate:'Pro',
+  phenylpropionate:'Phe', decanoate:'Dec', isocaproate:'Iso', caproate:'Cap',
+  acetate:'Ace', hexahydrobenzylcarbonate:'Hex',
+  // brand and formulation words
+  nebido:'Neb', depot:'Dep', testoviron:'Tes', sustanon:'Sus', omnadren:'Omn',
+  aveed:'Ave'
+};
+function _tlShortName(name){
+  // Alpha runs only, so "Depo-Testosterone" shortens its second half and
+  // "Sustanon 250" keeps its number.
+  return String(name==null?'':name).replace(/[A-Za-z]+/g,function(w){
+    return _TL_SHORT_WORDS[w.toLowerCase()]||w;
+  });
+}
+
 // ── data span ────────────────────────────────────────────────────────────────
 // Wide enough to hold every cycle the user has ever configured, plus the plan
 // ahead. Clamped to four years back so a stray 1970 start date cannot ask the
@@ -430,7 +465,7 @@ function _tlLaneHtml(L,from,n){
   return '<div class="tl-lane'+(expanded?' is-open':'')+'">'+
     '<div class="tl-lane-hd" onclick="_tlToggleLane(\''+_tlEsc(L.key)+'\')">'+
       '<span class="tl-lane-dot" style="background:'+L.color+'"></span>'+
-      '<span class="tl-lane-name">'+_tlEsc(L.name)+'</span>'+
+      '<span class="tl-lane-name">'+_tlEsc(_tlShortName(L.name))+'</span>'+
       '<span class="tl-lane-sub">'+_tlEsc(sub)+'</span>'+
       '<span class="tl-caret">'+(expanded?'▾':'▸')+'</span>'+
     '</div>'+
