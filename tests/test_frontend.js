@@ -11414,6 +11414,54 @@ if (typeof G._blBuildLines === 'function') {
     var _openTr = G._tlTrack(_byKey['trt|test_e'], _tlFrom, _tlN, true);
     check('timeline: the today rule is drawn on every lane',
       _closed.indexOf('tl-grid-today') > -1);
+    // ── Collapsible group headings ──────────────────────────────────────────
+    // Anabolics / Peptides / Supplements fold away so a long supplement list can
+    // be put out of sight. The heading row is the control, with a +/− saying
+    // which way it goes.
+    if (typeof G._tlGroupHdr === 'function') {
+      var _grSave = G._tlGroupClosed;
+      G._tlGroupClosed = {};
+      G._tlDragEndedAt = 0;
+      check('timeline: a group heading says which way it folds',
+        G._tlGroupHdr('supplements').indexOf('−') > -1 &&
+        G._tlGroupHdr('supplements').indexOf('Supplements') > -1 &&
+        /_tlToggleGroup\('supplements'\)/.test(G._tlGroupHdr('supplements')));
+      G._tlToggleGroup('supplements');
+      check('  …tapping it collapses the group',
+        G._tlGroupIsClosed('supplements') === true &&
+        G._tlGroupHdr('supplements').indexOf('+') > -1);
+      G._tlToggleGroup('supplements');
+      check('  …and tapping again brings it back', G._tlGroupIsClosed('supplements') === false);
+      check('  …the choice is persisted, not lost on the next render',
+        _tlSrc.indexOf("setData('pep-tl-groups'") > -1 && _tlSrc.indexOf("getData('pep-tl-groups'") > -1);
+      // A collapsed group renders its heading and none of its lanes. Seed a
+      // supplement first — without one there is no supplements group at all and
+      // the check would pass for the wrong reason.
+      var _grSupp = G._supplements;
+      G._supplements = [{ supp_id:'creatine', name:'Creatine', dose:'5 g', freq:'daily',
+                          timing:'AM', start_date:G.dateKey(G._tlAdd(_tlNow,-10)) }];
+      G._tlGroupClosed = { supplements: true };
+      G._tlMarks = {};
+      var _paintedClosed = G._tlPaint();
+      check('  …a collapsed group draws no lanes', _paintedClosed === true &&
+        Object.keys(G._tlMarks).every(function(k){ return k.indexOf('supplement|') !== 0; }));
+      G._tlGroupClosed = {};
+      G._tlMarks = {};
+      G._tlPaint();
+      check('  …and an open one draws them again',
+        Object.keys(G._tlMarks).some(function(k){ return k.indexOf('supplement|') === 0; }));
+      G._supplements = _grSupp;
+      G._tlGroupClosed = _grSave;
+    }
+    // The heading is now a tap target inside the pannable canvas, and so is the
+    // lane header — which never had the guard the dose marks did, so a pan that
+    // happened to end over one collapsed the lane.
+    check('timeline: every tap target inside the canvas ignores a pan\'s trailing click',
+      /function _tlTapBlocked\(\)/.test(_tlSrc) &&
+      (_tlSrc.match(/if\(_tlTapBlocked\(\)\)return;/g) || []).length === 3);
+    check('timeline: group headings are bigger than the 9.5px they were',
+      /\.tl-group\{[^}]*font-size:12\.5px/.test(fs.readFileSync(path.join(__dirname,'../css/main.css'),'utf8')));
+
     // ⚠️ THE TAB WRITES NOTHING. The "+" that opened the past-injection sheet is
     // gone (2026-08-30), along with the per-dose tick and the supplement slot
     // buttons before it. An expanded lane offers no control at all.

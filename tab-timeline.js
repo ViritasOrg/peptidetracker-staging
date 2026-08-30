@@ -46,6 +46,7 @@ var _tlState='idle';      // idle | loading | ready
 var _tlMarks={};          // markKey → {lane,dk} for the tap handlers
 var _tlOff=0;             // fractional day offset into the window — the drag lives here
 var _tlDragEndedAt=0;     // ms timestamp of the last pan, to swallow its trailing click
+var _tlGroupClosed=null;  // group key → true when collapsed; loaded from storage on first use
 
 var _TL_WINDOWS=[{d:14,l:'2W'},{d:28,l:'4W'},{d:56,l:'8W'},{d:84,l:'12W'}];
 // Supplements carry no colour of their own (the catalogue is a plain list), so a
@@ -315,7 +316,35 @@ function _tlSetWin(n){
   _tlLoad();
   buildTimeline();
 }
-function _tlToggleLane(key){if(_tlOpen[key])delete _tlOpen[key];else _tlOpen[key]=true;_tlPaint()||buildTimeline();}
+// A drag that finishes over a tap target still delivers a click on iOS, and every
+// one of these sits inside the pannable canvas. Without this a pan ending on a
+// mark opened a dose sheet and a pan ending on a lane header collapsed the lane.
+function _tlTapBlocked(){return (Date.now()-_tlDragEndedAt)<350;}
+function _tlToggleLane(key){if(_tlTapBlocked())return;if(_tlOpen[key])delete _tlOpen[key];else _tlOpen[key]=true;_tlPaint()||buildTimeline();}
+
+// ── group headers ───────────────────────────────────────────────────────────
+// Anabolics / Peptides / Supplements fold away, so a long supplement list can be
+// put out of sight without losing it. Persisted: a collapse that evaporated on
+// the next render would not be much of a choice.
+function _tlGroups(){
+  if(_tlGroupClosed)return _tlGroupClosed;
+  _tlGroupClosed=(typeof getData==='function')?(getData('pep-tl-groups',{})||{}):{};
+  return _tlGroupClosed;
+}
+function _tlGroupIsClosed(g){return !!_tlGroups()[g];}
+function _tlToggleGroup(g){
+  if(_tlTapBlocked())return;
+  var m=_tlGroups();
+  if(m[g])delete m[g];else m[g]=true;
+  if(typeof setData==='function')setData('pep-tl-groups',m);
+  _tlPaint()||buildTimeline();
+}
+function _tlGroupHdr(g){
+  var closed=_tlGroupIsClosed(g);
+  return '<div class="tl-group'+(closed?' is-closed':'')+'" onclick="_tlToggleGroup(\''+_tlEsc(g)+'\')">'+
+    '<span class="tl-group-name">'+_tlEsc(_TL_GROUP_TITLES[g]||g)+'</span>'+
+    '<span class="tl-group-tog">'+(closed?'+':'\u2212')+'</span></div>';
+}
 
 // ── rendering ────────────────────────────────────────────────────────────────
 function _tlPct(i,n){return (i/n*100);}
@@ -484,9 +513,9 @@ function _tlPaint(){
     lanes.forEach(function(L){
       if(L.group!==lastGroup){
         lastGroup=L.group;
-        h+='<div class="tl-group">'+_tlEsc(_TL_GROUP_TITLES[L.group]||L.group)+'</div>';
+        h+=_tlGroupHdr(L.group);
       }
-      h+=_tlLaneHtml(L,from,n);
+      if(!_tlGroupIsClosed(L.group))h+=_tlLaneHtml(L,from,n);
     });
   }
   el.innerHTML=h;
@@ -678,9 +707,7 @@ function _tlFindLane(key,from,n){
 }
 
 function _tlOpenDose(markKey){
-  // A drag that finishes over a mark still delivers a click on iOS. Without this
-  // every pan ended in a dose sheet.
-  if(Date.now()-_tlDragEndedAt<350)return;
+  if(_tlTapBlocked())return;
   var m=_tlMarks[markKey];
   if(!m)return;
   var from=_tlAnchorDate(),n=_tlWin;
