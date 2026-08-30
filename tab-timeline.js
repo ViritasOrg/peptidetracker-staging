@@ -114,6 +114,35 @@ async function _tlLoad(){
   if(document.getElementById('timeline-body'))buildTimeline();
 }
 
+// ── keeping this tab's copy in step with the record ──────────────────────────
+// THE SAME BUG CLASS AS _tcHistory — SEE THE NOTE IN toggleInjection.
+// This tab holds its OWN fetch of /injections, over a far wider span than
+// _injectionsCache, so the cache patch toggleInjection applies on every tick
+// never reaches these rows. Ticking a dose on Today therefore left the timeline
+// showing the pre-tick state for the rest of the session: the mark stayed
+// outlined, and the lane's "6/9 taken" stayed wrong, until the app was
+// restarted. Reported 2026-08-30.
+//
+// Anything that changes whether a dose was taken must call one of these two.
+// _tlNoteInjection is the cheap path — patch the flag we already hold, repaint
+// if the tab is on screen. _tlInvalidateInjections is for when the row SET
+// changed (doses added, a protocol regenerated): drop the span so the next paint
+// refetches rather than trusting a copy that is now missing rows.
+function _tlNoteInjection(id,logged){
+  var hit=false;
+  (_tlRows||[]).forEach(function(e){if(e&&e.id===id){e.logged=!!logged;hit=true;}});
+  // A row we do not hold is a copy we cannot trust to be complete — refetch.
+  if(!hit){_tlInvalidateInjections();return;}
+  if(typeof _currentTab!=='undefined'&&_currentTab==='timeline'&&document.getElementById('tl-canvas'))_tlPaint();
+}
+function _tlInvalidateInjections(){
+  _tlSpan=null;
+  if(_tlState!=='loading')_tlState='idle';
+  // Visible right now: refetch immediately, which repaints when it lands. Not
+  // visible: buildTimeline's own idle check picks it up when the tab is opened.
+  if(typeof _currentTab!=='undefined'&&_currentTab==='timeline'&&document.getElementById('timeline-body'))_tlLoad();
+}
+
 // ── protocol / owner naming ──────────────────────────────────────────────────
 // Every row belongs to something, including rows whose protocol is gone. Naming
 // the owner is what turns an orphaned dose from a mystery mark into history.

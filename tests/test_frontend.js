@@ -11452,6 +11452,45 @@ if (typeof G._blBuildLines === 'function') {
       /Math\.abs\(dx\)<=Math\.abs\(dy\)/.test(_tlJs3) && /touch-action:pan-y/.test(fs.readFileSync(path.join(__dirname,'../css/main.css'),'utf8')));
     check('timeline: reads the whole record, not just the active cycle',
       _tlJs3.indexOf('fetchInjectionsForRange') > -1);
+
+    // ── The timeline's copy has to follow the record ────────────────────────
+    // Same bug class as _tcHistory (see the note in toggleInjection): this tab
+    // holds its OWN fetch of /injections over a much wider span, so the cache
+    // patch toggleInjection applies never reaches these rows. Ticking a dose on
+    // Today left the timeline showing the pre-tick state until the app was
+    // restarted — reported 2026-08-30.
+    {
+      const _todayJs = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+      const _thistJs = fs.readFileSync(path.join(__dirname, '../tab-thist.js'), 'utf8');
+      check('timeline: ticking a dose on Today reaches the timeline\'s own copy',
+        /_tlNoteInjection\(id,newLogged\)/.test(_todayJs));
+      check('  …and both rollbacks put it back',
+        (_todayJs.match(/_tlNoteInjection\(id,currentLogged\)/g) || []).length === 2);
+      check('  …and Reset Today unticks it there too',
+        /_tlNoteInjection\(e\.id,false\)/.test(_todayJs));
+      check('  …and saving past injections drops the span, since the row set changed',
+        /_tlInvalidateInjections\(\)/.test(_thistJs));
+      check('  …every hookup is typeof-guarded — tab-timeline.js loads after Today',
+        (_todayJs.match(/typeof _tlNoteInjection==='function'/g) || []).length === 4 &&
+        /typeof _tlInvalidateInjections === 'function'/.test(_thistJs));
+    }
+    if (typeof G._tlNoteInjection === 'function') {
+      var _niRows = G._tlRows, _niState = G._tlState, _niSpan = G._tlSpan, _niTab = G._currentTab;
+      G._currentTab = 'today';                       // not on screen: patch, don't repaint
+      G._tlRows = [{ id:'x1', date:'2026-08-01', compound_id:'test_e', tier:'trt', logged:false }];
+      G._tlState = 'ready'; G._tlSpan = { from:new Date(2000,0,1), to:new Date(2099,0,1) };
+      G._tlNoteInjection('x1', true);
+      check('timeline: a tick flips the row this tab is holding',
+        G._tlRows[0].logged === true && G._tlState === 'ready');
+      G._tlNoteInjection('x1', false);
+      check('  …and an untick flips it back', G._tlRows[0].logged === false);
+      // A dose the timeline has never seen means its copy is incomplete, so the
+      // flag patch is not enough — the span has to be dropped and refetched.
+      G._tlNoteInjection('not-in-our-copy', true);
+      check('  …while an unknown dose invalidates the span instead of silently missing it',
+        G._tlState === 'idle' && G._tlSpan === null);
+      G._tlRows = _niRows; G._tlState = _niState; G._tlSpan = _niSpan; G._currentTab = _niTab;
+    }
     check('timeline: what logging it has reuses the existing flows',
       _tlJs3.indexOf('toggleSupplementDose(') > -1 && _tlJs3.indexOf('openPastInjection(') > -1);
     // ⚠️ An injection is ticked off on Today and NOWHERE else. The dose sheet used
@@ -11459,8 +11498,10 @@ if (typeof G._blBuildLines === 'function') {
     // them removed (2026-08-30) because a mis-tap on a history view showing months
     // at four pixels a day writes a false claim about what went into his body, and
     // that claim feeds the free-T curve. This pins the removal.
+    // Assert on CALLS, not on the word: the file names toggleInjection in a
+    // comment explaining where a tick belongs, and that reference should stay.
     check('timeline: cannot tick an injection off — that lives on Today',
-      _tlJs3.indexOf('toggleInjection') === -1 && _tlJs3.indexOf('_tlToggleInj') === -1);
+      !/\btoggleInjection\s*\(/.test(_tlJs3) && _tlJs3.indexOf('_tlToggleInj') === -1);
     if (typeof G._tlOpenDose === 'function' && typeof G._tlPaint === 'function') {
       var _dsRows = G._tlRows, _dsSupp = G._supplements, _dsStacks = G._userStacks,
           _dsAct = G._activeStackIndices, _dsProto = G._tlProto, _dsOpen = G._tlOpen,

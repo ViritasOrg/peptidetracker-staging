@@ -570,6 +570,10 @@ async function savePastInjection() {
       (_injectionsCache[e.date] = _injectionsCache[e.date] || []).push(_piToCacheRow(e, logged));
     });
   }
+  // The Timeline holds its own, much wider fetch of /injections and has no idea
+  // these rows exist. Patching a flag is not enough here — the row SET changed —
+  // so drop its span and let it refetch.
+  if (typeof _tlInvalidateInjections === 'function') _tlInvalidateInjections();
   // Mirror testosterone into the T-Calc manual log so it surfaces on the plasma curve —
   // but only what was actually TAKEN. An unticked past dose is deliberately outside the
   // free-T model, and mirroring it here would put it back in through the side door.
