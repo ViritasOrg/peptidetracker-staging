@@ -53,7 +53,7 @@ const patchedScript = rawScript
 const noop = () => {};
 const mockCtx = {scale:noop,beginPath:noop,moveTo:noop,lineTo:noop,arc:noop,fill:noop,stroke:noop,fillText:noop,closePath:noop,createLinearGradient:()=>({addColorStop:noop}),save:noop,restore:noop,fillRect:noop,setLineDash:noop,strokeRect:noop,translate:noop,rotate:noop,measureText:()=>({width:0})};
 const mockEl = () => {
-  const el = {style:{},classList:{add:noop,remove:noop,contains:()=>false},appendChild:noop,removeChild:noop,insertBefore:noop,addEventListener:noop,children:[],querySelectorAll:()=>[],querySelector:()=>mockEl(),offsetWidth:300,offsetLeft:0,scrollLeft:0,clientWidth:300,dataset:{},getContext:()=>mockCtx};
+  const el = {style:{setProperty:noop,getPropertyValue:()=>''},classList:{add:noop,remove:noop,contains:()=>false},appendChild:noop,removeChild:noop,insertBefore:noop,addEventListener:noop,children:[],querySelectorAll:()=>[],querySelector:()=>mockEl(),offsetWidth:300,offsetLeft:0,scrollLeft:0,clientWidth:300,dataset:{},getContext:()=>mockCtx};
   Object.defineProperty(el,'innerHTML',  {get:()=>'',set:noop});
   Object.defineProperty(el,'textContent',{get:()=>'',set:noop});
   Object.defineProperty(el,'value',      {get:()=>'0',set:noop});
@@ -11366,8 +11366,17 @@ if (typeof G._blBuildLines === 'function') {
       /Wk \d+/.test(_wk) && /mg/.test(_wk));
 
     var _axis = G._tlAxis(_tlFrom, _tlN);
+    var _ticks = (_axis.match(/tl-axis-tick/g) || []).length;
+    var _labelled = (_axis.match(/<span>/g) || []).length;
     check('timeline: the axis labels week boundaries and marks today',
-      (_axis.match(/tl-axis-tick/g) || []).length === 4 && _axis.indexOf('TODAY') > -1);
+      _ticks >= 4 && _labelled >= 1 && _axis.indexOf('TODAY') > -1);
+    check('  …and draws past the window edges so the pan has something to slide in',
+      _ticks > 4 && G._tlBleed(_tlN) >= 2);
+    // At twelve weeks a label on every week boundary prints "17 Jul 24 Jul 31 Jul"
+    // on top of itself, so labels thin out while the ticks stay.
+    var _axis12 = G._tlAxis(_tlFrom, 84);
+    check('  …and thins labels at the wide windows so they cannot collide',
+      (_axis12.match(/<span>/g) || []).length * 2 <= (_axis12.match(/tl-axis-tick/g) || []).length);
 
     var _closed = G._tlTrack(_byKey['trt|test_e'], _tlFrom, _tlN, false);
     var _openTr = G._tlTrack(_byKey['trt|test_e'], _tlFrom, _tlN, true);
@@ -11430,7 +11439,17 @@ if (typeof G._blBuildLines === 'function') {
     // The app's own left/right swipe changes primary tabs; inside the timeline a
     // horizontal drag has to mean "move in time" instead, so the canvas opts out.
     check('timeline: the canvas opts out of the tab-swipe nav',
-      _tlJs3.indexOf('data-noswipe') > -1 && _tlJs3.indexOf('_tlWireSwipe') > -1);
+      _tlJs3.indexOf('data-noswipe') > -1 && _tlJs3.indexOf('_tlWireDrag') > -1);
+    // The pan follows the finger the way the T-Calc chart does: no distance
+    // threshold, no window-sized jump — pixels convert straight into days and the
+    // view updates on every move.
+    check('  …and the pan tracks the finger rather than stepping a window',
+      /_tlCommit\(dx\s*\/\s*colPx\)/.test(_tlJs3) && /_tlCommit\(cur\s*\/\s*colPx\)/.test(_tlJs3) &&
+      !/Math\.abs\(dx\)>50/.test(_tlJs3));
+    check('  …moving the drawn strip by transform, not by re-serialising lanes',
+      /setProperty\('--tlx'/.test(_tlJs3) && _tlJs3.indexOf('tl-strip') > -1);
+    check('  …and vertical drags stay with the page, as on the T-Calc chart',
+      /Math\.abs\(dx\)<=Math\.abs\(dy\)/.test(_tlJs3) && /touch-action:pan-y/.test(fs.readFileSync(path.join(__dirname,'../css/main.css'),'utf8')));
     check('timeline: reads the whole record, not just the active cycle',
       _tlJs3.indexOf('fetchInjectionsForRange') > -1);
     check('timeline: logging reuses the existing flows rather than re-implementing them',

@@ -127,21 +127,29 @@
   .tl-chip{background:var(--surface2);border:1px solid var(--border);border-radius:16px;padding:6px 12px;font-size:11px;font-weight:700;letter-spacing:0.5px;color:var(--muted2);cursor:pointer;font-family:inherit;white-space:nowrap;}
   .tl-chip.is-on{background:var(--accent);border-color:var(--accent);color:#000;}
   .tl-today-btn{margin-left:auto;}
-  .tl-canvas{padding:10px 12px 4px;touch-action:pan-y;}
+  /* touch-action:pan-y hands vertical scrolling to the browser and leaves the
+     horizontal axis to the pan handler — same contract as the T-Calc chart. */
+  .tl-canvas{padding:10px 12px 4px;touch-action:pan-y;cursor:grab;}
+  .tl-canvas:active{cursor:grabbing;}
+  /* Every day-positioned row puts its contents in a strip, and the pan moves all
+     of them at once by writing --tlx on the canvas. One property write per frame,
+     transform-only, so the drag stays smooth without re-serialising the lanes. */
+  .tl-strip{position:absolute;inset:0;transform:translateX(var(--tlx,0px));}
+  .tl-blank{padding:34px 8px 30px;text-align:center;font-size:13px;color:var(--muted2);line-height:1.7;}
   .tl-loading{padding:34px 20px;text-align:center;font-size:13px;color:var(--muted2);}
 
-  .tl-axis{position:relative;height:18px;margin-bottom:6px;}
+  .tl-axis{position:relative;height:18px;margin-bottom:6px;overflow:hidden;}
   .tl-axis-tick{position:absolute;top:0;font-size:10px;color:var(--muted2);white-space:nowrap;border-left:1px solid var(--border);padding-left:4px;height:100%;}
   .tl-axis-today{position:absolute;top:0;transform:translateX(-50%);font-size:9px;font-weight:700;letter-spacing:1px;color:var(--accent);white-space:nowrap;}
 
   .tl-bands{margin-bottom:6px;}
-  .tl-band{position:relative;height:20px;margin-bottom:3px;}
+  .tl-band{position:relative;height:20px;margin-bottom:3px;overflow:hidden;}
   .tl-band-bar{position:absolute;top:6px;height:8px;border-radius:4px;background:var(--border-strong);opacity:0.45;}
   .tl-band.is-active .tl-band-bar{background:var(--accent);opacity:0.55;}
   .tl-band-label{position:absolute;top:2px;font-size:10px;font-weight:700;letter-spacing:0.5px;color:var(--muted2);white-space:nowrap;padding-left:5px;pointer-events:none;}
   .tl-band.is-active .tl-band-label{color:var(--text);}
 
-  .tl-msrow{position:relative;height:15px;margin-bottom:4px;}
+  .tl-msrow{position:relative;height:15px;margin-bottom:4px;overflow:hidden;}
   .tl-ms{position:absolute;top:0;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;}
   .tl-ms-dot{width:7px;height:7px;background:var(--accent4);transform:rotate(45deg);display:block;}
   .tl-ms-txt{display:none;}
@@ -155,7 +163,7 @@
   .tl-lane-sub{font-size:10.5px;color:var(--muted2);font-family:var(--font-mono);margin-left:auto;white-space:nowrap;}
   .tl-caret{font-size:10px;color:var(--muted);flex-shrink:0;}
 
-  .tl-track{position:relative;height:22px;}
+  .tl-track{position:relative;height:22px;overflow:hidden;}
   .tl-track.is-open{height:46px;}
   .tl-grid{position:absolute;inset:0;pointer-events:none;}
   .tl-grid-week{position:absolute;top:0;bottom:0;width:1px;background:var(--border);opacity:0.6;}
@@ -164,7 +172,7 @@
   .tl-slot{position:absolute;top:0;bottom:0;display:flex;align-items:center;justify-content:center;cursor:pointer;}
   .tl-mark{flex-shrink:0;box-sizing:border-box;}
   .tl-mark-lbl{position:absolute;top:-1px;font-size:9px;font-family:var(--font-mono);color:var(--muted2);white-space:nowrap;pointer-events:none;}
-  .tl-addrow{position:relative;height:24px;margin-top:2px;}
+  .tl-addrow{position:relative;height:24px;margin-top:2px;overflow:hidden;}
   .tl-plus{position:absolute;top:1px;transform:translateX(-50%);width:22px;height:22px;border-radius:50%;background:var(--accent);color:#000;font-size:16px;font-weight:800;line-height:21px;text-align:center;cursor:pointer;}
 
   .tl-lane-foot{padding:5px 2px 0;}
