@@ -2,8 +2,9 @@
 // Replaces the old vertical milestone list. The tab now answers "what have I
 // actually been on, and when" in one screen: colour-coded compound lanes laid
 // across a scrollable date window, ordered Anabolics → Peptides → Supplements
-// (design spec §3, "Visual Hierarchy"), with the cycles they belong to drawn as
-// bands above them.
+// (design spec §3, "Visual Hierarchy"). Every cycle is shown, always — there is
+// deliberately no protocol filter and nothing drawn above the lanes; the lanes
+// are the content, and each one names its owning protocol when expanded.
 //
 // Two things separate this from every other tab:
 //  1. It reads the WHOLE record, not the active protocol. refreshInjectionsCache
@@ -38,7 +39,6 @@ function _tlWhatThisMeans(wk,total,daysDone,totalDays){
 var _tlWin=28;            // days visible in the window
 var _tlAnchor=null;       // Date — first day of the window (local midnight)
 var _tlOpen={};           // laneKey → true when the lane is expanded
-var _tlProto='all';       // protocol filter: 'all' | owner id
 var _tlRows=null;         // raw injection rows for the loaded span
 var _tlSpan=null;         // {from:Date,to:Date} currently loaded
 var _tlState='idle';      // idle | loading | ready
@@ -198,7 +198,6 @@ function _tlBuildLanes(from,to){
     if(!e||!e.date)return;
     if(e.date<fromK||e.date>toK)return;
     var owner=_tlOwnerId(e);
-    if(_tlProto!=='all'&&owner!==_tlProto)return;
     var tier=e.tier||'peptide';
     var key=tier+'|'+(e.compound_id||e.compound_name||'?');
     var L=lane(key,{key:key,name:e.compound_name||e.compound_id||'Compound',
@@ -214,7 +213,7 @@ function _tlBuildLanes(from,to){
     day.entries.push(e);
   });
   // Supplements come from the regimen + its own taken-log, not /injections.
-  if(_tlProto==='all'&&typeof _supplements!=='undefined'&&_supplements&&_supplements.length&&typeof _suppActiveOn==='function'){
+  if(typeof _supplements!=='undefined'&&_supplements&&_supplements.length&&typeof _suppActiveOn==='function'){
     var nDays=_tlDiff(to,from)+1;
     (_supplements||[]).forEach(function(s){
       if(!s)return;
@@ -280,7 +279,6 @@ function _tlSetWin(n){
   _tlLoad();
   buildTimeline();
 }
-function _tlSetProto(id){_tlProto=id;buildTimeline();}
 function _tlToggleLane(key){if(_tlOpen[key])delete _tlOpen[key];else _tlOpen[key]=true;_tlPaint()||buildTimeline();}
 
 // ── rendering ────────────────────────────────────────────────────────────────
@@ -327,60 +325,12 @@ function _tlGrid(from,n){
   return h+'</div>';
 }
 
-// Cycle bands — each protocol drawn across the days it covers (spec §4.1 header
-// context). Clipped to the window, so a cycle that started last spring still
-// shows as a band running off both edges.
-function _tlBands(from,n){
-  var stacks=((typeof _userStacks!=='undefined'&&_userStacks)||[]);
-  var B=_tlBleed(n);
-  var winFrom=_tlAdd(from,-B),winTo=_tlAdd(from,n-1+B),rows=[];
-  stacks.forEach(function(st,idx){
-    if(!st||!st.cycle_start)return;
-    var id=_tlStackId(st);
-    if(_tlProto!=='all'&&_tlProto!==id)return;
-    var s=parseLocalDate(st.cycle_start);
-    var e=st.cycle_length?_tlAdd(s,st.cycle_length*7-1):_tlAdd(NOW,365);
-    if(e<winFrom||s>winTo)return;
-    var a=Math.max(-B,_tlDiff(s,from)),b=Math.min(n-1+B,_tlDiff(e,from));
-    var active=((typeof _activeStackIndices!=='undefined'&&_activeStackIndices)||[]).indexOf(idx)>=0;
-    var wk=Math.floor(_tlDiff(NOW,s)/7)+1;
-    var label=(st.name||('Protocol '+(idx+1)));
-    if(st.cycle_length&&wk>=1&&wk<=st.cycle_length)label+=' · Wk '+wk+'/'+st.cycle_length;
-    else if(!st.cycle_length)label+=' · continuous';
-    rows.push('<div class="tl-band'+(active?' is-active':'')+'"><div class="tl-strip">'+
-      '<div class="tl-band-bar" style="left:'+_tlX(a,n)+'%;width:'+_tlPct(b-a+1,n)+'%"></div>'+
-      '<div class="tl-band-label" style="left:'+_tlX(Math.max(a,0),n)+'%">'+_tlEsc(label)+'</div></div></div>');
-  });
-  return rows.length?'<div class="tl-bands">'+rows.join('')+'</div>':'';
-}
-
-// Milestones kept from the old tab, re-cast as markers on the same date axis —
-// cycle starts, cycle ends, the day a peptide joined the protocol.
-function _tlMilestones(from,n){
-  var all=((typeof MILESTONES!=='undefined'&&MILESTONES)||[]).slice();
-  var stacks=((typeof _userStacks!=='undefined'&&_userStacks)||[]);
-  stacks.forEach(function(st,idx){
-    if(!st||!st.cycle_start)return;
-    var id=_tlStackId(st);
-    if(_tlProto!=='all'&&_tlProto!==id)return;
-    var sd=parseLocalDate(st.cycle_start);
-    all.push({date:sd,name:(st.name||'Protocol '+(idx+1))+' starts',desc:'Cycle start'});
-    if(st.cycle_length)all.push({date:_tlAdd(sd,st.cycle_length*7),name:(st.name||'Protocol '+(idx+1))+' ends',desc:'Week '+st.cycle_length+' — cycle complete'});
-    (st.peptides||[]).forEach(function(p){
-      if(!p||!p.start_date||p.start_date===st.cycle_start)return;
-      all.push({date:parseLocalDate(p.start_date),name:(p.name||p.id)+' added',desc:'Added to protocol'});
-    });
-  });
-  var B=_tlBleed(n),winFrom=_tlAdd(from,-B),winTo=_tlAdd(from,n-1+B),out=[];
-  all.forEach(function(m){
-    if(!m||!m.date)return;
-    var d=_tl0(m.date);
-    if(d<winFrom||d>winTo)return;
-    var i=_tlDiff(d,from);
-    out.push('<div class="tl-ms" style="left:'+_tlX(i+0.5,n)+'%" title="'+_tlEsc(m.name+' — '+(m.desc||''))+'"><span class="tl-ms-dot"></span><span class="tl-ms-txt">'+_tlEsc(m.name)+'</span></div>');
-  });
-  return out.length?'<div class="tl-msrow"><div class="tl-strip">'+out.join('')+'</div></div>':'';
-}
+// The cycle bands and the milestone diamonds that used to sit here are gone
+// (Henrik, 2026-08-30: "the top part showing protocol and weird milestones
+// should be removed they just waste space"). They cost three or four rows above
+// every lane to restate what the header already says, and the milestone
+// diamonds were unlabelled — a row of shapes you could not read. The lanes
+// themselves are the content; anything above them pushes the content down.
 
 // One lane's track. Marks are absolutely positioned by day index so blocks and
 // dots share the same geometry and stay aligned with the axis at every window
@@ -501,7 +451,7 @@ function _tlPaint(){
   _tlMarks={};
   var from=_tlAnchorDate(),n=_tlWin,B=_tlBleed(n);
   var lanes=_tlBuildLanes(_tlAdd(from,-B),_tlAdd(from,n-1+B));
-  var h=_tlAxis(from,n)+_tlBands(from,n)+_tlMilestones(from,n);
+  var h=_tlAxis(from,n);
   if(!lanes.length){
     h+='<div class="tl-blank">Nothing in this date range.<br>'+
        '<button class="tl-chip" onclick="_tlGoToday()" style="margin-top:10px">Jump to today</button></div>';
@@ -542,32 +492,17 @@ function buildTimeline(){
   if(_tlState==='idle'&&(typeof _currentTab==='undefined'||_currentTab==='timeline')){_tlLoad();}
   var from=_tlViewFrom(),n=_tlWin,to=_tlAdd(from,n-1);
 
-  // ── header: date navigator + window sizes + protocol filter ───────────────
+  // ── header: date navigator + window sizes ────────────────────────────────
   var rangeLabel=_tlShortDate(from)+' – '+_tlShortDate(to)+' '+to.getFullYear();
   var winBtns=_TL_WINDOWS.map(function(w){
     return '<button class="tl-chip'+(_tlWin===w.d?' is-on':'')+'" onclick="_tlSetWin('+w.d+')">'+w.l+'</button>';
   }).join('');
-  var owners=['all'];
-  ((typeof _userStacks!=='undefined'&&_userStacks)||[]).forEach(function(st){
-    var id=_tlStackId(st);
-    if(id&&owners.indexOf(id)<0)owners.push(id);
-  });
-  (_tlRows||[]).forEach(function(e){
-    var id=_tlOwnerId(e);
-    if(owners.indexOf(id)<0)owners.push(id);
-  });
-  var protoBtns=owners.length>2?('<div class="tl-chiprow">'+owners.map(function(id){
-    var label=id==='all'?'All':_tlOwnerName(id);
-    return '<button class="tl-chip'+(_tlProto===id?' is-on':'')+'" onclick="_tlSetProto(\''+_tlEsc(id)+'\')">'+_tlEsc(label)+'</button>';
-  }).join('')+'</div>'):'';
-
   var head='<div class="card"><div class="tl-nav">'+
     '<button class="tl-arrow" onclick="_tlShift(-1)" aria-label="Earlier">‹</button>'+
     '<div class="tl-range"><div class="tl-range-main">'+_tlEsc(rangeLabel)+'</div>'+
     '<div class="tl-range-sub">'+_tlEsc(_tlHeadSub())+'</div></div>'+
     '<button class="tl-arrow" onclick="_tlShift(1)" aria-label="Later">›</button></div>'+
-    '<div class="tl-chiprow">'+winBtns+'<button class="tl-chip tl-today-btn" onclick="_tlGoToday()">Today</button></div>'+
-    protoBtns+'</div>';
+    '<div class="tl-chiprow">'+winBtns+'<button class="tl-chip tl-today-btn" onclick="_tlGoToday()">Today</button></div></div>';
 
   // ── cycle progress + "what this means", carried over from the old tab ──────
   var prog=_tlProgressCard();
@@ -605,7 +540,6 @@ function buildTimeline(){
 // Sub-label under the date range: the active cycle's week, matching Today's
 // header wording, or the filter in force.
 function _tlHeadSub(){
-  if(_tlProto!=='all')return _tlOwnerName(_tlProto);
   var st=((typeof _userStacks!=='undefined'&&_userStacks)||[])[((typeof _activeStackIndices!=='undefined'&&_activeStackIndices)||[])[0]];
   if(st&&st.cycle_start){
     var sd=parseLocalDate(st.cycle_start);

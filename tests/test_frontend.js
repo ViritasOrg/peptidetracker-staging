@@ -11315,6 +11315,7 @@ if (typeof G._blBuildLines === 'function') {
     // NOW is a top-level `const` in index.html, so it is NOT a sandbox property —
     // reading G.NOW gives undefined and every date below silently becomes NaN.
     var _tlNow = new Date();
+    var _tlSrc = fs.readFileSync(path.join(__dirname, '../tab-timeline.js'), 'utf8');
     var _tlD = function(n){ return G.dateKey(G._tlAdd(_tlNow, n)); };
     var _tlFrom = G._tlAdd(_tlNow, -7), _tlN = 28, _tlTo = G._tlAdd(_tlFrom, _tlN - 1);
 
@@ -11353,11 +11354,12 @@ if (typeof G._blBuildLines === 'function') {
       G._tlOwnerId({cycle_id:'tcalc:stk1'}) === 'stk1' &&
       G._tlOwnerName('_manual') === 'Logged manually');
 
-    // Filtering to one protocol hides the others' lanes entirely.
-    G._tlProto = 'stk1';
-    check('timeline: the protocol filter drops other cycles',
-      G._tlBuildLanes(_tlFrom, _tlTo).length === 3);
-    G._tlProto = 'all';
+    // ⚠️ NO PROTOCOL FILTER. Removed on request (2026-08-30) along with the chip
+    // row that drove it: the tab shows every cycle, always, and an archived
+    // protocol's lanes are part of the history rather than something to filter
+    // out. Ownership is still named — on the expanded lane and in the dose sheet.
+    check('timeline: shows every cycle, with no filter to switch between them',
+      _tlSrc.indexOf('_tlProto') === -1 && _tlSrc.indexOf('_tlSetProto') === -1);
 
     // Week numbers come from the owning protocol's start, so "Wk 4" here means
     // the same week every other tab calls week 4.
@@ -11392,10 +11394,15 @@ if (typeof G._blBuildLines === 'function') {
     check('timeline: supplements are dotted lanes in their own group',
       G._tlLaneStyle('supplement') === 'dots' && G._tlGroupOf('supplement') === 'supplements');
 
-    var _bands = G._tlBands(_tlFrom, _tlN);
-    check('timeline: the owning cycle is drawn as a band over the lanes',
-      _bands.indexOf('tl-band-bar') > -1 && _bands.indexOf('Blast 1') > -1);
-    check('  …and an active cycle is marked as such', _bands.indexOf('is-active') > -1);
+    // ⚠️ NOTHING IS DRAWN ABOVE THE LANES except the date axis. The cycle bands
+    // and the unlabelled milestone diamonds were removed on request (2026-08-30,
+    // "they just waste space") — they cost three or four rows restating what the
+    // header already says, above the content people came for.
+    check('timeline: nothing but the axis sits above the lanes',
+      typeof G._tlBands === 'undefined' && typeof G._tlMilestones === 'undefined' &&
+      _tlSrc.indexOf('tl-band') === -1 && _tlSrc.indexOf('tl-msrow') === -1);
+    check('  …and their styles went with them',
+      !/\.tl-band|\.tl-msrow|\.tl-ms-dot/.test(fs.readFileSync(path.join(__dirname,'../css/main.css'),'utf8')));
 
     // A supplement lane is built from the regimen + its taken-log, not /injections.
     G._supplements = [{ supp_id:'creatine', name:'Creatine', dose:'5 g', freq:'daily', timing:'AM',
