@@ -41,6 +41,8 @@ var _tlRows=null;         // raw injection rows for the loaded span
 var _tlSpan=null;         // {from:Date,to:Date} currently loaded
 var _tlState='idle';      // idle | loading | ready
 var _tlMarks={};          // markKey → {lane,dk} for the tap handlers
+var _tlOff=0;             // fractional day offset into the window — the drag lives here
+var _tlDragEndedAt=0;     // ms timestamp of the last pan, to swallow its trailing click
 
 var _TL_WINDOWS=[{d:14,l:'2W'},{d:28,l:'4W'},{d:56,l:'8W'},{d:84,l:'12W'}];
 // Supplements carry no colour of their own (the catalogue is a plain list), so a
@@ -217,53 +219,80 @@ function _tlBuildLanes(from,to){
 }
 
 // ── window helpers ───────────────────────────────────────────────────────────
+// The window is anchored on a whole day plus a FRACTIONAL offset. The fraction is
+// what makes the drag continuous: without it the smallest move the view could
+// make was a whole day (four pixels at 12W, twenty-five at 2W), so the stack
+// stepped instead of following the finger.
 function _tlAnchorDate(){
   if(!_tlAnchor)_tlAnchor=_tlAdd(NOW,-Math.floor(_tlWin*0.6));
   return _tlAnchor;
 }
+// Days rendered either side of the window. The drag translates the already-drawn
+// strip, so this is how far a finger can travel before anything has to be
+// repainted — half a window, which covers all but the longest flicks in one go.
+function _tlBleed(n){return Math.max(2,Math.ceil(n/2));}
+// Fold whole days out of the fraction and into the anchor, so _tlOff stays in
+// [0,1) and every date index below is an ordinary integer again.
+function _tlNormalise(){
+  var k=Math.floor(_tlOff);
+  if(k){_tlAnchor=_tlAdd(_tlAnchorDate(),k);_tlOff-=k;}
+}
+// First day actually on screen, for labels and summaries.
+function _tlViewFrom(){return _tlAdd(_tlAnchorDate(),Math.round(_tlOff));}
 function _tlShift(pages){_tlAnchor=_tlAdd(_tlAnchorDate(),Math.round(pages*_tlWin));_tlLoad();buildTimeline();}
-function _tlGoToday(){_tlAnchor=_tlAdd(NOW,-Math.floor(_tlWin*0.6));buildTimeline();}
+function _tlGoToday(){_tlAnchor=_tlAdd(NOW,-Math.floor(_tlWin*0.6));_tlOff=0;buildTimeline();}
 function _tlSetWin(n){
-  var mid=_tlAdd(_tlAnchorDate(),Math.floor(_tlWin/2));
+  var mid=_tlAdd(_tlViewFrom(),Math.floor(_tlWin/2));
   _tlWin=n;
   _tlAnchor=_tlAdd(mid,-Math.floor(n/2));
+  _tlOff=0;
   _tlLoad();
   buildTimeline();
 }
 function _tlSetProto(id){_tlProto=id;buildTimeline();}
-function _tlToggleLane(key){if(_tlOpen[key])delete _tlOpen[key];else _tlOpen[key]=true;buildTimeline();}
+function _tlToggleLane(key){if(_tlOpen[key])delete _tlOpen[key];else _tlOpen[key]=true;_tlPaint()||buildTimeline();}
 
 // ── rendering ────────────────────────────────────────────────────────────────
 function _tlPct(i,n){return (i/n*100);}
+// Horizontal position of day index i (counted from the anchor), in percent of the
+// window. The fractional offset is subtracted here and nowhere else.
+function _tlX(i,n){return _tlPct(i-_tlOff,n);}
 
 // The date axis: a tick and a label at each week boundary, plus TODAY. Labelling
 // every column is unreadable past a fortnight, and week boundaries are what a
 // cycle is actually counted in.
 function _tlAxis(from,n){
-  var h='<div class="tl-axis">';
-  var ti=_tlDiff(NOW,from),hasToday=ti>=0&&ti<n;
+  var B=_tlBleed(n);
+  var h='<div class="tl-axis"><div class="tl-strip">';
+  var ti=_tlDiff(NOW,from),hasToday=ti>=-B&&ti<n+B;
   // Every week gets a tick, but at most five get a date on them — twelve weeks of
   // "17 Jul 24 Jul 31 Jul…" printed over each other is worse than no labels.
   var every=Math.max(1,Math.ceil(n/7/5))*7;
-  for(var i=0;i<n;i+=7){
+  var first=-Math.ceil(B/7)*7;
+  for(var i=first;i<n+B;i+=7){
     var d=_tlAdd(from,i);
     // The TODAY flag wins the space it needs: a week label landing under it
     // keeps its tick but drops its text, rather than printing the two on top of
     // each other.
-    var show=(i%every===0)&&!(hasToday&&Math.abs(i-ti)<=Math.max(2,every/4));
-    h+='<div class="tl-axis-tick" style="left:'+_tlPct(i,n)+'%">'+(show?'<span>'+_tlEsc(_tlShortDate(d))+'</span>':'')+'</div>';
+    var show=((i%every)+every)%every===0&&!(hasToday&&Math.abs(i-ti)<=Math.max(2,every/4));
+    h+='<div class="tl-axis-tick" style="left:'+_tlX(i,n)+'%">'+(show?'<span>'+_tlEsc(_tlShortDate(d))+'</span>':'')+'</div>';
   }
-  if(hasToday)h+='<div class="tl-axis-today" style="left:'+_tlPct(ti+0.5,n)+'%">TODAY</div>';
-  return h+'</div>';
+  if(hasToday)h+='<div class="tl-axis-today" style="left:'+_tlX(ti+0.5,n)+'%">TODAY</div>';
+  return h+'</div></div>';
 }
 
 // Vertical rules shared by every lane: a hairline at each week boundary and the
 // today line, so a mark can be read off against a date without counting columns.
 function _tlGrid(from,n){
+  var B=_tlBleed(n);
   var h='<div class="tl-grid">';
-  for(var i=7;i<n;i+=7)h+='<div class="tl-grid-week" style="left:'+_tlPct(i,n)+'%"></div>';
+  var first=-Math.ceil(B/7)*7;
+  for(var i=first;i<n+B;i+=7){
+    if(i===0)continue;
+    h+='<div class="tl-grid-week" style="left:'+_tlX(i,n)+'%"></div>';
+  }
   var ti=_tlDiff(NOW,from);
-  if(ti>=0&&ti<n)h+='<div class="tl-grid-today" style="left:'+_tlPct(ti+0.5,n)+'%"></div>';
+  if(ti>=-B&&ti<n+B)h+='<div class="tl-grid-today" style="left:'+_tlX(ti+0.5,n)+'%"></div>';
   return h+'</div>';
 }
 
@@ -272,23 +301,24 @@ function _tlGrid(from,n){
 // shows as a band running off both edges.
 function _tlBands(from,n){
   var stacks=((typeof _userStacks!=='undefined'&&_userStacks)||[]);
-  var to=_tlAdd(from,n-1),rows=[];
+  var B=_tlBleed(n);
+  var winFrom=_tlAdd(from,-B),winTo=_tlAdd(from,n-1+B),rows=[];
   stacks.forEach(function(st,idx){
     if(!st||!st.cycle_start)return;
     var id=_tlStackId(st);
     if(_tlProto!=='all'&&_tlProto!==id)return;
     var s=parseLocalDate(st.cycle_start);
     var e=st.cycle_length?_tlAdd(s,st.cycle_length*7-1):_tlAdd(NOW,365);
-    if(e<from||s>to)return;
-    var a=Math.max(0,_tlDiff(s,from)),b=Math.min(n-1,_tlDiff(e,from));
+    if(e<winFrom||s>winTo)return;
+    var a=Math.max(-B,_tlDiff(s,from)),b=Math.min(n-1+B,_tlDiff(e,from));
     var active=((typeof _activeStackIndices!=='undefined'&&_activeStackIndices)||[]).indexOf(idx)>=0;
     var wk=Math.floor(_tlDiff(NOW,s)/7)+1;
     var label=(st.name||('Protocol '+(idx+1)));
     if(st.cycle_length&&wk>=1&&wk<=st.cycle_length)label+=' · Wk '+wk+'/'+st.cycle_length;
     else if(!st.cycle_length)label+=' · continuous';
-    rows.push('<div class="tl-band'+(active?' is-active':'')+'">'+
-      '<div class="tl-band-bar" style="left:'+_tlPct(a,n)+'%;width:'+_tlPct(b-a+1,n)+'%"></div>'+
-      '<div class="tl-band-label" style="left:'+_tlPct(a,n)+'%">'+_tlEsc(label)+'</div></div>');
+    rows.push('<div class="tl-band'+(active?' is-active':'')+'"><div class="tl-strip">'+
+      '<div class="tl-band-bar" style="left:'+_tlX(a,n)+'%;width:'+_tlPct(b-a+1,n)+'%"></div>'+
+      '<div class="tl-band-label" style="left:'+_tlX(Math.max(a,0),n)+'%">'+_tlEsc(label)+'</div></div></div>');
   });
   return rows.length?'<div class="tl-bands">'+rows.join('')+'</div>':'';
 }
@@ -310,15 +340,15 @@ function _tlMilestones(from,n){
       all.push({date:parseLocalDate(p.start_date),name:(p.name||p.id)+' added',desc:'Added to protocol'});
     });
   });
-  var to=_tlAdd(from,n-1),out=[];
+  var B=_tlBleed(n),winFrom=_tlAdd(from,-B),winTo=_tlAdd(from,n-1+B),out=[];
   all.forEach(function(m){
     if(!m||!m.date)return;
     var d=_tl0(m.date);
-    if(d<from||d>to)return;
+    if(d<winFrom||d>winTo)return;
     var i=_tlDiff(d,from);
-    out.push('<div class="tl-ms" style="left:'+_tlPct(i+0.5,n)+'%" title="'+_tlEsc(m.name+' — '+(m.desc||''))+'"><span class="tl-ms-dot"></span><span class="tl-ms-txt">'+_tlEsc(m.name)+'</span></div>');
+    out.push('<div class="tl-ms" style="left:'+_tlX(i+0.5,n)+'%" title="'+_tlEsc(m.name+' — '+(m.desc||''))+'"><span class="tl-ms-dot"></span><span class="tl-ms-txt">'+_tlEsc(m.name)+'</span></div>');
   });
-  return out.length?'<div class="tl-msrow">'+out.join('')+'</div>':'';
+  return out.length?'<div class="tl-msrow"><div class="tl-strip">'+out.join('')+'</div></div>':'';
 }
 
 // One lane's track. Marks are absolutely positioned by day index so blocks and
@@ -326,22 +356,23 @@ function _tlMilestones(from,n){
 // size; the mark itself is centred in its day column, which is what keeps a
 // 12-week view legible when a column is four pixels wide.
 function _tlTrack(L,from,n,expanded){
+  var B=_tlBleed(n);
   var dotPx=n<=14?11:(n<=28?9:(n<=56?7:5));
-  var h='<div class="tl-track'+(expanded?' is-open':'')+'">'+_tlGrid(from,n);
+  var h='<div class="tl-track'+(expanded?' is-open':'')+'"><div class="tl-strip">'+_tlGrid(from,n);
   if(L.style==='dots'){
     // The continuous line the daily dots sit on (spec §4.3), drawn only across
     // the stretch the compound is actually in the protocol.
     var keys=Object.keys(L.days).sort();
     if(keys.length){
-      var a=Math.max(0,_tlDiff(parseLocalDate(keys[0]),from));
-      var b=Math.min(n-1,_tlDiff(parseLocalDate(keys[keys.length-1]),from));
-      if(b>=a)h+='<div class="tl-baseline" style="left:'+_tlPct(a+0.5,n)+'%;width:'+_tlPct(b-a,n)+'%;background:'+L.color+'"></div>';
+      var a=Math.max(-B,_tlDiff(parseLocalDate(keys[0]),from));
+      var b=Math.min(n-1+B,_tlDiff(parseLocalDate(keys[keys.length-1]),from));
+      if(b>=a)h+='<div class="tl-baseline" style="left:'+_tlX(a+0.5,n)+'%;width:'+_tlPct(b-a,n)+'%;background:'+L.color+'"></div>';
     }
   }
   Object.keys(L.days).forEach(function(dk){
     var day=L.days[dk];
     var i=_tlDiff(parseLocalDate(dk),from);
-    if(i<0||i>=n)return;
+    if(i<-B||i>=n+B)return;
     var all=day.n>0&&day.logged>=day.n,some=day.logged>0&&!all;
     var mk=L.key+'@'+dk;
     _tlMarks[mk]={lane:L.key,dk:dk};
@@ -353,10 +384,10 @@ function _tlTrack(L,from,n,expanded){
                  :('background:transparent;border:1.5px solid '+L.color+';'));
     var lbl='';
     if(expanded&&n<=14&&day.dose!==null)lbl='<span class="tl-mark-lbl">'+_tlEsc(_tlFmtNum(day.dose))+'</span>';
-    h+='<div class="tl-slot" style="left:'+_tlPct(i,n)+'%;width:'+_tlPct(1,n)+'%" onclick="_tlOpenDose(\''+_tlEsc(mk)+'\')">'+
+    h+='<div class="tl-slot" style="left:'+_tlX(i,n)+'%;width:'+_tlPct(1,n)+'%" onclick="_tlOpenDose(\''+_tlEsc(mk)+'\')">'+
        lbl+'<div class="tl-mark" style="'+sty+'"></div></div>';
   });
-  return h+'</div>';
+  return h+'</div></div>';
 }
 
 // The "+" entry point, aligned with the current day (spec §4.2). It sits in its
@@ -366,9 +397,9 @@ function _tlTrack(L,from,n,expanded){
 // from its own sheet.
 function _tlAddRow(L,from,n){
   if(L.tier==='supplement')return '';
-  var ti=_tlDiff(NOW,from);
-  if(ti<0||ti>=n)return '';
-  return '<div class="tl-addrow"><div class="tl-plus" style="left:'+_tlPct(ti+0.5,n)+'%" onclick="event.stopPropagation();_tlAddDose(\''+_tlEsc(L.key)+'\')" title="Log a dose">+</div></div>';
+  var B=_tlBleed(n),ti=_tlDiff(NOW,from);
+  if(ti<-B||ti>=n+B)return '';
+  return '<div class="tl-addrow"><div class="tl-strip"><div class="tl-plus" style="left:'+_tlX(ti+0.5,n)+'%" onclick="event.stopPropagation();_tlAddDose(\''+_tlEsc(L.key)+'\')" title="Log a dose">+</div></div></div>';
 }
 
 // Per-week totals for an expanded lane (spec §4.2, "Wk 4: 750mg"). Weeks are
@@ -400,8 +431,13 @@ function _tlWeekSummary(L,from,n){
 
 function _tlLaneHtml(L,from,n){
   var expanded=!!_tlOpen[L.key];
-  var doses=0,logged=0,total=0,unit=L.unit;
+  var B=_tlBleed(n),doses=0,logged=0,total=0,unit=L.unit;
+  // The lane summary counts what is ON SCREEN, not what was drawn: the bleed days
+  // exist only so the strip has something to slide in, and counting them would
+  // make "6/9 taken" disagree with the marks the user can actually see.
   Object.keys(L.days).forEach(function(dk){
+    var i=_tlDiff(parseLocalDate(dk),from);
+    if(i<0||i>=n)return;
     var day=L.days[dk];
     doses+=day.n;logged+=day.logged;
     if(day.dose!==null){total+=day.dose;if(day.unit)unit=day.unit;}
@@ -418,11 +454,51 @@ function _tlLaneHtml(L,from,n){
       '<span class="tl-caret">'+(expanded?'▾':'▸')+'</span>'+
     '</div>'+
     _tlTrack(L,from,n,expanded)+
-    (expanded?(_tlAddRow(L,from,n)+'<div class="tl-lane-foot">'+_tlWeekSummary(L,from,n)+(owners?'<div class="tl-ownrow">'+owners+'</div>':'')+'</div>'):'')+
+    (expanded?(_tlAddRow(L,from,n)+'<div class="tl-lane-foot">'+_tlWeekSummary(L,_tlViewFrom(),n)+(owners?'<div class="tl-ownrow">'+owners+'</div>':'')+'</div>'):'')+
   '</div>';
 }
 
 var _TL_GROUP_TITLES={anabolics:'Anabolics',peptides:'Peptides',supplements:'Supplements'};
+
+// Everything inside the scrolling canvas, repainted on its own. The drag commits
+// through here rather than through buildTimeline because a full rebuild replaces
+// the #tl-canvas element — and replacing the element the finger is currently on
+// tears its listeners out mid-gesture.
+function _tlPaint(){
+  var el=document.getElementById('tl-canvas');
+  if(!el)return false;
+  _tlMarks={};
+  var from=_tlAnchorDate(),n=_tlWin,B=_tlBleed(n);
+  var lanes=_tlBuildLanes(_tlAdd(from,-B),_tlAdd(from,n-1+B));
+  var h=_tlAxis(from,n)+_tlBands(from,n)+_tlMilestones(from,n);
+  if(!lanes.length){
+    h+='<div class="tl-blank">Nothing in this date range.<br>'+
+       '<button class="tl-chip" onclick="_tlGoToday()" style="margin-top:10px">Jump to today</button></div>';
+  }else{
+    var lastGroup='';
+    lanes.forEach(function(L){
+      if(L.group!==lastGroup){
+        lastGroup=L.group;
+        h+='<div class="tl-group">'+_tlEsc(_TL_GROUP_TITLES[L.group]||L.group)+'</div>';
+      }
+      h+=_tlLaneHtml(L,from,n);
+    });
+  }
+  el.innerHTML=h;
+  el.style.setProperty('--tlx','0px');
+  _tlSyncLabels();
+  return true;
+}
+
+// Date-range heading, refreshed without a repaint so it can follow the finger.
+function _tlSyncLabels(dayDelta){
+  var main=document.querySelector('.tl-range-main');
+  if(!main)return;
+  var f=_tlAdd(_tlAnchorDate(),Math.round(_tlOff-(dayDelta||0))),t=_tlAdd(f,_tlWin-1);
+  main.textContent=_tlShortDate(f)+' – '+_tlShortDate(t)+' '+t.getFullYear();
+  var sub=document.querySelector('.tl-range-sub');
+  if(sub)sub.textContent=_tlHeadSub();
+}
 
 function buildTimeline(){
   var body=document.getElementById('timeline-body');
@@ -433,9 +509,7 @@ function buildTimeline(){
   // sets _currentTab before it calls the builder), and the navigator's own
   // arrows/window buttons call _tlLoad directly from then on.
   if(_tlState==='idle'&&(typeof _currentTab==='undefined'||_currentTab==='timeline')){_tlLoad();}
-  _tlMarks={};
-  var from=_tlAnchorDate(),n=_tlWin,to=_tlAdd(from,n-1);
-  var lanes=_tlBuildLanes(from,to);
+  var from=_tlViewFrom(),n=_tlWin,to=_tlAdd(from,n-1);
 
   // ── header: date navigator + window sizes + protocol filter ───────────────
   var rangeLabel=_tlShortDate(from)+' – '+_tlShortDate(to)+' '+to.getFullYear();
@@ -467,47 +541,34 @@ function buildTimeline(){
   // ── cycle progress + "what this means", carried over from the old tab ──────
   var prog=_tlProgressCard();
 
-  if(_tlState!=='ready'&&!lanes.length){
+  var hasAny=(_tlRows&&_tlRows.length)||((typeof _supplements!=='undefined'&&_supplements)||[]).length;
+  if(_tlState!=='ready'&&!hasAny){
     body.innerHTML=head+prog+'<div class="card"><div class="tl-loading">Loading your history…</div></div>';
     return;
   }
-  if(!lanes.length){
+  // The big empty state is for having no history at all. A window that merely
+  // happens to be empty is handled inside the canvas by _tlPaint, so dragging
+  // past the end of your data does not rip the canvas out from under the finger.
+  if(!hasAny){
     var hasStk=!!((typeof _userStacks!=='undefined'&&_userStacks)&&_userStacks.length);
-    var inRange=(_tlRows&&_tlRows.length)||((typeof _supplements!=='undefined'&&_supplements)||[]).length;
     body.innerHTML=head+prog+'<div class="card"><div class="empty" style="padding:44px 20px;text-align:center"><div class="empty-icon">▤</div>'+
-      '<div style="font-size:15px;color:var(--text);font-weight:600;margin-bottom:6px">'+
-      (inRange?'Nothing in this date range':'No cycles to show yet')+'</div>'+
+      '<div style="font-size:15px;color:var(--text);font-weight:600;margin-bottom:6px">No cycles to show yet</div>'+
       '<div style="font-size:13px;color:var(--muted2);line-height:1.6;max-width:280px;margin:0 auto 20px">'+
-      (inRange
-        ? 'You have data outside this window — step back with ‹ or widen the range above.'
-        : (hasStk
-          ? 'Set a start date on your protocol in Plan and every dose it schedules will be drawn here.'
-          : 'Your cycles, doses and supplements appear here as colour-coded lanes once you start a protocol.'))+
+      (hasStk
+        ? 'Set a start date on your protocol in Plan and every dose it schedules will be drawn here.'
+        : 'Your cycles, doses and supplements appear here as colour-coded lanes once you start a protocol.')+
       '</div>'+
-      (inRange
-        ? '<button onclick="_tlGoToday()" style="background:var(--accent);color:#000;border:none;border-radius:20px;padding:10px 24px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Jump to today</button>'
-        : '<button onclick="'+(hasStk?'switchPrimary(\'plan\')':'createNewStack()')+'" style="background:var(--accent);color:#000;border:none;border-radius:20px;padding:10px 24px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">'+
-          (hasStk?'Go to Plan':'Start a protocol')+'</button>')+
+      '<button onclick="'+(hasStk?'switchPrimary(\'plan\')':'createNewStack()')+'" style="background:var(--accent);color:#000;border:none;border-radius:20px;padding:10px 24px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">'+
+      (hasStk?'Go to Plan':'Start a protocol')+'</button>'+
       '</div></div>';
     return;
   }
 
-  var canvas='<div class="card"><div class="tl-canvas" id="tl-canvas" data-noswipe="1">'+
-    _tlAxis(from,n)+_tlBands(from,n)+_tlMilestones(from,n);
-  var lastGroup='';
-  lanes.forEach(function(L){
-    if(L.group!==lastGroup){
-      lastGroup=L.group;
-      canvas+='<div class="tl-group">'+_tlEsc(_TL_GROUP_TITLES[L.group]||L.group)+'</div>';
-    }
-    canvas+=_tlLaneHtml(L,from,n);
-  });
-  canvas+='</div>'+
+  body.innerHTML=head+prog+'<div class="card"><div class="tl-canvas" id="tl-canvas" data-noswipe="1"></div>'+
     '<div class="tl-legend"><span><i class="tl-lg-fill"></i>Taken</span><span><i class="tl-lg-open"></i>Planned</span>'+
-    '<span><i class="tl-lg-today"></i>Today</span><span>Tap a lane to expand · swipe to move in time</span></div></div>';
-
-  body.innerHTML=head+prog+canvas;
-  _tlWireSwipe(document.getElementById('tl-canvas'));
+    '<span><i class="tl-lg-today"></i>Today</span><span>Tap a lane to expand · drag to move in time</span></div></div>';
+  _tlPaint();
+  _tlWireDrag(document.getElementById('tl-canvas'));
 }
 
 // Sub-label under the date range: the active cycle's week, matching Today's
@@ -544,39 +605,68 @@ function _tlProgressCard(){
     '<div style="font-size:13px;color:var(--text);line-height:1.5">'+_tlEsc(_tlWhatThisMeans(wk,active.cycle_length,raw,totalDays))+'</div></div></div></div>';
 }
 
-// ── swipe: drag the whole stack through time (spec §5) ───────────────────────
-// The canvas carries data-noswipe so the app's own left/right tab navigation
-// leaves it alone (_navNoSwipeZone) — inside the timeline a horizontal drag
-// means "move in time", everywhere else it still means "change tab".
-function _tlWireSwipe(el){
-  if(!el||el._tlSwipe)return;
-  el._tlSwipe=true;
-  var sx=0,sy=0,active=false,decided=false,locked=false;
-  el.addEventListener('touchstart',function(e){
-    if(!e.touches||e.touches.length!==1){active=false;return;}
-    sx=e.touches[0].clientX;sy=e.touches[0].clientY;active=true;decided=false;locked=false;
-  },{passive:true});
-  el.addEventListener('touchmove',function(e){
-    if(!active)return;
-    var t=e.touches&&e.touches[0];if(!t)return;
-    var dx=t.clientX-sx,dy=t.clientY-sy;
-    if(!decided){
-      if(Math.abs(dx)>8&&Math.abs(dx)>Math.abs(dy)*1.2){decided=true;locked=true;el.style.transition='none';}
-      else if(Math.abs(dy)>8){active=false;return;}
-      else return;
-    }
-    if(!locked)return;
-    e.preventDefault();
-    el.style.transform='translateX('+(dx*0.4)+'px)';
-  },{passive:false});
-  el.addEventListener('touchend',function(e){
-    var was=locked;active=false;decided=false;locked=false;
-    el.style.transform='';el.style.transition='';
-    if(!was)return;
-    var ch=e.changedTouches&&e.changedTouches[0];
-    var dx=ch?ch.clientX-sx:0;
-    if(Math.abs(dx)>50)_tlShift(dx<0?1:-1);
-  },{passive:true});
+// ── drag: the stack follows the finger, one pixel per pixel ──────────────────
+// Modelled on the T-Calc chart's pan (_tcAttachPanListeners): touch-action:pan-y
+// hands vertical scrolling to the browser, a horizontal move converts pixels
+// straight into data units, and the view updates on every move. The first cut
+// here instead waited for a 50px threshold and then jumped a whole window, which
+// is what made it feel like a stepper rather than a scroll.
+//
+// The difference from T-Calc is what gets updated. That chart is a canvas and
+// simply redraws; this is DOM, and re-serialising a dozen lanes on every
+// touchmove would drop frames. So the canvas draws half a window of extra days
+// either side (_tlBleed) and the move handler only writes --tlx, a single custom
+// property the lane strips translate by. A repaint happens when the finger has
+// travelled past that margin, and once more on release.
+function _tlWireDrag(el){
+  if(!el||el._tlDragWired)return;
+  el._tlDragWired=true;
+  var x0=null,y0=null,live=false,colPx=1,limitPx=0;
+  function begin(t){
+    x0=t.clientX;y0=t.clientY;live=false;
+    colPx=Math.max(1,(el.clientWidth||320)/_tlWin);
+    limitPx=_tlBleed(_tlWin)*colPx;
+  }
+  function move(e,t){
+    if(x0===null)return;
+    var dx=t.clientX-x0,dy=t.clientY-(y0||0);
+    // Vertical wins ties, exactly as on the T-Calc chart, so an ordinary scroll
+    // down the page is never captured as a pan.
+    if(!live){ if(Math.abs(dx)<=Math.abs(dy))return; live=true; }
+    if(e.preventDefault)e.preventDefault();
+    el.style.setProperty('--tlx',dx+'px');
+    _tlSyncLabels(dx/colPx);
+    if(Math.abs(dx)>limitPx){ _tlCommit(dx/colPx); x0=t.clientX; y0=t.clientY; }
+  }
+  function end(){
+    if(x0===null)return;
+    var moved=live;
+    x0=null;y0=null;live=false;
+    if(!moved)return;
+    var cur=parseFloat(el.style.getPropertyValue('--tlx'))||0;
+    _tlCommit(cur/colPx);
+    _tlDragEndedAt=Date.now();
+    _tlLoad();
+  }
+  el._tlTouchStart=function(e){ if(e.touches&&e.touches.length!==1){x0=null;return;} begin(e.touches?e.touches[0]:e); };
+  el._tlTouchMove =function(e){ move(e,e.touches?e.touches[0]:e); };
+  el._tlTouchEnd  =function(){ end(); };
+  el.addEventListener('touchstart',el._tlTouchStart,{passive:true});
+  el.addEventListener('touchmove', el._tlTouchMove, {passive:false});
+  el.addEventListener('touchend',  el._tlTouchEnd);
+  el.addEventListener('touchcancel',el._tlTouchEnd);
+  el.addEventListener('mousedown', function(e){ begin(e); });
+  el.addEventListener('mousemove', function(e){ if(e.buttons&1)move(e,e); });
+  el.addEventListener('mouseup',   function(){ end(); });
+  el.addEventListener('mouseleave',function(){ end(); });
+}
+
+// Fold a pixel drag, expressed in days, into the anchor and repaint in place.
+function _tlCommit(dayDelta){
+  if(!dayDelta)return;
+  _tlOff-=dayDelta;
+  _tlNormalise();
+  _tlPaint();
 }
 
 // ── dose sheet ───────────────────────────────────────────────────────────────
@@ -592,12 +682,16 @@ function _tlSheet(html){
 }
 
 function _tlFindLane(key,from,n){
-  var lanes=_tlBuildLanes(from,_tlAdd(from,n-1));
+  var B=_tlBleed(n);
+  var lanes=_tlBuildLanes(_tlAdd(from,-B),_tlAdd(from,n-1+B));
   for(var i=0;i<lanes.length;i++)if(lanes[i].key===key)return lanes[i];
   return null;
 }
 
 function _tlOpenDose(markKey){
+  // A drag that finishes over a mark still delivers a click on iOS. Without this
+  // every pan ended in a dose sheet.
+  if(Date.now()-_tlDragEndedAt<350)return;
   var m=_tlMarks[markKey];
   if(!m)return;
   var from=_tlAnchorDate(),n=_tlWin;
