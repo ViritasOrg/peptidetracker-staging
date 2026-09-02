@@ -5588,13 +5588,20 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
   {
     const ev=(js)=>vm.runInContext(js,sandbox);
     const svCache=G._injectionsCache, svStacks=ev('_userStacks.slice()'), svAct=ev('_activeStackIndices.slice()');
-    sandbox.__s=[{id:'p4',name:'Protocol 4',cycle_start:'2026-08-28',cycle_length:12,
+    // ⚠️ RELATIVE DATES, NOT LITERALS. All three rows have to be in the FUTURE:
+    // they are an unticked PLAN, and _tcProtocolInjections drops a past unticked
+    // row by design. Written as 2026-08-31/09-07/09-14, the first went stale on
+    // 2026-09-01 and this block began failing 3-vs-2 for the calendar rather than
+    // for the code. Derived from today so it cannot rot again.
+    const relD=(n)=>{ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()+n);
+      return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+    sandbox.__s=[{id:'p4',name:'Protocol 4',cycle_start:relD(-5),cycle_length:12,
       trt:{enabled:true,compounds:[{id:'enanthate',name:'Test E',dose:'125',unit:'mg',
         freqVal:1,freqUnit:'weeks',days:[1],active:true}]},enhanced:{}}];
     ev('_userStacks.length=0;__s.forEach(function(x){_userStacks.push(x);});');
     const cid=ev('_stackCycleId(_userStacks[0])');
     const cache={};
-    ['2026-08-31','2026-09-07','2026-09-14'].forEach(d=>{ cache[d]=[{cycle_id:cid,date:d,
+    [relD(1),relD(8),relD(15)].forEach(d=>{ cache[d]=[{cycle_id:cid,date:d,
       compound_id:'enanthate',tier:'trt',dose:'125',unit:'mg',active:true,logged:false}]; });
     G._injectionsCache=cache;
 
@@ -8127,6 +8134,15 @@ console.log('\n── T-Calc ← planned TRT protocol ────────�
 {
   if(typeof G._tcCurveLog==='function' && typeof G._tcProtocolInjections==='function'){
     var _svCache = G._injectionsCache, _svTcp = G._tcp;
+    // ⚠️ RELATIVE DATES, NOT LITERALS. This block's whole premise is that its rows
+    // are in the FUTURE — an unticked protocol row is a plan, and a plan is never
+    // in the past. They were written as 2026-09-01/02/08 and the clock reached
+    // them on 2026-09-02, at which point "a planned TRT injection reaches the
+    // curve" started failing for the calendar rather than for the code. Derived
+    // from today so it cannot rot again.
+    var _relD = function(n){ var d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()+n);
+      return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+    var _D1=_relD(1), _D2=_relD(2), _D8=_relD(8), _D30=_relD(-30);
     // Dates below are all in the FUTURE: an unticked protocol row is a plan, and a
     // plan is never in the past (2026-08-07). The logged history is emptied so this
     // block tests the plan/manual merge in isolation — the history layer has its own
@@ -8139,7 +8155,7 @@ console.log('\n── T-Calc ← planned TRT protocol ────────�
     // not orphan handling, so 'stack1' is registered as a real active protocol.
     var _svStacksP = vm.runInContext('_userStacks.slice()', sandbox);
     var _svActP    = vm.runInContext('_activeStackIndices.slice()', sandbox);
-    sandbox.__p1 = [{id:'stack1', name:'stack1', cycle_start:'2026-08-01', cycle_length:26,
+    sandbox.__p1 = [{id:'stack1', name:'stack1', cycle_start:_D30, cycle_length:26,
                      trt:{enabled:true,compounds:[]}, enhanced:{}}];
     vm.runInContext('_userStacks.length=0;__p1.forEach(function(x){_userStacks.push(x);});'
                     +'_activeStackIndices=[0];', sandbox);
@@ -8150,18 +8166,18 @@ console.log('\n── T-Calc ← planned TRT protocol ────────�
     };
     var P = function(o){ return Object.assign({tier:'trt',active:true,unit:'mg',cycle_id:'stack1'}, o); };
 
-    _setup({'2026-09-01':[P({compound_id:'enanthate',date:'2026-09-01',dose:'125'})]}, []);
+    _setup({[_D1]:[P({compound_id:'enanthate',date:_D1,dose:'125'})]}, []);
     check('a planned TRT injection reaches the curve', G._tcCurveLog().length === 1);
     check('  …carrying compound, dose and date', (function(){
       var e=G._tcCurveLog()[0];
-      return e.compId==='enanthate' && parseFloat(e.doseMg)===125 && e.date==='2026-09-01' && e.source==='protocol';
+      return e.compId==='enanthate' && parseFloat(e.doseMg)===125 && e.date===_D1 && e.source==='protocol';
     })());
 
     // THE RECORD WINS OVER THE PLAN, on the same compound and day. Phase 6 removed the
     // planner, so the record is the logged history rather than manualLog — the rule
     // itself is unchanged and is what stops a dose being counted twice.
-    _setup({'2026-09-01':[P({compound_id:'enanthate',date:'2026-09-01',dose:'125'})]}, []);
-    G._tcHistory = [{compId:'enanthate', doseMg:'150', date:'2026-09-01', source:'manual'}];
+    _setup({[_D1]:[P({compound_id:'enanthate',date:_D1,dose:'125'})]}, []);
+    G._tcHistory = [{compId:'enanthate', doseMg:'150', date:_D1, source:'manual'}];
     G._tcHistoryState = 'ready';
     var merged = G._tcCurveLog();
     check('same compound + day is NOT double-counted', merged.length === 1,
@@ -8171,8 +8187,8 @@ console.log('\n── T-Calc ← planned TRT protocol ────────�
       merged[0].doseMg + ' / ' + merged[0].source);
 
     // Different day → both kept
-    _setup({'2026-09-08':[P({compound_id:'enanthate',date:'2026-09-08',dose:'125'})]}, []);
-    G._tcHistory = [{compId:'enanthate', doseMg:'150', date:'2026-09-01', source:'manual'}];
+    _setup({[_D8]:[P({compound_id:'enanthate',date:_D8,dose:'125'})]}, []);
+    G._tcHistory = [{compId:'enanthate', doseMg:'150', date:_D1, source:'manual'}];
     G._tcHistoryState = 'ready';
     check('a planned dose on another day is kept alongside the record',
       G._tcCurveLog().length === 2);
@@ -8184,24 +8200,24 @@ console.log('\n── T-Calc ← planned TRT protocol ────────�
     // THE DOUBLE-COUNT TRAP: T-Calc pushes its own log into /injections under
     // cycle_id 'tcalc' / 'tcalc:<stackId>'. Reading those back would count every
     // T-Calc injection twice.
-    _setup({'2026-09-01':[P({compound_id:'enanthate',date:'2026-09-01',dose:'125',cycle_id:'tcalc'})]},
-           [{compId:'enanthate',doseMg:'125',date:'2026-09-01'}]);
+    _setup({[_D1]:[P({compound_id:'enanthate',date:_D1,dose:'125',cycle_id:'tcalc'})]},
+           [{compId:'enanthate',doseMg:'125',date:_D1}]);
     // Rows T-Calc pushed under its old 'tcalc' namespace stay excluded. The curve used
     // to still show the dose because manualLog supplied it; with the planner gone, an
     // excluded row simply is not on the curve — which is the stronger statement.
     check('T-Calc\'s own pushed entries are not read back (no self-double-count)',
       G._tcProtocolInjections().length === 0 && G._tcCurveLog().length === 0,
       'curve ' + G._tcCurveLog().length + ', protocol ' + G._tcProtocolInjections().length);
-    _setup({'2026-09-02':[P({compound_id:'enanthate',date:'2026-09-02',dose:'125',cycle_id:'tcalc:stack9'})]}, []);
+    _setup({[_D2]:[P({compound_id:'enanthate',date:_D2,dose:'125',cycle_id:'tcalc:stack9'})]}, []);
     check('the tcalc:<stackId> namespace is excluded too', G._tcProtocolInjections().length === 0);
 
     // Only TRT, only active, only mg — an unknown unit must be dropped, not assumed
-    _setup({'2026-09-01':[
-      P({compound_id:'bpc157',date:'2026-09-01',dose:'250',tier:'peptide'}),
-      P({compound_id:'deca',date:'2026-09-01',dose:'200',tier:'enhanced'}),
-      P({compound_id:'enanthate',date:'2026-09-01',dose:'125',active:false}),
-      P({compound_id:'cypionate',date:'2026-09-01',dose:'1',unit:'ml'}),
-      P({compound_id:'testoviron',date:'2026-09-01',dose:'0'})
+    _setup({[_D1]:[
+      P({compound_id:'bpc157',date:_D1,dose:'250',tier:'peptide'}),
+      P({compound_id:'deca',date:_D1,dose:'200',tier:'enhanced'}),
+      P({compound_id:'enanthate',date:_D1,dose:'125',active:false}),
+      P({compound_id:'cypionate',date:_D1,dose:'1',unit:'ml'}),
+      P({compound_id:'testoviron',date:_D1,dose:'0'})
     ]}, []);
     check('non-TRT tiers, inactive entries, non-mg units and zero doses are all excluded',
       G._tcProtocolInjections().length === 0, JSON.stringify(G._tcProtocolInjections()));
@@ -8214,8 +8230,8 @@ console.log('\n── T-Calc ← planned TRT protocol ────────�
       G._tcCurveLog().length === 1);
 
     // The manual log itself must not be mutated by any of this
-    var _manual = [{compId:'enanthate',doseMg:'150',date:'2026-09-01'}];
-    _setup({'2026-09-08':[P({compound_id:'enanthate',date:'2026-09-08',dose:'125'})]}, _manual);
+    var _manual = [{compId:'enanthate',doseMg:'150',date:_D1}];
+    _setup({[_D8]:[P({compound_id:'enanthate',date:_D8,dose:'125'})]}, _manual);
     G._tcCurveLog();
     check('the manual log is never written to by the merge',
       G._tcp.manualLog.length === 1 && G._tcp.manualLog[0].doseMg === '150');
@@ -11456,15 +11472,36 @@ if (typeof G._blBuildLines === 'function') {
     var _axis = G._tlAxis(_tlFrom, _tlN);
     var _ticks = (_axis.match(/tl-axis-tick/g) || []).length;
     var _labelled = (_axis.match(/<span>/g) || []).length;
-    check('timeline: the axis labels week boundaries and marks today',
+    check('timeline: the axis labels its boundaries and marks today',
       _ticks >= 4 && _labelled >= 1 && _axis.indexOf('TODAY') > -1);
     check('  …and draws past the window edges so the pan has something to slide in',
       _ticks > 4 && G._tlBleed(_tlN) >= 2);
-    // At twelve weeks a label on every week boundary prints "17 Jul 24 Jul 31 Jul"
-    // on top of itself, so labels thin out while the ticks stay.
-    var _axis12 = G._tlAxis(_tlFrom, 84);
-    check('  …and thins labels at the wide windows so they cannot collide',
-      (_axis12.match(/<span>/g) || []).length * 2 <= (_axis12.match(/tl-axis-tick/g) || []).length);
+
+    // ── The zooms are months now, not weeks (Henrik, 2026-08-30) ────────────
+    check('timeline: the zoom presets are 1/3/6/9 months',
+      JSON.stringify((G._TL_WINDOWS || []).map(function(w){ return w.l; })) ===
+        JSON.stringify(['1M','3M','6M','9M']) &&
+      JSON.stringify((G._TL_WINDOWS || []).map(function(w){ return w.d; })) ===
+        JSON.stringify([30,91,182,273]));
+    check('  …and the default window is one of them',
+      (G._TL_WINDOWS || []).some(function(w){ return w.d === G._tlWin; }));
+    // Ticks follow the zoom: week boundaries at 1M, real calendar-month starts
+    // beyond it. At 9M a rule every seven days would be one hairline per eight
+    // pixels, and the labels would promise weeks while the chips say months.
+    var _tk1 = G._tlTicks(_tlFrom, 30);
+    check('  …the 1M window still steps by week',
+      _tk1.length > 2 && _tk1.every(function(t,k){ return k === 0 || t.i - _tk1[k-1].i === 7; }));
+    [91, 182, 273].forEach(function(win){
+      var tk = G._tlTicks(_tlFrom, win);
+      check('  …the ' + (win === 91 ? '3M' : win === 182 ? '6M' : '9M') + ' window steps by calendar month',
+        tk.length > 2 && tk.every(function(t){ return G._tlAdd(_tlFrom, t.i).getDate() === 1; }),
+        tk.length ? JSON.stringify(tk.slice(0,3).map(function(t){ return t.label; })) : 'no ticks');
+    });
+    // However wide the window, at most a handful of labels land inside it.
+    var _axis9 = G._tlAxis(_tlFrom, 273);
+    check('  …and however wide it gets, the labels stay readable',
+      (_axis9.match(/<span>/g) || []).length <= 10 &&
+      (_axis9.match(/tl-axis-tick/g) || []).length > (_axis9.match(/<span>/g) || []).length);
 
     var _closed = G._tlTrack(_byKey['trt|test_e'], _tlFrom, _tlN, false);
     var _openTr = G._tlTrack(_byKey['trt|test_e'], _tlFrom, _tlN, true);
