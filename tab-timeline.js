@@ -37,7 +37,7 @@ function _tlWhatThisMeans(wk,total,daysDone,totalDays){
 }
 
 // ── view state ───────────────────────────────────────────────────────────────
-var _tlWin=28;            // days visible in the window
+var _tlWin=91;            // days visible in the window — the 3M preset
 var _tlAnchor=null;       // Date — first day of the window (local midnight)
 var _tlOpen={};           // laneKey → true when the lane is expanded
 var _tlRows=null;         // raw injection rows for the loaded span
@@ -48,7 +48,14 @@ var _tlOff=0;             // fractional day offset into the window — the drag 
 var _tlDragEndedAt=0;     // ms timestamp of the last pan, to swallow its trailing click
 var _tlGroupClosed=null;  // group key → true when collapsed; loaded from storage on first use
 
-var _TL_WINDOWS=[{d:14,l:'2W'},{d:28,l:'4W'},{d:56,l:'8W'},{d:84,l:'12W'}];
+// Months, not weeks (Henrik, 2026-08-30). 3/6/9M are whole numbers of weeks
+// (13/26/39) so a week boundary still lands cleanly; 1M is 30 days because
+// calling 28 days "1M" would be a lie on a screen that also draws real months.
+var _TL_WINDOWS=[{d:30,l:'1M'},{d:91,l:'3M'},{d:182,l:'6M'},{d:273,l:'9M'}];
+// Past a month on screen, week rules are noise — at 9M they would be one hairline
+// every eight pixels. The axis and the grid step by calendar month instead, which
+// is also what the zoom labels now promise.
+var _TL_MONTH_TICKS_FROM=32;
 // The app's testosterone red — the colour every TRT_CAT entry carries and the one
 // Today paints a tier-'trt' dose with.
 var _TL_TESTO_RED='#e05050';
@@ -426,22 +433,52 @@ function _tlX(i,n){return _tlPct(i-_tlOff,n);}
 // The date axis: a tick and a label at each week boundary, plus TODAY. Labelling
 // every column is unreadable past a fortnight, and week boundaries are what a
 // cycle is actually counted in.
+// The ticks the axis and the grid share, as day indices from the anchor, covering
+// the bleed either side. Week boundaries at the 1M window; the first of each
+// calendar month beyond it — months are uneven, so they are walked rather than
+// stepped, which is what makes a tick land on 1 Sep instead of 28 days after
+// whatever the window happens to start on.
+function _tlTicks(from,n){
+  var B=_tlBleed(n),lo=-B,hi=n+B,out=[];
+  if(n<_TL_MONTH_TICKS_FROM){
+    for(var i=Math.floor(lo/7)*7;i<hi;i+=7)if(i>=lo)out.push({i:i,label:_tlShortDate(_tlAdd(from,i))});
+    return out;
+  }
+  var d=_tlAdd(from,lo);
+  d=new Date(d.getFullYear(),d.getMonth(),1);
+  var guard=0;
+  while(guard++<200){
+    var i2=_tlDiff(d,from);
+    if(i2>=hi)break;
+    if(i2>=lo){
+      var lbl=d.toLocaleDateString('en-GB',{month:'short'});
+      if(d.getMonth()===0)lbl+=' '+String(d.getFullYear()).slice(2);
+      out.push({i:i2,label:lbl});
+    }
+    d=new Date(d.getFullYear(),d.getMonth()+1,1);
+  }
+  return out;
+}
+
 function _tlAxis(from,n){
   var B=_tlBleed(n);
   var h='<div class="tl-axis"><div class="tl-strip">';
   var ti=_tlDiff(NOW,from),hasToday=ti>=-B&&ti<n+B;
-  // Every week gets a tick, but at most five get a date on them — twelve weeks of
-  // "17 Jul 24 Jul 31 Jul…" printed over each other is worse than no labels.
-  var every=Math.max(1,Math.ceil(n/7/5))*7;
-  var first=-Math.ceil(B/7)*7;
-  for(var i=first;i<n+B;i+=7){
-    var d=_tlAdd(from,i);
-    // The TODAY flag wins the space it needs: a week label landing under it
-    // keeps its tick but drops its text, rather than printing the two on top of
-    // each other.
-    var show=((i%every)+every)%every===0&&!(hasToday&&Math.abs(i-ti)<=Math.max(2,every/4));
-    h+='<div class="tl-axis-tick" style="left:'+_tlX(i,n)+'%">'+(show?'<span>'+_tlEsc(_tlShortDate(d))+'</span>':'')+'</div>';
-  }
+  var ticks=_tlTicks(from,n);
+  // Every tick gets a rule, but at most five get text on them — nine months of
+  // labels printed over each other is worse than no labels.
+  var visible=ticks.filter(function(t){return t.i>=0&&t.i<n;}).length||1;
+  var every=Math.max(1,Math.ceil(visible/5));
+  // The TODAY flag wins the space it needs: a label landing under it keeps its
+  // tick but drops its text, rather than printing the two on top of each other.
+  // Measured in DAYS but sized from PIXELS — the flag is ~40px wide whatever the
+  // zoom, which is eight days at 1M and a month at 9M. Deriving it from the tick
+  // spacing instead let "Aug" print straight through "TODAY" at the wide windows.
+  var gap=Math.max(2,Math.round(n/8));
+  ticks.forEach(function(t,k){
+    var show=(k%every===0)&&!(hasToday&&Math.abs(t.i-ti)<=gap);
+    h+='<div class="tl-axis-tick" style="left:'+_tlX(t.i,n)+'%">'+(show?'<span>'+_tlEsc(t.label)+'</span>':'')+'</div>';
+  });
   if(hasToday)h+='<div class="tl-axis-today" style="left:'+_tlX(ti+0.5,n)+'%">TODAY</div>';
   return h+'</div></div>';
 }
@@ -451,11 +488,10 @@ function _tlAxis(from,n){
 function _tlGrid(from,n){
   var B=_tlBleed(n);
   var h='<div class="tl-grid">';
-  var first=-Math.ceil(B/7)*7;
-  for(var i=first;i<n+B;i+=7){
-    if(i===0)continue;
-    h+='<div class="tl-grid-week" style="left:'+_tlX(i,n)+'%"></div>';
-  }
+  _tlTicks(from,n).forEach(function(t){
+    if(t.i===0)return;
+    h+='<div class="tl-grid-week" style="left:'+_tlX(t.i,n)+'%"></div>';
+  });
   var ti=_tlDiff(NOW,from);
   if(ti>=-B&&ti<n+B)h+='<div class="tl-grid-today" style="left:'+_tlX(ti+0.5,n)+'%"></div>';
   return h+'</div>';
@@ -474,7 +510,9 @@ function _tlGrid(from,n){
 // 12-week view legible when a column is four pixels wide.
 function _tlTrack(L,from,n,expanded){
   var B=_tlBleed(n);
-  var dotPx=n<=14?11:(n<=28?9:(n<=56?7:5));
+  // A day column is ~11px at 1M and ~1.2px at 9M, so the mark has to come down
+  // with it or a daily compound draws as one smeared blob.
+  var dotPx=n<=30?9:(n<=91?6:(n<=182?4:3));
   var h='<div class="tl-track'+(expanded?' is-open':'')+'"><div class="tl-strip">'+_tlGrid(from,n);
   if(L.style==='dots'){
     // The continuous line the daily dots sit on (spec §4.3), drawn only across
@@ -499,10 +537,8 @@ function _tlTrack(L,from,n,expanded){
     sty+=all?('background:'+L.color+';border:1px solid '+L.color+';')
            :(some?('background:'+L.color+';opacity:0.55;border:1px solid '+L.color+';')
                  :('background:transparent;border:1.5px solid '+L.color+';'));
-    var lbl='';
-    if(expanded&&n<=14&&day.dose!==null)lbl='<span class="tl-mark-lbl">'+_tlEsc(_tlFmtNum(day.dose))+'</span>';
     h+='<div class="tl-slot" style="left:'+_tlX(i,n)+'%;width:'+_tlPct(1,n)+'%" onclick="_tlOpenDose(\''+_tlEsc(mk)+'\')">'+
-       lbl+'<div class="tl-mark" style="'+sty+'"></div></div>';
+       '<div class="tl-mark" style="'+sty+'"></div></div>';
   });
   return h+'</div></div>';
 }
@@ -510,27 +546,43 @@ function _tlTrack(L,from,n,expanded){
 // Per-week totals for an expanded lane (spec §4.2, "Wk 4: 750mg"). Weeks are
 // counted from the owning protocol's start where there is one, so the number
 // matches what every other tab calls week 4 — not an arbitrary window offset.
+// Totals for an expanded lane, one chip per period across the window.
+//
+// The period follows the zoom. Cycle weeks at 1M (spec §4.2, "Wk 4: 750mg" — the
+// number every other tab calls week 4, counted from the owning protocol's start).
+// Calendar months beyond it: nine months of weekly chips is thirty-nine of them
+// in a row nobody is going to scroll through, and at that zoom the question is
+// "how much in August", not "how much in week 27".
 function _tlWeekSummary(L,from,n){
   var base=null;
   var stacks=((typeof _userStacks!=='undefined'&&_userStacks)||[]);
   for(var s=0;s<stacks.length;s++){
     if(stacks[s]&&stacks[s].cycle_start&&L.owners[_tlStackId(stacks[s])]){base=parseLocalDate(stacks[s].cycle_start);break;}
   }
-  var out=[];
-  for(var i=0;i<n;i+=7){
-    var wFrom=_tlAdd(from,i),total=0,doses=0,unit=L.unit;
-    for(var k=0;k<7&&i+k<n;k++){
-      var day=L.days[dateKey(_tlAdd(from,i+k))];
-      if(!day)continue;
-      doses+=day.n;
-      if(day.dose!==null){total+=day.dose;if(day.unit)unit=day.unit;}
+  var byMonth=n>=_TL_MONTH_TICKS_FROM;
+  var buckets=[],index={};
+  for(var i=0;i<n;i++){
+    var d=_tlAdd(from,i),day=L.days[dateKey(d)];
+    if(!day||!day.n)continue;
+    var key,label;
+    if(byMonth){
+      key=d.getFullYear()+'-'+d.getMonth();
+      label=d.toLocaleDateString('en-GB',{month:'short'});
+    }else{
+      var wi=Math.floor(i/7),wFrom=_tlAdd(from,wi*7);
+      key='w'+wi;
+      var off=base?_tlDiff(wFrom,base):-1;
+      label=(base&&off>=0)?('Wk '+(Math.floor(off/7)+1)):_tlShortDate(wFrom);
     }
-    if(!doses)continue;
-    var off=base?_tlDiff(wFrom,base):-1;
-    var wkLabel=(base&&off>=0)?('Wk '+(Math.floor(off/7)+1)):_tlShortDate(wFrom);
-    var val=total>0?(_tlFmtNum(total)+' '+_tlUnit(unit)):(doses+' dose'+(doses===1?'':'s'));
-    out.push('<span class="tl-wk"><b>'+_tlEsc(wkLabel)+'</b> '+_tlEsc(val)+'</span>');
+    var b=index[key];
+    if(!b){b=index[key]={label:label,total:0,doses:0,unit:L.unit};buckets.push(b);}
+    b.doses+=day.n;
+    if(day.dose!==null){b.total+=day.dose;if(day.unit)b.unit=day.unit;}
   }
+  var out=buckets.map(function(b){
+    var val=b.total>0?(_tlFmtNum(b.total)+' '+_tlUnit(b.unit)):(b.doses+' dose'+(b.doses===1?'':'s'));
+    return '<span class="tl-wk"><b>'+_tlEsc(b.label)+'</b> '+_tlEsc(val)+'</span>';
+  });
   return out.length?'<div class="tl-wkrow">'+out.join('')+'</div>':'';
 }
 
