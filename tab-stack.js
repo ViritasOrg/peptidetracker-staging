@@ -290,7 +290,7 @@ async function useTemplate(tid){
 function viewStack(idx){_editReadOnly=true;showStackEditor(idx);}
 function editStack(idx){_editReadOnly=false;showStackEditor(idx);}
 // ── Inline Stack Editor ──────────────────────────────────────────────────────
-var _editBuf=null;var _editIdx=-1;var _editReadOnly=false;var _trtLogCache={};
+var _editBuf=null;var _editIdx=-1;var _editReadOnly=false;
 function _esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 // One spelling per molecule (Phase 1 chose the PK ids). Delegates rather than
 // duplicating: _tcCanonCompId and _isEnhTestosterone are what the PK model and the
@@ -1593,7 +1593,6 @@ async function saveEditBuf(){
         await injClearFuture(_cycId,_oldProtoCids[_pi],dateKey(_editToday0),{tag:'delOrphanInj'});
       }
     }
-    _trtLogCache={};
     await generateAndPushInjections(_editBuf,_editToday0);
     await refreshInjectionsCache();
   }
@@ -2647,48 +2646,7 @@ function _renderTRTViewTab(st){
       html+='</div>';
     });
   }
-  html+='<div class="wiz-section" style="margin-top:16px;margin-bottom:10px;">Injection Log</div>';
-  if(!st.cycle_start){
-    html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">Set a start date to see the injection log for this protocol.</div>';
-  }else{
-    var _cid=_stackCycleId(st);
-    if(!_trtLogCache.hasOwnProperty(_cid)){
-      _fetchTRTLog(st,_cid);
-      html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">Loading...</div>';
-    }else{
-      var _cachedInj=_trtLogCache[_cid];
-      var _byDate={};
-      _cachedInj.forEach(function(inj){if(!_byDate[inj.date])_byDate[inj.date]=[];_byDate[inj.date].push(inj);});
-      var _sortedDates=Object.keys(_byDate).sort(function(a,b){return b.localeCompare(a);});
-      if(!_sortedDates.length){
-        html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No TRT injections logged during this protocol.</div>';
-      }else{
-        _sortedDates.forEach(function(dateStr){
-          var dp=dateStr.split('-');var dObj=new Date(parseInt(dp[0]),parseInt(dp[1])-1,parseInt(dp[2]));
-          html+='<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">';
-          html+='<div style="font-size:12px;color:var(--muted2);min-width:90px;flex-shrink:0;">'+fmtDate(dObj)+'</div>';
-          html+='<div style="flex:1;">';
-          _byDate[dateStr].forEach(function(inj){
-            html+='<div style="font-size:12px;color:var(--text);display:flex;align-items:center;gap:6px;margin-bottom:2px;">';
-            html+='<div style="width:7px;height:7px;border-radius:50%;background:'+(inj.dot||'#e8a020')+';flex-shrink:0;"></div>';
-            html+=_esc(inj.compound_name||inj.compound_id);
-            html+='</div>';
-          });
-          html+='</div></div>';
-        });
-      }
-    }
-  }
   return html;
-}
-async function _fetchTRTLog(st,cycleId){
-  try{
-    var r=await fetch(AGENT_URL+'/injections?cycle_id='+encodeURIComponent(cycleId)+'&active_only=false',{headers:authHeaders()});
-    if(!r.ok){_trtLogCache[cycleId]=[];renderStackEditor();return;}
-    var all=await r.json();
-    _trtLogCache[cycleId]=(Array.isArray(all)?all:[]).filter(function(e){return e.tier==='trt'&&e.logged;});
-  }catch(e){_logErr('fetchTRTLog',e);_trtLogCache[cycleId]=[];}
-  renderStackEditor();
 }
 function setStackViewTab(t){_stackViewTab=_compTabId(t);renderStackEditor();}
 // The two tiers became one tab. Anything that still asks for 'trt' or 'enhanced' —
