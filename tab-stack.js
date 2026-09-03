@@ -3713,13 +3713,34 @@ function _renderEnhancedViewTab(st){
       html+='</div>';
     });
     // Recovery & PCT panel — filled async from the backend by _ensurePctPanel(st)
-    html+='<div class="wiz-section" style="margin-top:18px;">On-cycle &amp; recovery</div>';
+    html+='<div class="wiz-section" id="pct-recovery-head" style="margin-top:18px;">On-cycle &amp; recovery</div>';
     html+='<div id="pct-recovery-body"><div style="color:var(--muted2);font-size:12px;padding:8px 0;">Loading recovery plan…</div></div>';
   }
   return html;
 }
 // ── Recovery & PCT (fetched from /compounds/pct-plan, cached per compound set) ──
+// ⚠️ PCT ADVICE ONLY WHEN PCT IS IN THE PROTOCOL.
+// Henrik, 2026-09-03: "Weird PCT advice printed in Protocol details, only show if
+// added to Protocol." The backend returns a full post-cycle plan for any enhanced
+// compound set, and this panel printed it whether or not the user had added a
+// single recovery compound — a SERM restart schedule, week by week, for a protocol
+// that contains no SERM. That is advice nobody asked to be shown, on a screen whose
+// job is to state what this protocol IS.
+//
+// The on-cycle support block is left alone: it is the other half of the same
+// payload and was not what was reported.
 var _pctCache={};
+function _pctHasRecoveryCompound(st){
+  var comps=(st&&st.enhanced&&st.enhanced.compounds)||[];
+  if(!comps.length)return false;
+  var cat=(typeof _COMPOUND_CATALOG!=='undefined'&&_COMPOUND_CATALOG&&_COMPOUND_CATALOG.length)
+    ?_COMPOUND_CATALOG:((typeof ENHANCEMENT_COMPOUNDS!=='undefined'&&ENHANCEMENT_COMPOUNDS)||[]);
+  return comps.some(function(c){
+    if(!c||!c.id)return false;
+    var e=cat.filter(function(x){return x&&x.id===c.id;})[0];
+    return !!e&&_TIER2_EXTRA_GROUPS.indexOf(String(e.group||''))>=0;
+  });
+}
 function _pctSig(st){var ids=((st.enhanced&&st.enhanced.compounds)||[]).map(function(c){return c.id;}).filter(Boolean).sort();var sex=((typeof getData==='function'&&getData('pep-profile',null))||{}).sex||'male';return sex+'|'+ids.join(',');}
 async function pctPlanFromAgent(compoundIds,sex){
   var ctrl=new AbortController();var tid=setTimeout(function(){ctrl.abort();},10000);
@@ -3730,7 +3751,7 @@ async function pctPlanFromAgent(compoundIds,sex){
     var d=await r.json();return{ok:true,plan:(d&&d.plan)||null};
   }catch(e){clearTimeout(tid);if(typeof _logErr==='function')_logErr('pct',e);return{ok:false,status:null,msg:String(e&&e.message||e)};}
 }
-function _renderPctPlanHtml(plan){
+function _renderPctPlanHtml(plan,hasPct){
   if(!plan)return '<div style="color:var(--muted2);font-size:12px;">Recovery plan unavailable.</div>';
   if(plan.applicable===false){return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px;color:var(--muted2);line-height:1.5;">'+_esc((plan.notes&&plan.notes[0])||'Not applicable.')+'</div>';}
   var h='';
@@ -3739,7 +3760,7 @@ function _renderPctPlanHtml(plan){
     h+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--accent);text-transform:uppercase;margin:0 0 6px;">On-cycle support</div>';
     plan.on_cycle.forEach(function(o){h+='<div style="background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:6px;padding:8px 10px;margin-bottom:8px;"><div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:2px;">＋ '+_esc(o.agent||'')+'</div><div style="font-size:12px;color:var(--muted2);line-height:1.5;">'+_esc(o.message||'')+'</div></div>';});
   }
-  var p=plan.pct;
+  var p=hasPct?plan.pct:null;
   if(p){
     h+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:16px 0 6px;border-top:1px solid var(--border);padding-top:12px;">Post-cycle (PCT)</div>';
     h+='<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:4px 0 4px;">Start PCT</div>';
@@ -3759,16 +3780,25 @@ function _renderPctPlanHtml(plan){
   h+=(typeof _renderSafetyNote==='function')?_renderSafetyNote('enhanced'):'';
   return h;
 }
+// With the PCT half gated, a plan can render to nothing at all — so the heading
+// goes with it rather than standing over an empty box.
+function _pctPaint(el,plan,hasPct){
+  var h=_renderPctPlanHtml(plan,hasPct);
+  var head=document.getElementById('pct-recovery-head');
+  var empty=!String(h||'').replace(/<[^>]*>/g,'').trim();
+  if(head)head.style.display=empty?'none':'';
+  el.innerHTML=empty?'':h;
+}
 function _ensurePctPanel(st){
   var el=document.getElementById('pct-recovery-body');if(!el||!st)return;
   var ids=((st.enhanced&&st.enhanced.compounds)||[]).map(function(c){return c.id;}).filter(Boolean);
   if(!ids.length){el.innerHTML='';return;}
-  var sig=_pctSig(st);
-  if(_pctCache[sig]){el.innerHTML=_renderPctPlanHtml(_pctCache[sig]);return;}
+  var sig=_pctSig(st),hasPct=_pctHasRecoveryCompound(st);
+  if(_pctCache[sig]){_pctPaint(el,_pctCache[sig],hasPct);return;}
   var sex=((typeof getData==='function'&&getData('pep-profile',null))||{}).sex||'male';
   pctPlanFromAgent(ids,sex).then(function(res){
     var el2=document.getElementById('pct-recovery-body');if(!el2)return;
-    if(res.ok&&res.plan){_pctCache[sig]=res.plan;el2.innerHTML=_renderPctPlanHtml(res.plan);}
+    if(res.ok&&res.plan){_pctCache[sig]=res.plan;_pctPaint(el2,res.plan,hasPct);}
     else{el2.innerHTML='<div style="color:var(--muted2);font-size:12px;">Recovery plan unavailable'+(res.status?(' (HTTP '+res.status+')'):'')+'.</div>';}
   });
 }
