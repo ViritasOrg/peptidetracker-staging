@@ -7135,7 +7135,7 @@ console.log('\n── Edit Enhanced tab — stack editor regression ────
     check('_renderEnhancedViewTab: contains dose', viewHtml.includes('250mg'));
     check('_renderEnhancedViewTab: includes On-cycle & recovery panel when compounds present', viewHtml.includes('On-cycle &amp; recovery') && viewHtml.includes('pct-recovery-body'));
     // PCT panel separates on-cycle support from post-cycle
-    var _pctSplit=G._renderPctPlanHtml({applicable:true,on_cycle:[{agent:'HCG',message:'HCG 250–500 IU 2×/week.'}],pct:{start:'≈2 week(s) after the last injection.',serm:{primary:{agent:'Tamoxifen',schedule:[{weeks:'1–2',dose:'20 mg/day'}]}},confirm_labs:['LH and FSH']},notes:[],guardrails:[]});
+    var _pctSplit=G._renderPctPlanHtml({applicable:true,on_cycle:[{agent:'HCG',message:'HCG 250–500 IU 2×/week.'}],pct:{start:'≈2 week(s) after the last injection.',serm:{primary:{agent:'Tamoxifen',schedule:[{weeks:'1–2',dose:'20 mg/day'}]}},confirm_labs:['LH and FSH']},notes:[],guardrails:[]},true);
     check('_renderPctPlanHtml: labels On-cycle support', _pctSplit.includes('On-cycle support'));
     check('_renderPctPlanHtml: labels Post-cycle (PCT)', _pctSplit.includes('Post-cycle (PCT)'));
     check('_renderPctPlanHtml: on-cycle HCG at 250–500 IU', _pctSplit.includes('250–500 IU'));
@@ -7143,13 +7143,40 @@ console.log('\n── Edit Enhanced tab — stack editor regression ────
     // _renderPctPlanHtml renders a backend plan (no network — pass a mock plan)
     check('_renderPctPlanHtml defined', typeof G._renderPctPlanHtml==='function');
     var _pctMock={applicable:true,on_cycle:[{agent:'HCG',message:'HCG 500–1000 IU 2×/week.'}],pct:{start:'≈2 week(s) after the last injection.',serm:{primary:{agent:'Tamoxifen (Nolvadex)',schedule:[{weeks:'1–2',dose:'20 mg/day'}]},alternative:{agent:'Clomiphene (Clomid)',schedule:[{weeks:'1–2',dose:'50 mg/day'}]},note:'HCG primes before, never during.'},confirm_labs:['LH and FSH']},notes:['n'],guardrails:['g']};
-    var _pctHtml=G._renderPctPlanHtml(_pctMock);
+    var _pctHtml=G._renderPctPlanHtml(_pctMock,true);
     check('_renderPctPlanHtml: shows on-cycle HCG', _pctHtml.includes('HCG'));
     check('_renderPctPlanHtml: shows SERM restart (Tamoxifen)', _pctHtml.includes('Tamoxifen'));
     check('_renderPctPlanHtml: shows PCT start timing', _pctHtml.includes('after the last injection'));
     check('_renderPctPlanHtml: shows confirm labs', _pctHtml.includes('LH and FSH'));
-    var _pctFemale=G._renderPctPlanHtml({applicable:false,notes:['female note']});
+    var _pctFemale=G._renderPctPlanHtml({applicable:false,notes:['female note']},true);
     check('_renderPctPlanHtml: female/non-applicable shows note', _pctFemale.includes('female note'));
+
+    // ⚠️ PCT ADVICE ONLY WHEN PCT IS IN THE PROTOCOL.
+    // Henrik, 2026-09-03: "Weird PCT advice printed in Protocol details, only show
+    // if added to Protocol." The backend returns a post-cycle plan for any enhanced
+    // compound set, and this panel printed a week-by-week SERM restart schedule for
+    // protocols containing no SERM at all.
+    var _pctNoSerm=G._renderPctPlanHtml(_pctMock,false);
+    check('_renderPctPlanHtml: no PCT compound in the protocol → no PCT block',
+      !_pctNoSerm.includes('Post-cycle (PCT)') && !_pctNoSerm.includes('Tamoxifen') &&
+      !_pctNoSerm.includes('SERM restart') && !_pctNoSerm.includes('LH and FSH'));
+    check('  …while on-cycle support is untouched — it was not what was reported',
+      _pctNoSerm.includes('On-cycle support') && _pctNoSerm.includes('HCG'));
+    if (typeof G._pctHasRecoveryCompound === 'function') {
+      var _svCat2=G._COMPOUND_CATALOG;
+      G._COMPOUND_CATALOG=[{id:'deca',name:'Deca',group:'19-Nor'},
+                           {id:'nolva',name:'Tamoxifen',group:'PCT & Recovery'},
+                           {id:'hcg',name:'HCG',group:'HCG'}];
+      check('_pctHasRecoveryCompound: false when the protocol carries none',
+        G._pctHasRecoveryCompound({enhanced:{compounds:[{id:'deca'}]}})===false);
+      check('  …true once a PCT/recovery compound is added',
+        G._pctHasRecoveryCompound({enhanced:{compounds:[{id:'deca'},{id:'nolva'}]}})===true &&
+        G._pctHasRecoveryCompound({enhanced:{compounds:[{id:'hcg'}]}})===true);
+      check('  …and false for an empty or missing protocol',
+        G._pctHasRecoveryCompound({enhanced:{compounds:[]}})===false &&
+        G._pctHasRecoveryCompound({})===false);
+      G._COMPOUND_CATALOG=_svCat2;
+    }
 
     var viewEmpty=G._renderEnhancedViewTab({enhanced:{enabled:false,compounds:[]}});
     check('_renderEnhancedViewTab empty: shows no compounds message', viewEmpty.includes('No enhancement compounds'));
