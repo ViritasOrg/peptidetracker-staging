@@ -7135,7 +7135,8 @@ console.log('\n── Edit Enhanced tab — stack editor regression ────
     check('_renderEnhancedViewTab: contains dose', viewHtml.includes('250mg'));
     check('_renderEnhancedViewTab: includes On-cycle & recovery panel when compounds present', viewHtml.includes('On-cycle &amp; recovery') && viewHtml.includes('pct-recovery-body'));
     // PCT panel separates on-cycle support from post-cycle
-    var _pctSplit=G._renderPctPlanHtml({applicable:true,on_cycle:[{agent:'HCG',message:'HCG 250–500 IU 2×/week.'}],pct:{start:'≈2 week(s) after the last injection.',serm:{primary:{agent:'Tamoxifen',schedule:[{weeks:'1–2',dose:'20 mg/day'}]}},confirm_labs:['LH and FSH']},notes:[],guardrails:[]},true);
+    var _pctStack={enhanced:{compounds:[{id:'hcg',name:'HCG'},{id:'nolva',name:'Tamoxifen'}]}};
+    var _pctSplit=G._renderPctPlanHtml({applicable:true,on_cycle:[{agent:'HCG',message:'HCG 250–500 IU 2×/week.'}],pct:{start:'≈2 week(s) after the last injection.',serm:{primary:{agent:'Tamoxifen',schedule:[{weeks:'1–2',dose:'20 mg/day'}]}},confirm_labs:['LH and FSH']},notes:[],guardrails:[]},true,_pctStack);
     check('_renderPctPlanHtml: labels On-cycle support', _pctSplit.includes('On-cycle support'));
     check('_renderPctPlanHtml: labels Post-cycle (PCT)', _pctSplit.includes('Post-cycle (PCT)'));
     check('_renderPctPlanHtml: on-cycle HCG at 250–500 IU', _pctSplit.includes('250–500 IU'));
@@ -7143,12 +7144,12 @@ console.log('\n── Edit Enhanced tab — stack editor regression ────
     // _renderPctPlanHtml renders a backend plan (no network — pass a mock plan)
     check('_renderPctPlanHtml defined', typeof G._renderPctPlanHtml==='function');
     var _pctMock={applicable:true,on_cycle:[{agent:'HCG',message:'HCG 500–1000 IU 2×/week.'}],pct:{start:'≈2 week(s) after the last injection.',serm:{primary:{agent:'Tamoxifen (Nolvadex)',schedule:[{weeks:'1–2',dose:'20 mg/day'}]},alternative:{agent:'Clomiphene (Clomid)',schedule:[{weeks:'1–2',dose:'50 mg/day'}]},note:'HCG primes before, never during.'},confirm_labs:['LH and FSH']},notes:['n'],guardrails:['g']};
-    var _pctHtml=G._renderPctPlanHtml(_pctMock,true);
+    var _pctHtml=G._renderPctPlanHtml(_pctMock,true,_pctStack);
     check('_renderPctPlanHtml: shows on-cycle HCG', _pctHtml.includes('HCG'));
     check('_renderPctPlanHtml: shows SERM restart (Tamoxifen)', _pctHtml.includes('Tamoxifen'));
     check('_renderPctPlanHtml: shows PCT start timing', _pctHtml.includes('after the last injection'));
     check('_renderPctPlanHtml: shows confirm labs', _pctHtml.includes('LH and FSH'));
-    var _pctFemale=G._renderPctPlanHtml({applicable:false,notes:['female note']},true);
+    var _pctFemale=G._renderPctPlanHtml({applicable:false,notes:['female note']},true,_pctStack);
     check('_renderPctPlanHtml: female/non-applicable shows note', _pctFemale.includes('female note'));
 
     // ⚠️ PCT ADVICE ONLY WHEN PCT IS IN THE PROTOCOL.
@@ -7156,12 +7157,44 @@ console.log('\n── Edit Enhanced tab — stack editor regression ────
     // if added to Protocol." The backend returns a post-cycle plan for any enhanced
     // compound set, and this panel printed a week-by-week SERM restart schedule for
     // protocols containing no SERM at all.
-    var _pctNoSerm=G._renderPctPlanHtml(_pctMock,false);
+    var _pctNoSerm=G._renderPctPlanHtml(_pctMock,false,_pctStack);
     check('_renderPctPlanHtml: no PCT compound in the protocol → no PCT block',
       !_pctNoSerm.includes('Post-cycle (PCT)') && !_pctNoSerm.includes('Tamoxifen') &&
       !_pctNoSerm.includes('SERM restart') && !_pctNoSerm.includes('LH and FSH'));
-    check('  …while on-cycle support is untouched — it was not what was reported',
+    // ⚠️ THIS VIEW STATES THE PROTOCOL — IT DOES NOT RECOMMEND ONE.
+    // Henrik, 2026-09-03: "This advice is needed when one creates the stack, but if
+    // not part of the stack then it should not be part of this view." A protocol of
+    // HGH alone showed a "＋ HCG" card, an HPTA-recovery note and three SERM
+    // guardrails for compounds it does not contain.
+    var _pctHghOnly={enhanced:{compounds:[{id:'hgh',name:'HGH (Somatropin)'}]}};
+    var _pctNothing=G._renderPctPlanHtml(_pctMock,false,_pctHghOnly);
+    check('  …and on-cycle support is gated the same way — no HCG card without HCG',
+      !_pctNothing.includes('On-cycle support') && !_pctNothing.includes('HCG'));
+    check('  …so an HGH-only protocol gets no advisory at all',
+      !String(_pctNothing).replace(/<[^>]*>/g,'').trim());
+    // The notes and guardrails are post-cycle copy ("never run a SERM during an HCG
+    // priming phase"), so they leave with the post-cycle block rather than outliving it.
+    var _pctGuard={applicable:true,on_cycle:[],pct:{start:'s'},
+      notes:['HPTA recovery note'],guardrails:['Never run a SERM during an HCG priming phase.']};
+    check('  …and the notes/guardrails go with the post-cycle block, not without it',
+      G._renderPctPlanHtml(_pctGuard,true,_pctHghOnly).includes('HPTA recovery note') &&
+      !G._renderPctPlanHtml(_pctGuard,false,_pctHghOnly).includes('HPTA recovery note') &&
+      !G._renderPctPlanHtml(_pctGuard,false,_pctHghOnly).includes('priming phase'));
+    check('  …while a protocol that DOES carry HCG still gets its on-cycle card',
       _pctNoSerm.includes('On-cycle support') && _pctNoSerm.includes('HCG'));
+    // The tier safety card moved out to _pctPaint, so an empty advisory can drop the
+    // heading without dropping a safety message.
+    check('  …and the safety card is no longer inside the advisory',
+      !_pctSplit.includes('SAFETY') && !_pctNoSerm.includes('SAFETY'));
+    if (typeof G._pctAgentInStack === 'function') {
+      check('_pctAgentInStack: matches on name or id, either direction',
+        G._pctAgentInStack('HCG', _pctStack) === true &&
+        G._pctAgentInStack('Tamoxifen (Nolvadex)', _pctStack) === true &&
+        G._pctAgentInStack('HCG', _pctHghOnly) === false);
+      check('  …and is false for an empty agent or an empty protocol',
+        G._pctAgentInStack('', _pctStack) === false &&
+        G._pctAgentInStack('HCG', {}) === false);
+    }
     if (typeof G._pctHasRecoveryCompound === 'function') {
       var _svCat2=G._COMPOUND_CATALOG;
       G._COMPOUND_CATALOG=[{id:'deca',name:'Deca',group:'19-Nor'},
