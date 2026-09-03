@@ -7529,9 +7529,22 @@ console.log('\n── View & Edit tab render functions ────────�
   var noTRTSt={name:'T',peptides:[],trt:{enabled:false,compounds:[]},cycle_length:12};
   var tvH1=G._renderTRTViewTab(noTRTSt);
   check('_renderTRTViewTab empty: returns string', typeof tvH1==='string');
+  {
+    const _stkSrc = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
+    const _todaySrc = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+    check('  …and its fetch and cache went with it, not left orphaned',
+      _stkSrc.indexOf('_fetchTRTLog') === -1 && _stkSrc.indexOf('_trtLogCache') === -1 &&
+      _todaySrc.indexOf('_trtLogCache') === -1);
+  }
   check('_renderTRTViewTab empty: mentions no TRT configured', tvH1.includes('No TRT configured'));
-  check('_renderTRTViewTab empty: shows Injection Log section', tvH1.includes('Injection Log'));
-  check('_renderTRTViewTab empty: prompts to set start date', tvH1.includes('Set a start date'));
+  // ⚠️ NO INJECTION LOG IN PROTOCOL DETAILS. Removed 2026-09-03 on request
+  // ("Injection Log in Protocol details? Why?"). It listed date + compound name
+  // for the cycle's logged TRT doses and was the third and weakest view of that
+  // data — T-History shows it properly, and Timeline shows it across every
+  // protocol with dose, status and scale. It also rendered its heading for
+  // protocols with no TRT configured at all. Do not add it back here.
+  check('_renderTRTViewTab: no injection log — that lives in T-History and Timeline',
+    !tvH1.includes('Injection Log') && !tvH1.includes('Set a start date'));
 
   // _renderTRTViewTab: with TRT compound (no cycle_start → injection log shows set-start-date)
   if(G.TRT_CAT&&G.TRT_CAT.length){
@@ -7542,7 +7555,7 @@ console.log('\n── View & Edit tab render functions ────────�
     check('_renderTRTViewTab with compound: shows Protocol section', tvH2.includes('Protocol'));
     check('_renderTRTViewTab with compound: shows compound name', tvH2.includes(tCat0v.name));
     check('_renderTRTViewTab with compound: shows dose', tvH2.includes('125'));
-    check('_renderTRTViewTab with compound: still shows injection log area', tvH2.includes('Injection Log'));
+    check('  …not even once a compound is configured', !tvH2.includes('Injection Log'));
   }
 
   // _renderEditTRT: null/empty → toggle is off, no compound cards visible.
