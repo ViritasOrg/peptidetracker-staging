@@ -201,6 +201,45 @@ function _tlOwnerId(e){
   if(c==='manual')return '_manual';
   return c||'_none';
 }
+// ⚠️ A DELETED PROTOCOL'S UNTAKEN PLAN IS NEITHER HISTORY NOR A SCHEDULE.
+// Reported 2026-09-05: the Timeline showed a Masteron lane for a compound in no
+// protocol. Read straight from the record rather than guessed at — stacks.json
+// holds Protocol 2 and Protocol 3, while injections.json holds 384 rows under
+// cycle_id 'protocol_4_nostart', ALL of them logged:false and 345 dated in the
+// future. Protocol 4 was deleted; its doses were never deleted with it (that is
+// deliberate — deleting injections is not something a render path may do), so a
+// dead plan sat in the record.
+//
+// The split is the app's existing doctrine, applied here:
+//   • A LOGGED row is history. It counts whatever protocol it was filed under and
+//     whether that protocol still exists. Never filtered — that is the injection
+//     log being the true record.
+//   • An UNLOGGED row is a plan, and a plan belongs to a protocol. If the protocol
+//     is gone, the plan is gone with it.
+//
+// This is a VIEW filter. Nothing is deleted, and a row hidden here comes straight
+// back if its protocol is restored.
+function _tlLiveStackIds(){
+  var out={},n=0;
+  ((typeof _userStacks!=='undefined'&&_userStacks)||[]).forEach(function(st){
+    var id=_tlStackId(st);
+    if(id){out[id]=true;n++;}
+  });
+  return n?out:null;   // null = not loaded, see _tlIsDeadPlan
+}
+function _tlIsDeadPlan(e,live){
+  if(!e||e.logged)return false;          // history is never filtered
+  // ⚠️ AN EMPTY STACK LIST MEANS NOT LOADED, NOT "NOTHING EXISTS". Filtering on it
+  // during boot would blank the whole tab — the same trap the free-T curve fell
+  // into. No stacks yet: filter nothing.
+  if(!live)return false;
+  var owner=_tlOwnerId(e);
+  // Sentinels own no stack: '_manual' is a hand-logged past dose, '_tcalc' is a
+  // T-Calc plan bound to no protocol, '_none' has no cycle at all. None of them is
+  // orphaned by a protocol going away.
+  if(owner==='_manual'||owner==='_tcalc'||owner==='_none')return false;
+  return !live[owner];
+}
 function _tlOwnerName(id){
   if(id==='_tcalc')return 'T-Calc plan';
   if(id==='_manual')return 'Logged manually';
@@ -309,9 +348,11 @@ function _tlBuildLanes(from,to){
     return lanes[key];
   }
   var fromK=dateKey(from),toK=dateKey(to);
+  var live=_tlLiveStackIds();
   (_tlRows||[]).forEach(function(e){
     if(!e||!e.date)return;
     if(e.date<fromK||e.date>toK)return;
+    if(_tlIsDeadPlan(e,live))return;
     var owner=_tlOwnerId(e);
     var tier=e.tier||'peptide';
     var key=tier+'|'+(e.compound_id||e.compound_name||'?');
