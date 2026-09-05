@@ -380,7 +380,26 @@ function _logHttp(ctx,status,url){var msg='[pep:'+ctx+'] HTTP '+status+' — '+u
 async function checkAgentStatus(){const dot=document.getElementById('agent-dot');if(!dot)return;try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+"/weights",{headers:authHeaders(),signal:ctrl.signal});dot.className='agent-dot '+(r.ok?'up':'down');}catch(e){dot.className='agent-dot down';}}
 async function syncWeightsFromAgent(){try{const r=await fetch(AGENT_URL+"/weights",{headers:authHeaders()});if(!r.ok){_logHttp('syncWeights',r.status,'/weights');return;}const remote=await r.json();weights=remote.map(function(w){return{date:_normDt(w.date),weight:w.weight};}).sort(function(a,b){return a.date.localeCompare(b.date);});setData('weight_log',weights);}catch(e){_logErr('syncWeights',e);weights=getData('weight_log',[]);}}
 async function syncPeptideLogFromAgent(){try{const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders()});if(!r.ok){_logHttp('syncPepLog',r.status,'/peptide-log');return;}const remote=await r.json();remote.forEach(function(entry){var key='proto-chk-'+_normDt(entry.date);try{var local=JSON.parse(localStorage.getItem(key)||'[]');if(!Array.isArray(local))local=[];var merged=local.slice();entry.doses.forEach(function(d){if(!merged.includes(d))merged.push(d);});if(merged.length!==local.length)localStorage.setItem(key,JSON.stringify(merged));}catch(e){}});}catch(e){_logErr('syncPepLog',e);}finally{_syncPending=false;buildToday();}}
-async function syncBodyCompFromAgent(){try{const r=await fetch(AGENT_URL+"/bodycomp",{headers:authHeaders()});if(!r.ok){_logHttp('syncBodyComp',r.status,'/bodycomp');return;}const remote=await r.json();const local=bcLoad();const remoteDates=new Set(remote.map(e=>e.date));const merged=[...remote];for(const e of local){if(!remoteDates.has(e.date))merged.push(e);}merged.sort((a,b)=>a.date.localeCompare(b.date));bcSave(merged);bcRender();await Promise.all(local.map(e=>{const[y,m,d]=e.date.split('-');return pushBodyCompToAgent({...e,date:y+'-'+m.padStart(2,'0')+'-'+d.padStart(2,'0')});}));}catch(e){_logErr('syncBodyComp',e);}}
+// The record stores dates zero-padded — the backend's validator pads on write — and
+// this app has written unpadded ones, which is why the push at the end of the sync
+// pads too. The prune below has to agree with that: a local '2026-7-22' must not
+// slip past a tombstone for '2026-07-22' and stay on the list.
+function _bcPadDate(d){var p=String(d||'').split('-');return p.length===3?(p[0]+'-'+p[1].padStart(2,'0')+'-'+p[2].padStart(2,'0')):String(d||'');}
+// A row missing from the server is not always a row the server has yet to hear
+// about. bodycomp.json is SHARED — the Workout app writes the same rows for the
+// same person, in the same data namespace — so a row can go missing because it was
+// deleted over there.
+//
+// This function could not tell those apart: anything local and not remote was kept
+// and re-uploaded. That is how a deleted entry survived, in both directions — the
+// 2026-07-22 reading Henrik deleted here came back because Workout still had it,
+// and a reading deleted in Workout would have lingered here for the same reason.
+//
+// So ask for the tombstones (?include_deleted=true), keep them out of the merged
+// list, and drop the local copies: a deleted row is gone, not missing. Only deleted
+// dates are pruned — a local row the server has simply never seen is still pushed,
+// which is what this sync exists for.
+async function syncBodyCompFromAgent(){try{const r=await fetch(AGENT_URL+"/bodycomp?include_deleted=true",{headers:authHeaders()});if(!r.ok){_logHttp('syncBodyComp',r.status,'/bodycomp');return;}const all=await r.json();const remote=all.filter(function(e){return!e.deleted;});const gone=new Set(all.filter(function(e){return e.deleted;}).map(function(e){return _bcPadDate(e.date);}));const local=bcLoad().filter(function(e){return!gone.has(_bcPadDate(e.date));});const remoteDates=new Set(remote.map(e=>e.date));const merged=[...remote];for(const e of local){if(!remoteDates.has(e.date))merged.push(e);}merged.sort((a,b)=>a.date.localeCompare(b.date));bcSave(merged);bcRender();await Promise.all(local.map(e=>{const[y,m,d]=e.date.split('-');return pushBodyCompToAgent({...e,date:y+'-'+m.padStart(2,'0')+'-'+d.padStart(2,'0')});}));}catch(e){_logErr('syncBodyComp',e);}}
 var _userTier=1;var _userFeatures={tier:1,trt:false,enhanced:false,peptides:true};var _featuresLoaded=false;
 async function syncFeaturesFromAgent(){try{const r=await fetch(AGENT_URL+'/user/features',{headers:authHeaders()});if(!r.ok){_logHttp('syncFeatures',r.status,'/user/features');return;}const d=await r.json();_userTier=d.tier||1;_userFeatures=d;_featuresLoaded=true;}catch(e){_logErr('syncFeatures',e);_userTier=1;_userFeatures={tier:1,trt:false,enhanced:false,peptides:true};}}
 // Cycles + cycle bloodtest recs are TRT/Enhanced-tier features (#639/#640). Gate
