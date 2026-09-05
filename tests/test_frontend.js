@@ -14719,6 +14719,227 @@ console.log('\n── One writer for injections ──────────�
   })();
 }
 
+// ── A deleted protocol leaves no plan behind ────────────────────────────────
+// Protocol 4 was deleted from stacks.json and its 384 generated injections stayed
+// in the record — 345 of them dated in the future, all owned by a cycle_id that
+// resolved to no protocol. They drew Masteron and Test Enanthate onto the Timeline
+// as compounds the user had no protocol for, and inflated the denominator of every
+// lane they shared. v1.746 stopped DRAWING them. These tests are about not leaving
+// them behind, and about sweeping the ones already there.
+//
+// The line that must never move: a LOGGED dose is a fact about the user's body. It
+// outlives the protocol that planned it, and nothing here may touch it.
+//
+// ⚠️ THIS SANDBOX IS SHARED WITH ASYNC BLOCKS THAT ARE STILL IN FLIGHT.
+// An earlier draft of these tests set G._userStacks to its own two protocols and
+// restored it after `await deleteStack(0)`. The await let the wizSave chain near the
+// top of this file resume mid-way, and it read _userStacks[0].peptides off a stack
+// that was never its own — killing the run 4000 checks later, nowhere near the cause.
+// So: every global these tests borrow is restored WITHOUT an await in between.
+// deleteStack and cleanupOrphanDoses both do their reads before their first await,
+// which is what makes that possible; the assertions that need the result run in a
+// .then, by which point the globals are the app's own again.
+console.log('\n── A deleted protocol leaves no plan behind ───────────────');
+{
+  const _fs3 = require('fs'), _p3 = require('path');
+  const _idxSrc3 = _fs3.readFileSync(_p3.join(__dirname, '../index.html'), 'utf8');
+  const _injSrc3 = _fs3.readFileSync(_p3.join(__dirname, '../inj-writer.js'), 'utf8');
+  const _delSrc = (_idxSrc3.match(/async function deleteStack\(idx\)\{[\s\S]*?\n\}/) || [''])[0];
+
+  check('deleteStack purges the protocol\'s stored plan',
+    /injPurgeCyclePlan\(_goneId/.test(_delSrc));
+  // A T-Calc plan assigned to this protocol is its rows too ('tcalc:<id>'), and is
+  // orphaned by exactly the same delete.
+  check('  …including a T-Calc plan assigned to it',
+    /injPurgeCyclePlan\('tcalc:'\+_goneId/.test(_delSrc));
+  // After the splice there is nothing left to derive the id from, and an empty
+  // cycle_id is not a narrow delete — it is no filter at all.
+  check('  …reading the id off the stack BEFORE it is spliced out',
+    _delSrc.indexOf('var _goneId=') !== -1 &&
+    _delSrc.indexOf('var _goneId=') < _delSrc.indexOf('_userStacks.splice'));
+  // The stack list is saved first. The other order risks the unrecoverable failure:
+  // the plan erased while the protocol it belongs to is still there.
+  check('  …and only after the stack list is saved',
+    _delSrc.indexOf('await saveStacksToBackend()') < _delSrc.indexOf('injPurgeCyclePlan'));
+  check('  …then rebuilds both caches that hold injections',
+    /refreshInjectionsCache/.test(_delSrc) && /_tlInvalidateInjections/.test(_delSrc));
+
+  // The purge is scoped by cycle_id ALONE — deliberately, and this is the assertion
+  // that says so. A from_date would spare the debris dated in the past (39 of
+  // Protocol 4's rows), and a compound_id would clear one lane of a protocol that no
+  // longer exists to have lanes.
+  const _purgeSrc = (_injSrc3.match(/async function injPurgeCyclePlan[\s\S]*?\n\}/) || [''])[0];
+  check('the purge asks for unlogged rows only, and cannot be told otherwise',
+    /unlogged_only=true/.test(_purgeSrc) && !/unloggedOnly/.test(_purgeSrc));
+  // The `.length` is not padding: on a source that has no injPurgeCyclePlan at all
+  // the match is '', and every "must NOT contain" below would pass on nothing.
+  check('  …and is scoped by cycle_id alone, so past debris goes too',
+    _purgeSrc.length > 0 && !/from_date/.test(_purgeSrc) && !/compound_id/.test(_purgeSrc));
+
+  // ── which ids count as live ──────────────────────────────────────────────
+  // Synchronous, so _userStacks is back to the app's own before anything else runs.
+  const _lsSave = G._userStacks;
+  G._userStacks = [];
+  const _liveNone = G._livePlanOwnerIds();
+  G._userStacks = [{id:'frozen_id_1', name:'Blast One', cycle_start:'2026-01-01'}];
+  const _live1 = G._livePlanOwnerIds();
+  const _derived1 = G._deriveStackCycleId(G._userStacks[0]);
+  G._userStacks = _lsSave;
+  // An empty stack list means "not loaded yet" far more often than "no protocols",
+  // and on that reading EVERY row looks orphaned. Same guard as _tlIsDeadPlan.
+  check('an unloaded protocol list yields null, not an empty live set', _liveNone === null);
+  // Both spellings: a stack's frozen id, and the derived name_start form that rows
+  // written before the id was frozen still carry. Widening the live set can only
+  // spare a row, never delete one — the direction an error here has to fall.
+  check('a live protocol is recognised by its frozen id', _live1['frozen_id_1'] === true);
+  check('  …and by the derived id its older rows carry', _live1[_derived1] === true);
+
+  // ── which rows count as debris ───────────────────────────────────────────
+  const _live = {alive_2026: true};
+  const _rows = [
+    {cycle_id:'alive_2026',  logged:false, compound_name:'Test E'},   // live plan
+    {cycle_id:'alive_2026',  logged:true,  compound_name:'Test E'},   // live record
+    {cycle_id:'dead_4',      logged:false, compound_name:'Masteron'}, // debris
+    {cycle_id:'dead_4',      logged:false, compound_name:'Test E'},   // debris
+    {cycle_id:'dead_4',      logged:true,  compound_name:'HGH'},      // HISTORY
+    {cycle_id:'tcalc:dead_4',logged:false, compound_name:'Test C'},   // debris
+    {cycle_id:'tcalc',       logged:false, compound_name:'Test C'},   // shared pool
+    {cycle_id:'manual',      logged:false, compound_name:'Reta'},     // shared pool
+    {cycle_id:'',            logged:false, compound_name:'Reta'},     // unowned
+  ];
+  const _dead = G._orphanPlanCycleIds(_rows, _live);
+  check('the sweep finds a dead protocol\'s untaken doses',
+    _dead['dead_4'] === 2, JSON.stringify(_dead));
+  // Keyed by the RAW stored cycle_id, because that is the value the backend matches.
+  // Keyed by the owner instead, the delete for 'tcalc:dead_4' would match nothing.
+  check('  …and its assigned T-Calc plan, under the id actually stored',
+    _dead['tcalc:dead_4'] === 1, JSON.stringify(_dead));
+  // dead_4 holds three rows and only two are claimed — the logged one is history.
+  check('  …never a taken dose, whatever happened to its protocol',
+    _dead['dead_4'] !== 3);
+  check('  …never a live protocol\'s plan', _dead['alive_2026'] === undefined);
+  check('  …and never the shared namespaces, which no protocol owns',
+    _dead['tcalc'] === undefined && _dead['manual'] === undefined &&
+    _dead[''] === undefined && Object.keys(_dead).length === 2);
+  check('a null live set finds nothing, rather than everything',
+    Object.keys(G._orphanPlanCycleIds(_rows, null)).length === 0);
+
+  // The record as it actually stands: 384 unlogged rows under a protocol_4 that
+  // stacks.json no longer contains, alongside the live protocols' own rows.
+  const _real = [];
+  for (let i = 0; i < 384; i++) _real.push({cycle_id:'protocol_4_nostart', logged:false});
+  for (let i = 0; i < 40;  i++) _real.push({cycle_id:'protocol_2', logged:true});
+  for (let i = 0; i < 62;  i++) _real.push({cycle_id:'protocol_2', logged:false});
+  const _realDead = G._orphanPlanCycleIds(_real, {protocol_2:true});
+  check('replaying the real record, the sweep claims exactly Protocol 4\'s 384 rows',
+    Object.keys(_realDead).length === 1 && _realDead['protocol_4_nostart'] === 384,
+    JSON.stringify(_realDead));
+
+  // ── the two orchestrators, asserted from source ──────────────────────────
+  // NOT driven end to end, deliberately. Both of them finish by rebuilding
+  // _injectionsCache, and a stub for that global sits over the ~30 checks elsewhere
+  // in this suite that build the cache themselves and render from it — while the
+  // real one, left in place, overwrites theirs mid-render. Either way the run breaks
+  // somewhere unrelated. What these two functions decide is WHICH ids to purge, and
+  // that decision is _orphanPlanCycleIds above, tested exhaustively and pure; the
+  // request each id turns into is driven for real further down. This is the seam
+  // between them, and it is a structural claim, so it is checked structurally.
+  const _sweepSrc = (_idxSrc3.match(/async function cleanupOrphanDoses\(\)\{[\s\S]*?\n\}/) || [''])[0];
+  check('the sweep purges exactly the ids the orphan scan returned',
+    /_orphanPlanCycleIds\(rows,live\)/.test(_sweepSrc) &&
+    /Object\.keys\(dead\)/.test(_sweepSrc) &&
+    /ids\.map\(function\(cid\)\{return injPurgeCyclePlan\(cid/.test(_sweepSrc));
+  // These deletes are global and cannot be undone, so they go through the same
+  // confirmation every other stored-record delete in the app does.
+  check('  …only after confirmGlobalDelete, and with the row count in the prompt',
+    _sweepSrc.indexOf('confirmGlobalDelete') < _sweepSrc.indexOf('injPurgeCyclePlan') &&
+    /confirmGlobalDelete\(total\+/.test(_sweepSrc));
+  check('  …and refuses outright on an unloaded protocol list',
+    /if\(!live\)\{say\('protocols not loaded'\);return;\}/.test(_sweepSrc));
+  check('  …then rebuilds both caches that hold injections',
+    /refreshInjectionsCache/.test(_sweepSrc) && /_tlInvalidateInjections/.test(_sweepSrc));
+
+  // That refusal IS driven, because it is the one path that returns before its first
+  // await — so the borrowed globals go back with no suspension in between, and the
+  // read counter is conclusive by the time the call returns.
+  {
+    const _svLive = G._livePlanOwnerIds, _svRange = G.fetchInjectionsForRange;
+    let _reads = 0;
+    G._livePlanOwnerIds = () => null;
+    G.fetchInjectionsForRange = async () => { _reads++; return []; };
+    let _threw = false;
+    try { G.cleanupOrphanDoses(); } catch (e) { _threw = true; }
+    G._livePlanOwnerIds = _svLive;
+    G.fetchInjectionsForRange = _svRange;
+    // The one moment every row in the record looks orphaned is before the protocol
+    // list has loaded. The sweep must not even read the record then.
+    check('the Settings sweep reads nothing before protocols have loaded',
+      !_threw && _reads === 0, 'read ' + _reads + ' time(s)');
+  }
+
+  // ── behavioural: the request the purge actually sends ────────────────────
+  // Other in-flight async blocks swap the shared fetch between their awaits, so the
+  // recorder is read through a filter that keeps only THIS function's shape of
+  // request (a DELETE to /injections scoped by cycle_id with no compound_id),
+  // never a raw call count.
+  const _pSave = {fetch:G.fetch, auth:G.authHeaders};
+  let _pCalls = [];
+  const _armP = (impl) => {
+    _pCalls = [];
+    G.authHeaders = (extra) => Object.assign({Authorization:'Bearer x'}, extra || {});
+    G.fetch = impl || (async (url, opts) => {
+      _pCalls.push({url, opts:opts||{}});
+      return {ok:true, status:200, json:async()=>({ok:true, removed:7})};
+    });
+  };
+  const _purges = () => _pCalls.filter(c =>
+    c.opts.method === 'DELETE' && /\/injections\?cycle_id=/.test(c.url) &&
+    !/compound_id=/.test(c.url));
+
+  (async () => {
+    _armP();
+    const _n = await G.injPurgeCyclePlan('dead_4', 'test');
+    const _p1 = _purges();
+    check('injPurgeCyclePlan issues one scoped DELETE',
+      _p1.length === 1 && /cycle_id=dead_4/.test(_p1[0].url), 'saw ' + _p1.length);
+    check('  …for unlogged rows only', _p1.length === 1 && /unlogged_only=true/.test(_p1[0].url));
+    check('  …with no date bound, so an untaken dose dated last month goes too',
+      _p1.length === 1 && !/from_date/.test(_p1[0].url) && !/&from=/.test(_p1[0].url));
+    check('  …and reports how many rows the backend removed', _n === 7);
+
+    // An empty cycle_id would match EVERY row in the account, which with
+    // unlogged_only would erase the user's whole forward plan.
+    _armP();
+    const _refused = await G.injPurgeCyclePlan('', 'test');
+    check('an empty cycle_id is refused before any request goes out',
+      _refused === null && _purges().length === 0);
+    // 'tcalc' and 'manual' are shared pools, not protocols — no single protocol's
+    // deletion may clear them.
+    for (const _ns of ['tcalc', 'manual']) {
+      _armP();
+      const _r2 = await G.injPurgeCyclePlan(_ns, 'test');
+      check('  …as is the shared "' + _ns + '" namespace',
+        _r2 === null && _purges().length === 0);
+    }
+    // …but ONE protocol's assigned T-Calc rows are that protocol's to lose.
+    _armP();
+    await G.injPurgeCyclePlan('tcalc:dead_4', 'test');
+    const _p2 = _purges();
+    check('  …while one protocol\'s assigned T-Calc rows are purged normally',
+      _p2.length === 1 && /cycle_id=tcalc%3Adead_4/.test(_p2[0].url),
+      _p2.length ? _p2[0].url : 'no call');
+
+    _armP(async () => ({ok:false, status:500, json:async()=>({})}));
+    check('a rejected purge reports null rather than a false count',
+      (await G.injPurgeCyclePlan('dead_4', 'test')) === null);
+    _armP(async () => { throw new Error('offline'); });
+    check('  …and a network failure does not throw at the caller',
+      (await G.injPurgeCyclePlan('dead_4', 'test')) === null);
+
+    G.fetch = _pSave.fetch; G.authHeaders = _pSave.auth;
+  })();
+}
+
 // ── Phase 4: one Compounds tier ───────────────────────────────────────────────
 // Henrik, 2026-08-16: "We will fold enhanced and TRT into one unified tab, all is part
 // of a Protocol." And 2026-08-19: "Group by class testosterone on top", "any pre
