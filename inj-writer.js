@@ -145,3 +145,53 @@ async function injClearFutureMany(cycleId, compoundIds, fromDate, opts){
     return injClearFuture(cycleId, cid, fromDate, opts);
   }));
 }
+
+// DELETE /injections?cycle_id=<id>&unlogged_only=true — wipe a dead protocol's PLAN.
+//
+// A protocol that is deleted takes its schedule with it. Until 2026-09-05 it did
+// not: deleteStack removed the stack from stacks.json and left every injection it
+// had generated behind, still stored, still dated, owned by a cycle_id that now
+// resolves to nothing. Protocol 4 left 384 such rows in the staging record, 345 of
+// them dated in the future — enough to put two compounds on the Timeline that the
+// user had no protocol for and to inflate every shared lane's denominator.
+//
+// Why this is not injClearFuture with the arguments left out: that function REFUSES
+// a missing compound_id or from_date, because for a plan-rewrite an empty value is
+// not a narrow filter, it is no filter — the 2026-08-14 incident. Here the wide
+// match is the entire point, and saying so out loud is safer than teaching the
+// guarded function to sometimes skip its guard. The scope is one cycle_id and
+// nothing else:
+//
+//   • unlogged_only is hardcoded true and takes no argument. A taken dose is the
+//     record of something that went into the user's body; it outlives the protocol
+//     that planned it and there is no caller-facing way to ask for it here.
+//   • no from_date, deliberately. An untaken dose is debris whether it is dated
+//     last month or next year — a plan the user never carried out is not history.
+//   • an empty cycleId is refused. Without it the backend matches EVERY row in the
+//     account, which with unlogged_only would erase the user's whole forward plan.
+//   • 'tcalc' and 'manual' are refused: they are shared namespaces, not protocols,
+//     so no single protocol's deletion may clear them. ('tcalc:<stackId>' IS one
+//     protocol's rows and is allowed.)
+//
+// Returns the number of rows removed, or null if the request failed.
+var _INJ_SHARED_NAMESPACES = ['tcalc', 'manual'];
+async function injPurgeCyclePlan(cycleId, tag){
+  if(!cycleId || _INJ_SHARED_NAMESPACES.indexOf(cycleId) !== -1){
+    _injLogErr(tag || 'injPurgeCyclePlan',
+      new Error('refused: purge needs one protocol\'s cycle_id — got ' +
+                JSON.stringify(cycleId || '') + '. An empty value is NOT a filter, and ' +
+                _INJ_SHARED_NAMESPACES.join('/') + ' are shared namespaces, not protocols.'));
+    return null;
+  }
+  try{
+    var r = await fetch(AGENT_URL + '/injections?cycle_id=' + encodeURIComponent(cycleId) +
+                        '&unlogged_only=true',
+                        {method:'DELETE', headers: authHeaders()});
+    if(!r.ok){
+      _injLogHttp(tag || 'injPurgeCyclePlan', r.status, '/injections');
+      return null;
+    }
+    var j = await r.json().catch(function(){ return {}; });
+    return (j && typeof j.removed === 'number') ? j.removed : 0;
+  }catch(e){ _injLogErr(tag || 'injPurgeCyclePlan', e); return null; }
+}
