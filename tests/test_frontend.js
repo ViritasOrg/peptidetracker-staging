@@ -6113,11 +6113,45 @@ console.log('\n── syncBodyCompFromAgent: pushes all local entries to backend
 {
   const src = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
   const fnStart = src.indexOf('async function syncBodyCompFromAgent(');
-  const fnBody = fnStart >= 0 ? src.slice(fnStart, src.indexOf('}catch(e){}', fnStart) + 11) : '';
+  // ⚠️ The slice used to run to the next `}catch(e){}` — a catch this function does
+  // not have (its own is `}catch(e){_logErr('syncBodyComp',e);}`). So fnBody ran on
+  // for another 200 lines and swept up pushBodyCompToAgent, whose request really is
+  // spelled `fetch(AGENT_URL+"/bodycomp",`. The first check below therefore passed on
+  // a DIFFERENT function's fetch, and went on passing when this one's URL changed.
+  // Cut at this function's own catch instead.
+  const fnEnd = src.indexOf("}catch(e){_logErr('syncBodyComp',e);}", fnStart);
+  const fnBody = (fnStart >= 0 && fnEnd > fnStart) ? src.slice(fnStart, fnEnd) : '';
+  check('the sync body was located at all', fnBody.length > 0 && fnBody.length < 3000,
+    'length ' + fnBody.length);
   check('syncBodyCompFromAgent fetches remote and merges with local',
-    fnBody.includes('fetch(AGENT_URL+"/bodycomp"') && fnBody.includes('bcLoad()'));
+    fnBody.includes('fetch(AGENT_URL+"/bodycomp?include_deleted=true"') && fnBody.includes('bcLoad()'));
   check('syncBodyCompFromAgent pushes ALL local entries with zero-padded dates via Promise.all',
     fnBody.includes('local.map(e=>') && fnBody.includes('padStart(2,') && fnBody.includes('pushBodyCompToAgent('));
+
+  // ── an entry deleted in the Workout app stays deleted here ────────────────
+  // bodycomp.json is SHARED: the Workout app writes the same rows for the same
+  // person in the same data namespace. "Local and not remote" therefore does not
+  // mean "not synced yet" — it can mean "deleted over there" — and treating the two
+  // the same is how a deleted reading survived in both directions.
+  check('  …and drops the ones the record says were deleted',
+    fnBody.includes('e.deleted') && fnBody.includes('gone.has(_bcPadDate(e.date))'));
+  check('  …keeping tombstones out of the list that gets rendered',
+    /const remote=all\.filter\(function\(e\)\{return!e\.deleted;\}\)/.test(fnBody));
+  // Only deleted dates. A local row the server has never seen is the user's data.
+  check('  …while a row the server has merely never seen is still pushed',
+    fnBody.includes('local.map(e=>') && !/bcLoad\(\)\.filter[^;]*remoteDates/.test(fnBody));
+
+  // The record stores dates zero-padded (the backend's validator pads on write) and
+  // this app has written unpadded ones — which is why the push pads. The prune has
+  // to agree, or a local '2026-7-22' slips past a tombstone for '2026-07-22'.
+  check('_bcPadDate defined', typeof G._bcPadDate === 'function');
+  if (typeof G._bcPadDate === 'function') {
+    check('  …pads a single-digit month and day', G._bcPadDate('2026-7-2') === '2026-07-02');
+    check('  …leaves an already-padded date alone', G._bcPadDate('2026-07-22') === '2026-07-22');
+    check('  …and hands back anything that is not a date unchanged',
+      G._bcPadDate('') === '' && G._bcPadDate('rubbish') === 'rubbish' &&
+      G._bcPadDate(null) === '');
+  }
 }
 
 // ── dose dedup migration ─────────────────────────────────────────────────────
