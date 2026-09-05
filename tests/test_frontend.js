@@ -11521,6 +11521,66 @@ if (typeof G._blBuildLines === 'function') {
       _byKey['trt|test_e'].days[_tlD(0)].n === 2 && _byKey['trt|test_e'].days[_tlD(0)].dose === 200);
     check('timeline: a part-logged day is neither taken nor planned',
       _byKey['trt|test_e'].days[_tlD(0)].logged === 1);
+    // ── A deleted protocol's untaken plan is debris, not history ────────────
+    // Reported 2026-09-05: a Masteron lane for a compound in no protocol. Read from
+    // the record, not guessed: stacks.json held Protocol 2 and 3 while injections
+    // .json held 384 rows under 'protocol_4_nostart', ALL logged:false, 345 of them
+    // in the future. Deleting the protocol does not delete its doses (deliberate —
+    // a render path may not delete injections), so a dead plan sat in the record and
+    // this tab, alone among the tabs, showed the whole record.
+    //
+    // A LOGGED row is history and is never filtered. An UNLOGGED row is a plan, and
+    // a plan belongs to a protocol.
+    if (typeof G._tlIsDeadPlan === 'function') {
+      var _dpLive = { stk1: true };
+      check('timeline: an untaken dose from a deleted protocol is dropped',
+        G._tlIsDeadPlan({ cycle_id:'protocol_4_nostart', logged:false }, _dpLive) === true);
+      check('  …but a TAKEN one from the same dead protocol is history and stays',
+        G._tlIsDeadPlan({ cycle_id:'protocol_4_nostart', logged:true }, _dpLive) === false);
+      check('  …and a live protocol\'s plan is untouched',
+        G._tlIsDeadPlan({ cycle_id:'stk1', logged:false }, _dpLive) === false);
+      check('  …manual, T-Calc and cycle-less rows own no stack, so none is orphaned',
+        G._tlIsDeadPlan({ cycle_id:'manual', logged:false }, _dpLive) === false &&
+        G._tlIsDeadPlan({ cycle_id:'tcalc', logged:false }, _dpLive) === false &&
+        G._tlIsDeadPlan({ cycle_id:'', logged:false }, _dpLive) === false);
+      check('  …a T-Calc plan bound to a DELETED stack is still debris',
+        G._tlIsDeadPlan({ cycle_id:'tcalc:gone', logged:false }, _dpLive) === true &&
+        G._tlIsDeadPlan({ cycle_id:'tcalc:stk1', logged:false }, _dpLive) === false);
+      // ⚠️ AN EMPTY STACK LIST MEANS NOT LOADED, NOT "NOTHING EXISTS".
+      check('  …and nothing is filtered before the stacks have loaded',
+        G._tlIsDeadPlan({ cycle_id:'protocol_4_nostart', logged:false }, null) === false);
+    }
+    {
+      // End to end through _tlBuildLanes, shaped like the real record.
+      var _dpSv = { rows:G._tlRows, stacks:G._userStacks, supp:G._supplements, cache:G._tlColorCache };
+      G._supplements = []; G._tlColorCache = {};
+      G._userStacks = [{ id:'protocol_3_nostart', name:'Protocol 3',
+                         cycle_start:G.dateKey(G._tlAdd(_tlNow,-10)), cycle_length:5, peptides:[] }];
+      var _dpD = function(n){ return G.dateKey(G._tlAdd(_tlNow, n)); };
+      G._tlRows = [
+        { id:'a', date:_dpD(-5), cycle_id:'protocol_3_nostart', compound_id:'hgh',    compound_name:'HGH (Somatropin)',  tier:'enhanced', dose:'3', unit:'IU', logged:true  },
+        { id:'b', date:_dpD(5),  cycle_id:'protocol_3_nostart', compound_id:'hgh',    compound_name:'HGH (Somatropin)',  tier:'enhanced', dose:'3', unit:'IU', logged:false },
+        { id:'c', date:_dpD(5),  cycle_id:'protocol_4_nostart', compound_id:'mast_e', compound_name:'Masteron Enanthate',tier:'enhanced', dose:'150',unit:'mg', logged:false },
+        { id:'d', date:_dpD(-5), cycle_id:'protocol_4_nostart', compound_id:'mast_e', compound_name:'Masteron Enanthate',tier:'enhanced', dose:'150',unit:'mg', logged:true  },
+      ];
+      var _dpLanes = G._tlBuildLanes(G._tlAdd(_tlNow,-30), G._tlAdd(_tlNow,30));
+      var _dpMast = _dpLanes.filter(function(L){ return L.compId === 'mast_e'; })[0];
+      var _dpHgh  = _dpLanes.filter(function(L){ return L.compId === 'hgh'; })[0];
+      check('timeline: the dead protocol\'s untaken doses leave the lane',
+        !!_dpMast && Object.keys(_dpMast.days).length === 1 &&
+        !!_dpMast.days[_dpD(-5)] && !_dpMast.days[_dpD(5)],
+        _dpMast ? JSON.stringify(Object.keys(_dpMast.days)) : 'no masteron lane');
+      check('  …while the live protocol keeps both its taken and its planned doses',
+        !!_dpHgh && Object.keys(_dpHgh.days).length === 2);
+      // The denominator was the quieter half of the bug: HGH read 40/192 on the real
+      // record, 90 of which were the dead plan.
+      var _dpAllDead = G._tlBuildLanes(G._tlAdd(_tlNow,1), G._tlAdd(_tlNow,30));
+      check('  …and a lane whose every dose was dead plan does not render at all',
+        !_dpAllDead.some(function(L){ return L.compId === 'mast_e'; }));
+      G._tlRows = _dpSv.rows; G._userStacks = _dpSv.stacks;
+      G._supplements = _dpSv.supp; G._tlColorCache = _dpSv.cache;
+    }
+
     check('timeline: a row from a protocol that no longer exists still shows',
       !!_byKey['enhanced|deca'] && G._tlOwnerName('ghost') === 'Archived protocol');
 
