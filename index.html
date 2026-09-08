@@ -1615,15 +1615,18 @@ async function useStack(idx){
 // was frozen carry the derived form, and renaming a protocol or moving its cycle
 // start mints a further spelling for every row written after it.
 //
-// Prod on 2026-09-08 held exactly this, in two protocols at once:
-//   protocol_4_nostart          768 rows, 0 logged
-//   protocol_4_2026-09-25        84 rows, 0 logged
-//   hormone_health_trt_2026-07-26 24 rows, 0 logged
-//   hormone_health_trt_2026-08-01 12 rows, 0 logged
+// The record on 2026-09-08 held exactly this, in two protocols at once. Counts are
+// per user_id namespace — the store is partitioned by it, and a read that merges
+// namespaces double-counts every row:
+//   henrik.schaub@gmail.com   protocol_4_nostart            384 rows, 0 logged
+//                             protocol_4_2026-09-25          84 rows, 0 logged
+//   trt:henrik.schaub@...     hormone_health_trt_2026-07-26  12 rows, 0 logged
+//                             hormone_health_trt_2026-08-01  12 rows, 0 logged
 // deleteStack purged _stackCycleId only, so deleting either protocol left the other
 // spelling's rows behind — still stored, still dated, owned by a cycle_id that now
 // resolves to nothing, and still drawn on the T-Calc chart as doses that were
-// "never ticked". That is the ghost-dose report of 2026-09-08.
+// "never ticked". Those 384 rows are 81 enanthate doses at 12.5 mg daily; nine of
+// them fell in the past window and drew as the amber stems of the 2026-09-08 report.
 //
 // The cleanup sweep in Settings cannot finish the job either, and deliberately so:
 // _livePlanOwnerIds spares BOTH spellings so a live protocol's rows are never
