@@ -2,13 +2,34 @@
  * "What weekly dose of ester X holds free T at Y?" — and then, below it, what
  * the catalogue recommends for the compounds a user reaches for next.
  *
- * ⚠️ THIS TAB INVERTS THE MODEL. IT DOES NOT INVENT ONE. ⚠️
- * Every candidate schedule is scored by _tcSolveSeries, which is _tcFreeTSeries
- * — the same function that draws the T-Calc curve, calibrated from the user's
- * own bloodwork. There is no second pharmacology here and there must never be:
- * a dose finder that disagreed with the plotted curve would be telling the user
- * two different things about the same protocol. Same rule as tcSolveTransition,
- * for the same reason.
+ * ⚠️ THIS TAB IS ISOLATED FROM THE T-CALC CURVE. ⚠️
+ * Henrik, 2026-09-08: "This tab should work in isolation from the t-calc curve.
+ * This is not to be using past injections or anything. It should only take
+ * available research resources and any existing blood work as input, use the
+ * chosen ester and do a calculation for needed weekly dose needed to remain at
+ * the target steady state free T."
+ *
+ * So the ONLY inputs are:
+ *   • published pharmacology — the ester's half-life, tmax, bioavailability and
+ *     testosterone fraction from /trt-catalog, and endogenous production
+ *   • the user's own bloodwork — free T / total T / SHBG, if any exists
+ *   • the chosen ester, cadence and vial concentration
+ *   • the target level
+ *
+ * NOT the logged injection history. NOT the active protocol. NOT _tcCurveLog,
+ * _tcLoggedHistory, _tcSsPeakPmol or anything else that describes what the user
+ * happens to be running. This is a standing question — "what dose holds this
+ * level" — and its answer must not change because of what was injected last
+ * month. Feeding the history in is exactly what broke it on 2026-09-08: a
+ * 56-day Nebido depot was still releasing at the measurement window, its residue
+ * was scored as if the candidate schedule had produced it, and the tool asked
+ * for 100 mg/week where the honest answer was 200.
+ *
+ * ⚠️ ISOLATED FROM THE CURVE'S DATA, NOT FROM ITS PHARMACOLOGY. ⚠️
+ * The maths still comes from _tcFreeTSeries — the PK, the HPTA-suppression term
+ * and the Vermeulen binding model — because a second pharmacology here would let
+ * two surfaces disagree about the same drug, which the app forbids everywhere
+ * else. What is removed is the DATA coupling, not the equations.
  *
  * ⚠️ AND IT INVENTS NO DOSES FOR THE COMPOUNDS BELOW. ⚠️
  * The advanced-compound half renders ENHANCEMENT_COMPOUNDS — the backend's
@@ -57,49 +78,19 @@ function _tdGet(){
 }
 
 // ── WHAT THE TARGET FIELD STARTS AT ─────────────────────────────────────────
-// ⚠️ A PREFILLED TARGET IS DESCRIPTIVE, NEVER A RECOMMENDATION.
-// The app has no opinion on what level anyone should hold, and a number sitting
-// in the box on first open would be read as one. So it is seeded only from where
-// the user ALREADY IS, and the UI names the source next to it:
+// ⚠️ A PREFILLED TARGET IS DESCRIPTIVE, NEVER A RECOMMENDATION, AND IT COMES
+// ONLY FROM BLOODWORK.
+// It used to seed from the level the active protocol holds, which read the
+// injection history through _tcCurveLog — the coupling this tab is not allowed
+// to have. A measured draw is the one thing here that is neither a model output
+// nor a recommendation, so it is the only honest seed.
 //
-//   1. the free T the ACTIVE PROTOCOL holds at steady state
-//   2. failing that, the most recent MEASURED free T from bloodwork
-//   3. failing that, blank — better an empty field than an invented figure
-//
-// Seeding from a reference range instead was considered and rejected: "the top
-// of the healthy young-male range" is exactly the number that becomes a goal
-// because it was pre-typed, and choosing the level is the user's half of this
-// tool. Only ever fills an EMPTY field — a target the user typed is theirs.
-//
-// ⚠️ COMPUTED HERE, NOT READ OFF THE CHART.
-// The obvious source is _tcSsPeakPmol, and it is the wrong one twice over: it is
-// the PEAK rather than the level held, and it is a side effect of T-Calc having
-// rendered — so it is null until that tab is opened and the seed silently
-// changes depending on where the user has been. _tcCurveLog() is the injection
-// list the curve is built from (logged past + the active protocol's plan,
-// de-duplicated), so running it through the same _tcSolveSeries the solve uses
-// gives the level this protocol actually holds, from anywhere, every time.
-function _tdActiveProtocolLevel(){
-  if(typeof _tcCurveLog!=='function' || typeof _tcSolveSeries!=='function') return 0;
-  var log = _tcCurveLog();
-  if(!log || !log.length) return 0;
-  var ser = _tcSolveSeries(log);
-  if(!ser) return 0;
-  // The plateau, measured over the last DOSING week — never the washout tail the
-  // series appends, for the same reason the solve never measures there.
-  var lastMs = 0;
-  log.forEach(function(e){
-    var t = new Date(e.date+'T12:00:00').getTime();
-    if(isFinite(t) && t>lastMs) lastMs = t;
-  });
-  if(!lastMs) return 0;
-  var st = _tcSolveWindowStats(ser, lastMs-7*86400000, lastMs);
-  return (st && st.mean>0) ? st.mean : 0;
-}
+// Seeding from a reference range was considered and rejected: "the top of the
+// healthy young-male range" is exactly the number that becomes a goal because it
+// was pre-typed, and choosing the level is the user's half of this tool. Blank
+// beats invented. Only ever fills an EMPTY field — a target the user typed is
+// theirs.
 function _tdDefaultTarget(){
-  var lvl = _tdActiveProtocolLevel();
-  if(lvl>0) return {value:Math.round(lvl),
-                    source:'the level your active protocol holds'};
   var cal = _tdCalibration();
   if(cal.ok && parseDec(cal.free_t)>0)
     return {value:Math.round(parseDec(cal.free_t)),
@@ -145,51 +136,31 @@ function _tdSolveWeekly(opts){
   var cad = opts.cadence;
   if(!cad) return {ok:false, reason:'no-cadence'};
 
-  var hist  = (opts.history||[]).slice();
-  var start = opts.startDate;
+  // ⚠️ NO HISTORY. NOT AN OMISSION — THE WHOLE POINT.
+  // The candidate schedule is the only drug in this model. Nothing the user has
+  // already injected contributes, so the answer is "the dose that holds this
+  // level", full stop, rather than "the dose that holds it while your last
+  // protocol is still clearing". See the isolation note at the top of the file.
+  var start = opts.startDate || dateKey(NOW);
 
-  // ── HOW FAR OUT THE PLATEAU IS MEASURED ────────────────────────────────────
-  // Long enough for the candidate ester to settle: five half-lives is 97% of the
-  // way there, so enanthate needs ~3 weeks and the 12-week floor covers it.
+  // Long enough for the chosen ester to actually BE at steady state: five
+  // half-lives is 97% of the way there. With no prior drug on board there is
+  // nothing else to wait for, so this is the only term — a 56-day depot needs
+  // ~40 weeks, enanthate is covered by the 12-week floor.
   var hl = cd.halfLifeDaysHigh || cd.halfLifeDays || 1;
-  var candWeeks = Math.ceil(5*hl/7);
+  var weeks = Math.min(_TD_MAX_WEEKS, Math.max(12, Math.ceil(5*hl/7)));
 
-  // ⚠️ AND LONG ENOUGH FOR WHAT IS ALREADY ON BOARD TO HAVE GONE.
-  // The history is here to CALIBRATE the curve — TT_base is solved against the
-  // measurement, which needs the doses around it — but its drug does not stop at
-  // the calibration. It keeps releasing, and if the plateau is read while a long
-  // depot is still clearing, that residue is scored as if the candidate schedule
-  // produced it. The tool then under-prescribes by exactly the leftover.
-  //
-  // Measured on the reported case (2026-09-08): ~362 mg/week of Nebido logged
-  // through 7 Sep, then "what holds 1457 pmol/L on enanthate?". At a 12-week
-  // window the Nebido tail alone was still worth 439 pmol/L, so 100 mg/week
-  // scored 1173 instead of its true 594 — the answer came back at roughly a
-  // third of the dose actually required, and it would have read correctly for a
-  // few months and then fallen away as the depot cleared.
-  //
-  // Nebido's half-life is 56 days, so five of them is 40 weeks. That is a long
-  // window, and it is the honest one: it is how long "what does this dose hold"
-  // genuinely takes to become a question about this dose alone.
-  var histWeeks = 0;
-  if(hist.length){
-    var maxHl = 0, lastHist = '';
-    hist.forEach(function(e){
-      var ci = _tcCompInfo(e.compId) || {};
-      var h  = (ci.halfLifeDaysHigh || ci.halfLifeDays) || 1;
-      if(h > maxHl) maxHl = h;
-      if((e.date||'') > lastHist) lastHist = e.date;
-    });
-    // Time already elapsed between the last logged dose and the plan's start
-    // counts towards that washout — it has been decaying since.
-    var gapDays = 0;
-    if(lastHist){
-      gapDays = (new Date(start+'T12:00:00') - new Date(lastHist+'T12:00:00'))/86400000;
-      if(!(gapDays > 0)) gapDays = 0;
-    }
-    histWeeks = Math.ceil(Math.max(0, 5*maxHl - gapDays)/7);
-  }
-  var weeks = Math.min(_TD_MAX_WEEKS, Math.max(12, candWeeks, histWeeks));
+  // ⚠️ REFUSE ON UNLOADED INPUTS RATHER THAN ANSWER FROM NOTHING.
+  // The two things this tab is allowed to stand on are the user's bloodwork and
+  // the population tables from /systemic-interactions. With neither, the free-T
+  // conversion has nothing behind it and the solve still returns a number —
+  // measured at 4025 mg/week on a blank profile, which is not a dose, it is an
+  // artefact wearing one. A dosing tool must say it cannot answer.
+  var _haveBw  = _tdCalibration().ok;
+  var _havePop = (typeof _tcShbgBaseline!=='undefined' && _tcShbgBaseline &&
+                  _tcShbgBaseline.bands && _tcShbgBaseline.bands.length);
+  if(!_haveBw && !_havePop) return {ok:false, reason:'no-basis'};
+
   var dates = _tcSolveDates(cad, start, weeks);
   if(!dates.length) return {ok:false, reason:'no-dates'};
 
@@ -199,7 +170,7 @@ function _tdSolveWeekly(opts){
 
   var calls = 0;
   function evalDose(mg){
-    var evts = hist.slice();
+    var evts = [];
     dates.forEach(function(d){
       evts.push({compId:opts.esterId, doseMg:String(mg), date:_tcSolveDayKey(d)});
     });
@@ -272,9 +243,6 @@ function _tdSolveWeekly(opts){
     exactMg:        mg,
     stepMg:         stepMg,
     weeks:          weeks,
-    // Non-zero when the window had to be pushed out past a long ester already on
-    // board, so the card can say why it is reporting week 40 rather than week 12.
-    washoutWeeks:   histWeeks,
     achieved:       fin.mean,
     peak:           fin.peak,
     trough:         fin.trough,
@@ -301,21 +269,13 @@ function _tdCalibration(){
   return {ok:true, date:last.date, free_t:last.free_t, shbg:last.shbg, total_t:last.total_t};
 }
 
-// The last logged dose. Candidates must start after it — see the anchor note.
-function _tdAnchorDate(){
-  var hist = (typeof _tcLoggedHistory==='function') ? _tcLoggedHistory() : [];
-  if(!hist.length) return '';
-  return hist.map(function(e){ return e.date; }).sort().pop();
-}
-function _tdStartDate(){
-  var anchor = _tdAnchorDate();
-  var today  = dateKey(NOW);
-  if(!anchor || anchor < today) return today;
-  // Strictly after the anchor, never on it.
-  var d = new Date(anchor+'T12:00:00');
-  d.setDate(d.getDate()+1);
-  return _tcSolveDayKey(d);
-}
+// ⚠️ THE ANCHOR RULE IS GONE BECAUSE THE HISTORY IS GONE.
+// _tdAnchorDate/_tdStartDate used to push the plan past the last logged dose, so
+// a candidate injection could not land on the calibration anchor and collapse
+// TT_base. With no logged doses in the model there is no anchor to protect and
+// nothing to start after: the schedule is a hypothetical steady state, and today
+// is as good a day as any to begin it.
+function _tdStartDate(){ return dateKey(NOW); }
 
 function _tdRunSolve(){
   var s = _tdGet();
@@ -329,7 +289,6 @@ function _tdRunSolve(){
         targetPmol:  s.targetPmol,
         esterId:     s.esterId,
         cadence:     cad,
-        history:     (typeof _tcLoggedHistory==='function') ? _tcLoggedHistory() : [],
         startDate:   _tdStartDate(),
         concMgPerMl: s.concMgPerMl,
         stepMl:      s.stepMl
@@ -427,7 +386,10 @@ function _tdTargetCardHtml(){
   if(cal.ok){
     h += '<div style="font-size:11px;color:var(--muted2);line-height:1.55;margin-bottom:10px;">'
       +  'Calibrated on your bloodwork of <strong style="color:var(--text)">'+_esc(cal.date)+'</strong>'
-      +  ' — free T '+_esc(String(cal.free_t))+(cal.shbg?(' · SHBG '+_esc(String(cal.shbg))):'')+'.'
+      +  ' — free T '+_esc(String(cal.free_t))+(cal.shbg?(' · SHBG '+_esc(String(cal.shbg))):'')+'. '
+      +  'This tab uses that draw and the published pharmacology of the ester you pick, and '
+      +  '<strong style="color:var(--text)">nothing else</strong> — not your logged injections, '
+      +  'not your active protocol. It answers what dose holds a level, from a standing start.'
       +  '</div>';
   }else{
     h += '<div style="font-size:11px;color:#f59e0b;line-height:1.55;margin-bottom:10px;">'
@@ -483,6 +445,9 @@ function _tdResultCardHtml(){
       'no-cadence':  'Pick an injection cadence.',
       'no-dates':    'That cadence produced no injection dates.',
       'model-failed':'The free-T model could not build a series for that input.',
+      'no-basis':    'No bloodwork on record and the population reference tables have not '
+                    +'loaded yet, so there is nothing to calibrate against. Reopen the tab '
+                    +'once you are online, or log a bloodwork draw.',
       'threw':       'The solve failed: '+_esc(String(r.msg||''))
     }[r.reason] || 'The solve did not produce an answer.';
     return _tdCard('<div style="font-size:13px;color:#f59e0b;line-height:1.55;">'+why+'</div>');
@@ -523,15 +488,14 @@ function _tdResultCardHtml(){
   h += '<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:6px;">'
     +  'Measured over the last dosing week of a '+r.weeks+'-week run — long enough for '
     +  _esc(cd.name||s.esterId)+' to reach steady state, and never into the washout tail.</div>';
-  // A 40-week window needs explaining, or it reads as an arbitrary number.
-  if(r.washoutWeeks>12){
+  // A long window on a slow depot still needs explaining — but it is now purely
+  // the chosen ester's own settling time, never someone else's leftovers.
+  if(r.weeks > 12){
     h += '<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:6px;">'
-      +  'The window is '+r.weeks+' weeks rather than 12 because a long-acting ester is '
-      +  'still clearing from your logged doses. This is the dose that holds the level '
-      +  'once that has gone — until then the old ester is still contributing and you '
-      +  'will sit above it.</div>';
+      +  'The window is '+r.weeks+' weeks because '+_esc(cd.name||s.esterId)+' is slow to '
+      +  'settle — five half-lives. Nothing you have already injected is included in this '
+      +  'figure; it is what the schedule above holds on its own.</div>';
   }
-
   // The app's own ceiling copy, not a new opinion.
   var ceil = (typeof _FT_REF!=='undefined') ? _FT_REF : null;
   if(ceil && ceil.ceiling_pmol_l && r.target > ceil.ceiling_pmol_l){
