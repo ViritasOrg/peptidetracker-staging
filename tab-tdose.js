@@ -55,6 +55,31 @@ function _tdGet(){
   }
   return _tdState;
 }
+
+// ── WHAT THE TARGET FIELD STARTS AT ─────────────────────────────────────────
+// ⚠️ A PREFILLED TARGET IS DESCRIPTIVE, NEVER A RECOMMENDATION.
+// The app does not have an opinion on what level anyone should hold, and a
+// number sitting in the box on first open would be read as one. So it is seeded
+// only from where the user ALREADY IS, and the UI names the source next to it:
+//
+//   1. the current modelled steady state (_tcSsPeakPmol, set when T-Calc draws)
+//   2. failing that, the most recent MEASURED free T from bloodwork
+//   3. failing that, blank — better an empty field than an invented figure
+//
+// Seeding from a reference range instead was considered and rejected: "the top
+// of the healthy young-male range" is exactly the kind of number that becomes a
+// goal because it was pre-typed, and choosing the level is the user's half of
+// this tool. Only ever fills an EMPTY field — a target the user typed is theirs
+// and is never overwritten.
+function _tdDefaultTarget(){
+  if(typeof _tcSsPeakPmol!=='undefined' && _tcSsPeakPmol>0)
+    return {value:Math.round(_tcSsPeakPmol), source:'your current modelled steady state'};
+  var cal = _tdCalibration();
+  if(cal.ok && parseDec(cal.free_t)>0)
+    return {value:Math.round(parseDec(cal.free_t)),
+            source:'your last measured free T ('+cal.date+')'};
+  return {value:'', source:''};
+}
 function _tdSave(){
   if(typeof setData==='function') setData('pep-tdose', _tdGet());
 }
@@ -255,6 +280,11 @@ function _tdRunSolve(){
 // the question they just solved.
 var _TD_INJ_GROUPS  = ['Testosterone-Derived','DHT-Derived','19-Nor','Blends'];
 var _TD_ORAL_GROUPS = ['Oral'];
+// Estrogen control, PCT and side-effect support. Not "advanced compounds" — the
+// things a run needs alongside them, and the ones whose absence is the problem.
+// 'GH Axis' is deliberately NOT here: hGH is a growth compound, not an ancillary,
+// and filing it under support would misread what it is.
+var _TD_ANC_GROUPS  = ['Estrogen Control','PCT & Recovery','Side-Effect Support'];
 
 function _tdCompounds(groups){
   // Array.isArray, not a truthiness check: the catalogue endpoint answers with
@@ -312,6 +342,13 @@ function _tdTargetCardHtml(){
   // offering different esters.
   var esterIds = (typeof _tcManualComps==='function') ? _tcManualComps() : [];
 
+  // Seed only an untouched field, and say where the number came from.
+  var seed = {value:'', source:''};
+  if(s.targetPmol===''||s.targetPmol==null){
+    seed = _tdDefaultTarget();
+    if(seed.value!=='') s.targetPmol = String(seed.value);
+  }
+
   var h = _tdLabel('Target free T');
 
   // What the answer is calibrated against, said plainly. A figure solved against
@@ -341,6 +378,12 @@ function _tdTargetCardHtml(){
     h += '<option value="'+_esc(id)+'"'+(s.esterId===id?' selected':'')+'>'+_esc(info.name||id)+'</option>';
   });
   h += '</select></div></div>';
+
+  if(seed.source){
+    h += '<div style="font-size:11px;color:var(--muted2);line-height:1.55;margin:-4px 0 10px;">'
+      +  'Starting from '+_esc(seed.source)+' — this is where you are, not a level the app '
+      +  'recommends. Change it to whatever you want to hold.</div>';
+  }
 
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">'
     +  '<div><div style="font-size:9px;color:var(--muted2);letter-spacing:1px;font-weight:700;margin-bottom:5px;">CADENCE</div>'
@@ -481,6 +524,14 @@ function _tdAdvancedHtml(){
     + 'otherwise — run lengths are short and liver markers are the monitoring, not an optional extra. '
     + 'Tap a compound for its full guide.</div>'
     + _tdCompoundRowsHtml(_TD_ORAL_GROUPS));
+
+  h += _tdCard(_tdLabel('Ancillaries &amp; support')
+    + '<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-bottom:10px;">'
+    + 'Estrogen control, PCT and side-effect support. These are dosed to BLOODWORK and '
+    + 'to symptoms, not to a cycle template — an AI in particular is titrated from a '
+    + 'measured E2, and the figures below are starting points to test against a draw, '
+    + 'never a standing prescription. Tap a compound for its full guide.</div>'
+    + _tdCompoundRowsHtml(_TD_ANC_GROUPS));
 
   if(typeof _renderSafetyNote==='function'){
     h += _tdCard(_renderSafetyNote('enhanced'));

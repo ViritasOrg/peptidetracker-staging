@@ -1,5 +1,29 @@
 # Peptide Tracker Staging — Claude Instructions
 
+## 🚦 THE WORKFLOW — STAGE, THEN PING. NEVER PROD. 🚦
+**Henrik, 2026-09-08, verbatim: "you must move code to Stage, and once ready for
+test ping me, but never ever push to prod!!"**
+
+Every piece of work Claude does follows exactly three steps:
+
+1. **Move the code to Stage.** Commit, push the branch, open the PR against
+   `main` on `peptidetracker-staging`, wait for CI, and **merge it**. Staging
+   `main` is branch-protected, so a direct `git push origin main` is rejected —
+   a PR is the only route, and pushing the branch alone is NOT done. Work that
+   sits on an unmerged branch has not been delivered. Do not stop to ask
+   permission for any of this; it is pre-authorised, standing.
+2. **Ping Henrik that it is ready for test.** Say what landed and what to look
+   at. That is where Claude's job ends.
+3. **Never push to prod. Ever.** No exceptions, no "obvious" fixes, no
+   hotfixes, no CI-green argument, no "he said yes last time". See
+   *Promotion to prod* below — the prohibition there is absolute and Claude
+   may not talk itself past it.
+
+If something genuinely needs Henrik's input, finish everything that does not
+depend on the answer, land it on stage, and end the reply with a **numbered
+list of questions**. Do not bury a question inside a long explanation — it will
+not be read.
+
 ## 🔒 ALL DATA LIVES IN THE BACKEND — ALWAYS. NEVER ASK AGAIN. 🔒
 **Every piece of data — compound/PK/pharmacology parameters, reference ranges,
 baselines, catalogue entries, and all user data — lives in `claude-agent-backend`
@@ -735,13 +759,28 @@ once CI passes** (step 6, "Wait for CI and merge prod PR") — so a single Push
 to Prod goes all the way to a live prod deploy. It does **not** leave a PR
 waiting for review.
 
-**What this means for Claude (corrected 2026-07-17):** the merge is the
-workflow's own built-in behavior — Claude never hand-merges the prod PR, and
-must never make any other change directly to `peptidetracker`, or **initiate**
-a new promotion, without Henrik's explicit go-ahead in that specific moment.
-Re-running a promotion run **Henrik already triggered** (e.g. after fixing the
-token) is completing an action he authorized, not starting a new one — that is
-allowed; firing a fresh `repository_dispatch`/Push to Prod yourself is not.
+**What this means for Claude (hardened 2026-09-08 — this supersedes every
+earlier wording):** promotion is **Henrik's action alone, always**. Claude must
+never:
+
+- click, fire, curl, or otherwise send the `repository_dispatch` / Push to Prod
+  event, under any circumstance;
+- push, commit, branch, or open a PR on `peptidetracker` directly;
+- hand-merge the prod PR the workflow opens;
+- start a promotion because CI is green, because the fix looks trivial, because
+  a previous turn authorised one, or because it reasons that Henrik would
+  obviously want it.
+
+**There is no "explicit go-ahead" exception any more.** Earlier versions of this
+file allowed promotion "with Henrik's explicit go-ahead in that specific
+moment", and that clause is now REMOVED — it was the crack that any plausible
+argument could widen. Henrik presses the button in the staging app's Settings
+UI. Claude's last step is always to ping him that stage is ready for test.
+
+Re-running a promotion run **Henrik already triggered himself** (e.g. after
+fixing the token) is completing his action rather than starting one, and stays
+allowed — but if there is any doubt whether he triggered it, treat it as a new
+promotion and do not touch it.
 *(Earlier versions of this note wrongly said the workflow only opens a PR that
 must never be auto-merged. The workflow has always auto-merged; the note was
 out of date.)*
