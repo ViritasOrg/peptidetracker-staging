@@ -145,13 +145,51 @@ function _tdSolveWeekly(opts){
   var cad = opts.cadence;
   if(!cad) return {ok:false, reason:'no-cadence'};
 
-  // Long enough to actually BE at steady state. Five half-lives is 97% of the
-  // way there; a 56-day depot needs 40 weeks and a propionate needs the floor.
-  var hl = cd.halfLifeDaysHigh || cd.halfLifeDays || 1;
-  var weeks = Math.min(60, Math.max(12, Math.ceil(5*hl/7)));
-
   var hist  = (opts.history||[]).slice();
   var start = opts.startDate;
+
+  // ── HOW FAR OUT THE PLATEAU IS MEASURED ────────────────────────────────────
+  // Long enough for the candidate ester to settle: five half-lives is 97% of the
+  // way there, so enanthate needs ~3 weeks and the 12-week floor covers it.
+  var hl = cd.halfLifeDaysHigh || cd.halfLifeDays || 1;
+  var candWeeks = Math.ceil(5*hl/7);
+
+  // ⚠️ AND LONG ENOUGH FOR WHAT IS ALREADY ON BOARD TO HAVE GONE.
+  // The history is here to CALIBRATE the curve — TT_base is solved against the
+  // measurement, which needs the doses around it — but its drug does not stop at
+  // the calibration. It keeps releasing, and if the plateau is read while a long
+  // depot is still clearing, that residue is scored as if the candidate schedule
+  // produced it. The tool then under-prescribes by exactly the leftover.
+  //
+  // Measured on the reported case (2026-09-08): ~362 mg/week of Nebido logged
+  // through 7 Sep, then "what holds 1457 pmol/L on enanthate?". At a 12-week
+  // window the Nebido tail alone was still worth 439 pmol/L, so 100 mg/week
+  // scored 1173 instead of its true 594 — the answer came back at roughly a
+  // third of the dose actually required, and it would have read correctly for a
+  // few months and then fallen away as the depot cleared.
+  //
+  // Nebido's half-life is 56 days, so five of them is 40 weeks. That is a long
+  // window, and it is the honest one: it is how long "what does this dose hold"
+  // genuinely takes to become a question about this dose alone.
+  var histWeeks = 0;
+  if(hist.length){
+    var maxHl = 0, lastHist = '';
+    hist.forEach(function(e){
+      var ci = _tcCompInfo(e.compId) || {};
+      var h  = (ci.halfLifeDaysHigh || ci.halfLifeDays) || 1;
+      if(h > maxHl) maxHl = h;
+      if((e.date||'') > lastHist) lastHist = e.date;
+    });
+    // Time already elapsed between the last logged dose and the plan's start
+    // counts towards that washout — it has been decaying since.
+    var gapDays = 0;
+    if(lastHist){
+      gapDays = (new Date(start+'T12:00:00') - new Date(lastHist+'T12:00:00'))/86400000;
+      if(!(gapDays > 0)) gapDays = 0;
+    }
+    histWeeks = Math.ceil(Math.max(0, 5*maxHl - gapDays)/7);
+  }
+  var weeks = Math.min(_TD_MAX_WEEKS, Math.max(12, candWeeks, histWeeks));
   var dates = _tcSolveDates(cad, start, weeks);
   if(!dates.length) return {ok:false, reason:'no-dates'};
 
@@ -234,6 +272,9 @@ function _tdSolveWeekly(opts){
     exactMg:        mg,
     stepMg:         stepMg,
     weeks:          weeks,
+    // Non-zero when the window had to be pushed out past a long ester already on
+    // board, so the card can say why it is reporting week 40 rather than week 12.
+    washoutWeeks:   histWeeks,
     achieved:       fin.mean,
     peak:           fin.peak,
     trough:         fin.trough,
@@ -244,6 +285,9 @@ function _tdSolveWeekly(opts){
   };
 }
 var _TD_MAX_MG = (typeof _TC_SOLVE_HI_MG !== 'undefined') ? _TC_SOLVE_HI_MG : 2000;
+// 400 days is the same pharmacological bound the history fetch uses: at Nebido's
+// 56-day half-life that is ~7 half-lives, under 1% of a dose still contributing.
+var _TD_MAX_WEEKS = 57;
 
 // The calibration the answer rests on. Named, because a number solved against a
 // population default and one solved against the user's own draw are different
@@ -479,6 +523,14 @@ function _tdResultCardHtml(){
   h += '<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:6px;">'
     +  'Measured over the last dosing week of a '+r.weeks+'-week run — long enough for '
     +  _esc(cd.name||s.esterId)+' to reach steady state, and never into the washout tail.</div>';
+  // A 40-week window needs explaining, or it reads as an arbitrary number.
+  if(r.washoutWeeks>12){
+    h += '<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:6px;">'
+      +  'The window is '+r.weeks+' weeks rather than 12 because a long-acting ester is '
+      +  'still clearing from your logged doses. This is the dose that holds the level '
+      +  'once that has gone — until then the old ester is still contributing and you '
+      +  'will sit above it.</div>';
+  }
 
   // The app's own ceiling copy, not a new opinion.
   var ceil = (typeof _FT_REF!=='undefined') ? _FT_REF : null;
