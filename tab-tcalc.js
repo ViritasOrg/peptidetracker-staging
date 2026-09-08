@@ -54,6 +54,7 @@ var _tcGhStack = [];          // [{pepId, startDateStr, interactions, dailyDose}
 var _tcSysInter = null;       // compounds map from /systemic-interactions
 var _tcFtBaseline = null;      // age→free-T population baseline (pmol/L) from /systemic-interactions
 var _tcShbgBaseline = null;    // age→SHBG population baseline (nmol/L) from /systemic-interactions
+var _tcDoseResponse = null;    // measured TE dose→nadir total T, from /systemic-interactions
 var _tcShbgBodyFat = null;     // body-fat→SHBG adjustment params from /systemic-interactions
 // Frontend fallback for the BF→SHBG adjustment so the personalisation still runs
 // offline; the backend value overrides this when reachable. Adiposity lowers SHBG.
@@ -222,6 +223,11 @@ function _tcLoadProfile() {
       if (d.ftBaseline) _tcFtBaseline = d.ftBaseline;
       if (d.shbgBaseline) _tcShbgBaseline = d.shbgBaseline;
       if (d.shbgBodyFat) _tcShbgBodyFat = d.shbgBodyFat;
+      // Measured dose-response anchors, so a surface showing a dose can state
+      // how far the model sits from trial data. Served, never hardcoded — two
+      // apps quoting different figures for one study is the exact thing the
+      // one-number-one-source rule exists to stop.
+      if (d.testosteroneDoseResponse) _tcDoseResponse = d.testosteroneDoseResponse;
       _tcComputeGhStack();
       buildTCalc();
     })

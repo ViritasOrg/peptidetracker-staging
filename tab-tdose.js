@@ -143,19 +143,19 @@ function _tdSet(k,v){
 // instead of quietly becoming a lie. What IS hardcoded is the published data
 // itself, which is a fixed historical fact.
 //
-// ⚠️ OWES A MIGRATION TO THE BACKEND. Per CLAUDE.md all reference data belongs
-// in claude-agent-backend and this table is reference data. It is here because
-// this session had read-only backend access and could not add the endpoint.
-// Move it to /systemic-interactions (alongside endogenousT and shbgBaseline)
-// and read it from there; do not copy it into a second frontend.
-var _TD_LIT_ANCHOR = {
-  source: 'Bhasin 2001, Am J Physiol Endocrinol Metab 281:E1172',
-  design: 'weekly testosterone enanthate under GnRH-agonist suppression, healthy young men',
-  measure:'mean NADIR total T, ng/dL',
-  ester:  'enanthate',
-  points: [{mgWk:25, ngdl:253}, {mgWk:50, ngdl:306}, {mgWk:125, ngdl:542},
-           {mgWk:300, ngdl:1345}, {mgWk:600, ngdl:2370}]
-};
+// ⚠️ THE PUBLISHED DATA IS SERVED, NOT HARDCODED.
+// It lives in /systemic-interactions as testosteroneDoseResponse, alongside
+// endogenousT and the population baselines, and reaches here through the same
+// fetch that feeds T-Calc. Two apps quoting different figures for one study is
+// exactly what the one-number-one-source rule exists to stop, and a copy in each
+// frontend is how that starts. There is no local fallback table on purpose: if
+// the backend has not answered, the tab says it cannot state its uncertainty
+// rather than stating a stale one.
+function _tdLitAnchor(){
+  var d = (typeof _tcDoseResponse!=='undefined') ? _tcDoseResponse : null;
+  if(!d || !d.points || !d.points.length) return null;
+  return d;
+}
 var _TD_NGDL_PER_NMOL = 28.84;   // testosterone MW 288.4 — a unit conversion, not data
 var _tdBiasCache = null;
 
@@ -166,28 +166,35 @@ var _tdBiasCache = null;
 function _tdModelBias(){
   if(_tdBiasCache) return _tdBiasCache;
   try{
+    var lit = _tdLitAnchor();
+    if(!lit) return null;
     var cad = (_TC_CADENCES||[]).find(function(c){ return c.key==='1xwk'; });
     var shbg = parseDec((_tdCalibration()||{}).shbg) || 45;
     if(!cad || typeof _tcInvVermeulenTT!=='function') return null;
     var ratios = [];
-    _TD_LIT_ANCHOR.points.forEach(function(pt){
+    lit.points.forEach(function(pt){
+      var mgWk = parseDec(pt.mg_per_week), ref = parseDec(pt.value);
+      if(!(mgWk>0) || !(ref>0)) return;
       var dates = _tcSolveDates(cad, dateKey(NOW), 26);
       if(!dates.length) return;
       var last = dates[dates.length-1].getTime();
-      var ser = _tcSolveSeries(dates.map(function(d){
-        return {compId:_TD_LIT_ANCHOR.ester, doseMg:String(pt.mgWk), date:_tcSolveDayKey(d)};
+      var ser = _tcSolveSeries(dates.map(function(dt){
+        return {compId:'enanthate', doseMg:String(mgWk), date:_tcSolveDayKey(dt)};
       }));
       if(!ser) return;
       var st = _tcSolveWindowStats(ser, last-7*86400000, last);
-      // Trough, to match a nadir sample. Converted to total T because that is
-      // what the study measured; free T there was not reported.
+      // ⚠️ TROUGH, because the served data is NADIR — the sample taken just
+      // before the next injection. Comparing the weekly MEAN against it
+      // overstates the disagreement by about a third, which is a mistake this
+      // code has already made once.
       var ng = _tcInvVermeulenTT(st.trough, shbg) * _TD_NGDL_PER_NMOL;
-      if(ng>0 && pt.ngdl>0) ratios.push(ng/pt.ngdl);
+      if(ng>0) ratios.push(ng/ref);
     });
     if(!ratios.length) return null;
     ratios.sort(function(a,b){ return a-b; });
     var mean = ratios.reduce(function(a,b){ return a+b; },0)/ratios.length;
-    _tdBiasCache = {mean:mean, lo:ratios[0], hi:ratios[ratios.length-1], n:ratios.length};
+    _tdBiasCache = {mean:mean, lo:ratios[0], hi:ratios[ratios.length-1],
+                    n:ratios.length, source:lit.source||'', measure:lit.measure||''};
     return _tdBiasCache;
   }catch(e){
     if(typeof _logErr==='function') _logErr('tdModelBias', e);
@@ -415,7 +422,10 @@ function _tdCompounds(groups){
 function _tdRecommended(cat){
   var tiers = (cat && cat.doseTiers) || [];
   var best = tiers.find(function(t){ return t && t.b; });
-  if(best) return {label:best.l, dose:best.d, note:best.n, risk:best.r, ev:best.ev};
+  // ratio / assumes_test_mg_wk travel with the tier — dropping them here is how
+  // the display falls back to parsing prose it no longer needs to parse.
+  if(best) return {label:best.l, dose:best.d, note:best.n, risk:best.r, ev:best.ev,
+                   ratio:best.ratio, assumesTest:best.assumes_test_mg_wk};
   if(cat && cat.defaultDose) return {label:'Catalogue default', dose:cat.defaultDose+' '+(cat.unit||''), note:'', risk:'', ev:null};
   return null;
 }
@@ -455,17 +465,27 @@ function _tdWeeklyEquivalent(cat, rec){
 // two known figures and not a recommendation either. The catalogue remains the
 // only source of doses.
 
-// "2:1 Test:Mast" -> {test:2, comp:1}. The Test:Mast half has no digits, so the
-// numeric pair is unambiguous. Returns null when the tier states no ratio.
-// Reads `label`, which is what _tdRecommended produces — the raw catalogue tier
-// calls it `l`, so accept both rather than silently matching nothing.
+// The ratio a tier states, and the base its absolute mg range was written
+// against. Both come from the backend as data now (`ratio`,
+// `assumes_test_mg_wk`) — the label is prose for reading, and parsing prose is
+// how a consumer drifts from the source.
+//
+// The label parse is kept as a FALLBACK ONLY, for a backend that predates the
+// fields. It must never be the primary path: it cannot recover the assumed base
+// at all, which is the half that makes the conflict message accurate.
 function _tdTierRatio(tier){
+  if(tier && tier.ratio && tier.ratio.test>0 && tier.ratio.comp>0){
+    return {test:tier.ratio.test, comp:tier.ratio.comp,
+            label:tier.ratio.test+':'+tier.ratio.comp,
+            assumesLo:(tier.assumesTest && tier.assumesTest[0])||0,
+            assumesHi:(tier.assumesTest && tier.assumesTest[1])||0};
+  }
   var lbl = (tier && (tier.label != null ? tier.label : tier.l)) || '';
   var m = /(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)/.exec(lbl);
   if(!m) return null;
   var t = parseDec(m[1]), c = parseDec(m[2]);
   if(!(t>0) || !(c>0)) return null;
-  return {test:t, comp:c, label:m[1]+':'+m[2]};
+  return {test:t, comp:c, label:m[1]+':'+m[2], assumesLo:0, assumesHi:0};
 }
 // The low/high mg the tier's dose column states, in the compound's own unit.
 function _tdTierRange(rec){
@@ -690,7 +710,7 @@ function _tdResultCardHtml(){
     h += '<div style="font-size:11px;color:var(--muted2);line-height:1.7;">'
       +  'The maths is metabolic-clearance arithmetic and agrees with doing that sum '
       +  'directly from the clearance rate in the literature. Checked against '
-      +  _esc(_TD_LIT_ANCHOR.source)+' — '+_esc(_TD_LIT_ANCHOR.design)+' — it reads '
+      +  _esc(bias.source)+' — it reads '
       +  '<strong style="color:var(--text)">'+(Math.round(bias.mean*100)/100)+'x high</strong> '
       +  'at matched doses (range '+(Math.round(bias.lo*100)/100)+'–'
       +  (Math.round(bias.hi*100)/100)+'x across '+bias.n+' dose levels), comparing its '
@@ -762,10 +782,12 @@ function _tdCompoundRowsHtml(groups){
             +  '⚠ At your <strong>'+Math.round(val.baseMgWk)+' mg/week</strong> base, '
             +  _esc(val.ratio.label)+' is <strong>'+Math.round(val.impliedNative)+' '
             +  _esc(val.unit.replace('mg/','mg/').replace('week','wk'))+'</strong>. '
-            +  'The catalogue\'s '+_esc(String(rec.dose||''))+' assumes a bigger base — '
-            +  'roughly '+Math.round(val.multipleLo*val.baseMgWk*val.ratio.test/val.ratio.comp)
-            +  '–'+Math.round(val.multipleHi*val.baseMgWk*val.ratio.test/val.ratio.comp)
-            +  ' mg/week of testosterone.</div>';
+            +  'The catalogue\'s '+_esc(String(rec.dose||''))+' assumes a '
+            +  ((val.ratio.assumesLo>0)
+                 ? (val.ratio.assumesLo+'–'+val.ratio.assumesHi)
+                 : (Math.round(val.multipleLo*val.baseMgWk*val.ratio.test/val.ratio.comp)
+                    +'–'+Math.round(val.multipleHi*val.baseMgWk*val.ratio.test/val.ratio.comp)))
+            +  ' mg/week testosterone base.</div>';
         }else if(val.ratio){
           h += '<div style="font-size:11px;color:var(--muted2);margin-top:4px;">'
             +  '✓ '+_esc(val.ratio.label)+' against your '+Math.round(val.baseMgWk)
