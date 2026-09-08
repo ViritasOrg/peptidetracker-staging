@@ -2926,15 +2926,14 @@ console.log('\n── A delete reaches every injection cache, T-Calc included �
   }
 
   if (typeof G._tdDefaultTarget === 'function') {
-    const _sv = {ss:G._tcSsPeakPmol, bw:G._tcBwEntries, st:G._tdState};
+    const _sv = {cl:G._tcCurveLog, bw:G._tcBwEntries, st:G._tdState};
     // ⚠️ THE SEED IS DESCRIPTIVE, NEVER A RECOMMENDATION.
     // Seeding from a reference range was considered and rejected: a number
     // pre-typed into the box becomes a goal, and choosing the level is the
     // user's half of this tool. It may only ever reflect where they already are.
-    G._tcSsPeakPmol = 1366;
-    check('the target seeds from the current modelled steady state',
-      G._tdDefaultTarget().value === 1366);
-    G._tcSsPeakPmol = null;
+    // The active-protocol level is asserted in its own block below; here the
+    // concern is only the FALLBACK order once there is no protocol to read.
+    G._tcCurveLog = () => [];
     G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
     check('  …falling back to the last MEASURED free T',
       G._tdDefaultTarget().value === 217);
@@ -2947,7 +2946,7 @@ console.log('\n── A delete reaches every injection cache, T-Calc included �
     // Every seeded value names its source on screen, so it cannot read as advice.
     check('  …and the source is named beside the field',
       /not a level the app\s*\+?\s*'?\s*recommends|not a level the app /.test(_anSrc));
-    G._tcSsPeakPmol = _sv.ss; G._tcBwEntries = _sv.bw; G._tdState = _sv.st;
+    G._tcCurveLog = _sv.cl; G._tcBwEntries = _sv.bw; G._tdState = _sv.st;
   }
   // A target the user typed is theirs.
   check('a user-set target is never overwritten by the seed',
@@ -2970,6 +2969,101 @@ console.log('\n── A delete reaches every injection cache, T-Calc included �
   check('the prod prohibition carries no go-ahead exception any more',
     /no "explicit go-ahead" exception any more/.test(_md) &&
     !/without Henrik's explicit go-ahead in that specific moment/.test(_md));
+}
+
+// ── A live protocol's OTHER spelling ────────────────────────────────────────
+// _orphanPlanCycleIds finds rows whose protocol is gone. This finds the rows a
+// protocol that STILL EXISTS left under an id it no longer writes to —
+// 84 of them under protocol_4_2026-09-25 in prod on 2026-09-08, which nothing
+// could ever remove: _livePlanOwnerIds spares both spellings by design.
+console.log('\n── Clean up: a live protocol\'s stale id spelling ─────────');
+if (typeof G._staleSpellingCycleIds === 'function') {
+  const _mkRow = (cyc, logged) => ({cycle_id:cyc, logged:logged, date:'2026-09-01'});
+  // Frozen id holds the live plan; the derived name_start form is the leftover.
+  const _st = {id:'protocol_4_nostart', name:'Protocol 4', cycle_start:'2026-09-25'};
+  const _rows = [
+    _mkRow('protocol_4_nostart', false), _mkRow('protocol_4_nostart', true),
+    _mkRow('protocol_4_2026-09-25', false), _mkRow('protocol_4_2026-09-25', false)
+  ];
+  const _found = G._staleSpellingCycleIds(_rows, [_st]);
+  check('the stale spelling of a live protocol is found',
+    _found['protocol_4_2026-09-25'] === 2, JSON.stringify(_found));
+  check('  …and the spelling it actually writes under is left alone',
+    !_found['protocol_4_nostart']);
+
+  // ⚠️ THE PROOF OBLIGATION IS ON THE DELETE.
+  // Without rows under the frozen id there is no evidence which spelling is
+  // live, and the derived one might BE it — deleting then destroys a real plan.
+  check('no evidence the protocol writes under the frozen id → nothing is swept',
+    Object.keys(G._staleSpellingCycleIds(
+      [_mkRow('protocol_4_2026-09-25', false)], [_st])).length === 0);
+  check('  …a protocol with only one spelling is never swept',
+    Object.keys(G._staleSpellingCycleIds(
+      [_mkRow('p3', false), _mkRow('p3_nostart', false)],
+      [{id:'p3_nostart', name:'p3'}])).length === 0);
+  // An unloaded stack list means "not loaded", never "nothing is live".
+  check('  …and an unloaded protocol list sweeps nothing at all',
+    Object.keys(G._staleSpellingCycleIds(_rows, [])).length === 0);
+
+  // A taken dose outlives every id it was ever filed under.
+  const _lg = G._staleSpellingCycleIds(
+    [_mkRow('protocol_4_nostart', true), _mkRow('protocol_4_2026-09-25', true)], [_st]);
+  check('a LOGGED row under the stale spelling is never counted',
+    Object.keys(_lg).length === 0);
+  // Shared namespaces belong to no protocol.
+  check('  …nor are the shared namespaces claimed by a protocol\'s spelling',
+    Object.keys(G._staleSpellingCycleIds(
+      [_mkRow('protocol_4_nostart', false), _mkRow('manual', false), _mkRow('tcalc', false)],
+      [_st])).length === 0);
+
+  const _swpSrc = require('fs').readFileSync(
+    require('path').join(__dirname, '../index.html'), 'utf8');
+  const _sweepFn = (_swpSrc.match(/async function cleanupOrphanDoses\(\)\{[\s\S]*?\n\}/) || [''])[0];
+  check('the sweep purges both kinds, under one confirm',
+    /_staleSpellingCycleIds\(/.test(_sweepFn) && /ids=ids\.concat\(staleIds\)/.test(_sweepFn));
+  check('  …and names them as different claims in the prompt',
+    /still exists/.test(_sweepFn) && /deleted protocol/.test(_sweepFn));
+  check('  …still asking before deleting anything',
+    _sweepFn.indexOf('confirmGlobalDelete') < _sweepFn.indexOf('injPurgeCyclePlan'));
+}
+
+// ── The target seed comes from the ACTIVE PROTOCOL ──────────────────────────
+if (typeof G._tdActiveProtocolLevel === 'function') {
+  const _sv = {cl:G._tcCurveLog, bw:G._tcBwEntries, st:G._tdState};
+  const _d = n => G.dateKey(new Date(Date.now() - n*86400000));
+  // A settled twice-weekly enanthate run.
+  const _log = [];
+  for (let i = 84; i >= 0; i -= 3.5)
+    _log.push({compId:'enanthate', doseMg:'50', date:G._tcSolveDayKey(
+      new Date(Date.now() - Math.round(i)*86400000))});
+  G._tcCurveLog = () => _log;
+  const _lvl = G._tdActiveProtocolLevel();
+  check('the seed is the level the active protocol holds', _lvl > 0, String(_lvl));
+  // ⚠️ Not _tcSsPeakPmol: that is the PEAK, and it is a side effect of T-Calc
+  // having rendered — so the seed would depend on which tabs the user visited.
+  const _tdSrc = require('fs').readFileSync(
+    require('path').join(__dirname, '../tab-tdose.js'), 'utf8');
+  // The ban is on USING it — the comment that explains why it is the wrong
+  // source must not trip the check, so comment lines are stripped first.
+  const _tdCode = _tdSrc.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  check('  …computed from _tcCurveLog, not read off the chart',
+    /_tcCurveLog\(\)/.test(_tdCode) && !/_tcSsPeakPmol/.test(_tdCode));
+  check('  …and measured on the plateau, not the washout tail',
+    Math.abs(_lvl - G._tcSolveWindowStats(G._tcSolveSeries(_log),
+      new Date(_log[_log.length-1].date+'T12:00:00').getTime() - 7*86400000,
+      new Date(_log[_log.length-1].date+'T12:00:00').getTime()).mean) < 0.5);
+  check('  …and it is what _tdDefaultTarget seeds from',
+    G._tdDefaultTarget().value === Math.round(_lvl));
+
+  // No protocol → fall back to a MEASURED value, never an invented one.
+  G._tcCurveLog = () => [];
+  G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
+  check('with no active protocol it falls back to the last measured free T',
+    G._tdDefaultTarget().value === 217);
+  G._tcBwEntries = [];
+  check('  …and to blank rather than an invented figure',
+    G._tdDefaultTarget().value === '');
+  G._tcCurveLog = _sv.cl; G._tcBwEntries = _sv.bw; G._tdState = _sv.st;
 }
 
 // ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
@@ -15289,7 +15383,10 @@ console.log('\n── A deleted protocol leaves no plan behind ─────�
   // confirmation every other stored-record delete in the app does.
   check('  …only after confirmGlobalDelete, and with the row count in the prompt',
     _sweepSrc.indexOf('confirmGlobalDelete') < _sweepSrc.indexOf('injPurgeCyclePlan') &&
-    /confirmGlobalDelete\(total\+/.test(_sweepSrc));
+    // The prompt now counts two different kinds of debris — rows from a deleted
+    // protocol, and rows under a live protocol's old id — so it is built from
+    // both totals rather than the single `total`.
+    /_parts\.push\(total\+/.test(_sweepSrc) && /_parts\.push\(staleTotal\+/.test(_sweepSrc));
   check('  …and refuses outright on an unloaded protocol list',
     /if\(!live\)\{say\('protocols not loaded'\);return;\}/.test(_sweepSrc));
   check('  …then refreshes every cache that holds injections',

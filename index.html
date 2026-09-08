@@ -821,6 +821,54 @@ function _orphanPlanCycleIds(rows,liveIds){
 // FORCED, deliberately: the cache is warm by definition at this point, so a
 // plain call would return early and change nothing. _tcFetchHistory ends by
 // calling buildTCalc itself, so the curve redraws from fresh data.
+// ── A LIVE PROTOCOL'S *OTHER* SPELLING ──────────────────────────────────────
+// _orphanPlanCycleIds finds rows whose protocol is GONE. This finds the rows a
+// protocol that still EXISTS left behind under an id it no longer writes to.
+//
+// _genInjBatches writes every generated row under _stackCycleId(stack) — the
+// frozen stack.id — so that is the live spelling, by definition. The
+// name_start form from _deriveStackCycleId is what the protocol wrote under
+// before its id was frozen, or before a rename or a cycle_start move. When the
+// two differ, rows under the derived one are a stale generation of the same
+// plan: nothing schedules them any more, and nothing removes them either —
+// _livePlanOwnerIds deliberately spares BOTH spellings so a live protocol's
+// rows are never mistaken for debris, which is the right way for THAT function
+// to be wrong but leaves these stranded forever.
+//
+// Prod on 2026-09-08 held 84 such rows under protocol_4_2026-09-25 while
+// Protocol 4 itself was alive and writing elsewhere.
+//
+// ⚠️ THE PROOF OBLIGATION IS ON THE DELETE, NOT ON THE ROW.
+// A spelling is only stale if the protocol is demonstrably writing under the
+// OTHER one right now — so the frozen id must already hold rows. Without that
+// evidence the derived spelling might BE the live one (a protocol whose id was
+// frozen to its own derived form, or one that has generated nothing yet), and
+// sweeping it would delete a real plan. No evidence, no delete.
+//
+// Logged rows are never counted or touched: injPurgeCyclePlan hardcodes
+// unlogged_only, and a taken dose outlives every id it was ever filed under.
+function _staleSpellingCycleIds(rows,stacks){
+  var out={};
+  if(!stacks||!stacks.length)return out;          // not loaded ≠ nothing live
+  stacks.forEach(function(st){
+    if(!st)return;
+    var frozen=(typeof _stackCycleId==='function')?_stackCycleId(st):(st.id||'');
+    var derived=(typeof _deriveStackCycleId==='function')?_deriveStackCycleId(st):'';
+    if(!frozen||!derived||frozen===derived)return; // one spelling, nothing to do
+    var liveRows=0, stale={};
+    (rows||[]).forEach(function(e){
+      if(!e)return;
+      var raw=e.cycle_id||'';
+      if(!raw||raw==='manual'||raw==='tcalc')return;
+      var owner=(raw.indexOf('tcalc:')===0)?raw.slice(6):raw;
+      if(owner===frozen){ liveRows++; return; }
+      if(owner===derived && !e.logged) stale[raw]=(stale[raw]||0)+1;
+    });
+    if(!liveRows)return;                           // no evidence — leave it alone
+    Object.keys(stale).forEach(function(k){ out[k]=(out[k]||0)+stale[k]; });
+  });
+  return out;
+}
 async function _injRowsChanged(tag){
   if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
   if(typeof _tlInvalidateInjections==='function')_tlInvalidateInjections();
@@ -845,13 +893,24 @@ async function cleanupOrphanDoses(){
   // "no doses on record" is true either way; claiming a clean sweep would not be.
   if(!rows.length){say('no doses on record');reset();return;}
   var dead=_orphanPlanCycleIds(rows,live);
-  var ids=Object.keys(dead);
-  if(!ids.length){say('none');reset();return;}
+  // Rows a protocol that STILL EXISTS left under an id it no longer writes to.
+  // Counted separately because the two are different claims — "its protocol is
+  // gone" and "its protocol moved on" — and the confirm says which is which.
+  var stale=_staleSpellingCycleIds(rows,(typeof _userStacks!=='undefined'&&_userStacks)||[]);
+  var ids=Object.keys(dead), staleIds=Object.keys(stale);
+  if(!ids.length&&!staleIds.length){say('none');reset();return;}
   var total=ids.reduce(function(a,k){return a+dead[k];},0);
-  if(!confirmGlobalDelete(total+' untaken dose'+(total===1?'':'s')+' left by '+
-                          ids.length+' deleted protocol'+(ids.length===1?'':'s'))){
-    say(total+' orphaned');reset();return;
+  var staleTotal=staleIds.reduce(function(a,k){return a+stale[k];},0);
+  var _parts=[];
+  if(total) _parts.push(total+' untaken dose'+(total===1?'':'s')+' left by '+
+                        ids.length+' deleted protocol'+(ids.length===1?'':'s'));
+  if(staleTotal) _parts.push(staleTotal+' untaken dose'+(staleTotal===1?'':'s')+
+                        ' under '+staleIds.length+' old id'+(staleIds.length===1?'':'s')+
+                        ' of a protocol that still exists');
+  if(!confirmGlobalDelete(_parts.join(', and '))){
+    say((total+staleTotal)+' to clean');reset();return;
   }
+  ids=ids.concat(staleIds);
   if(btn)btn.textContent='Cleaning…';
   var res=await Promise.all(ids.map(function(cid){return injPurgeCyclePlan(cid,'cleanupOrphanDoses');}));
   var removed=res.reduce(function(a,n){return a+(typeof n==='number'?n:0);},0);
