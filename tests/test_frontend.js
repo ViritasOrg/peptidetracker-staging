@@ -2891,6 +2891,87 @@ console.log('\n── A delete reaches every injection cache, T-Calc included �
   }
 }
 
+// ── Dose Finder: ancillaries, and what the target field starts at ───────────
+{
+  const _fsAn = require('fs'), _pAn = require('path');
+  const _anSrc = _fsAn.readFileSync(_pAn.join(__dirname, '../tab-tdose.js'), 'utf8');
+
+  if (typeof G._tdCompounds === 'function') {
+    // The sandbox never fetches, so ENHANCEMENT_COMPOUNDS is the app's empty
+    // default. Seed it with the catalogue's real group/id shape — asserting
+    // against [] would pass on nothing at all.
+    const _svCat = G.ENHANCEMENT_COMPOUNDS;
+    G.ENHANCEMENT_COMPOUNDS = [
+      {id:'anastrozole', group:'Estrogen Control'},   {id:'exemestane',  group:'Estrogen Control'},
+      {id:'tamoxifen',   group:'PCT & Recovery'},     {id:'hcg',         group:'PCT & Recovery'},
+      {id:'cabergoline', group:'Side-Effect Support'},{id:'finasteride', group:'Side-Effect Support'},
+      {id:'hgh',         group:'GH Axis'},            {id:'mast_e',      group:'DHT-Derived'},
+      {id:'anavar',      group:'Oral'},               {id:'test_e',      group:'Base'}
+    ];
+    const _anc = G._tdCompounds(G._TD_ANC_GROUPS).map(c => c.id);
+    check('ancillaries cover estrogen control, PCT and side-effect support',
+      ['anastrozole','tamoxifen','hcg','cabergoline','finasteride'].every(id => _anc.indexOf(id) >= 0),
+      _anc.join(','));
+    // hGH is a growth compound, not support — filing it here would misread it.
+    check('  …and hGH is not filed as an ancillary', _anc.indexOf('hgh') < 0);
+    // Ancillaries are titrated against a draw, not run to a template. Saying so
+    // beside them is the difference between a reference and a prescription.
+    check('  …shown as bloodwork-titrated, not a standing prescription',
+      /dosed to BLOODWORK/.test(_anSrc) && /never a standing prescription/.test(_anSrc));
+    // The base ester stays out of all three lists — it is the solved question.
+    check('  …and the testosterone base is in none of the three lists',
+      [G._TD_INJ_GROUPS, G._TD_ORAL_GROUPS, G._TD_ANC_GROUPS]
+        .every(g => G._tdCompounds(g).every(c => c.id !== 'test_e')));
+    G.ENHANCEMENT_COMPOUNDS = _svCat;
+  }
+
+  if (typeof G._tdDefaultTarget === 'function') {
+    const _sv = {ss:G._tcSsPeakPmol, bw:G._tcBwEntries, st:G._tdState};
+    // ⚠️ THE SEED IS DESCRIPTIVE, NEVER A RECOMMENDATION.
+    // Seeding from a reference range was considered and rejected: a number
+    // pre-typed into the box becomes a goal, and choosing the level is the
+    // user's half of this tool. It may only ever reflect where they already are.
+    G._tcSsPeakPmol = 1366;
+    check('the target seeds from the current modelled steady state',
+      G._tdDefaultTarget().value === 1366);
+    G._tcSsPeakPmol = null;
+    G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
+    check('  …falling back to the last MEASURED free T',
+      G._tdDefaultTarget().value === 217);
+    G._tcBwEntries = [];
+    check('  …and to blank rather than an invented figure',
+      G._tdDefaultTarget().value === '');
+    check('  …never from a reference range or ceiling',
+      !/_tdDefaultTarget[\s\S]{0,700}_FT_REF/.test(_anSrc) &&
+      !/_tdDefaultTarget[\s\S]{0,700}ceiling/.test(_anSrc));
+    // Every seeded value names its source on screen, so it cannot read as advice.
+    check('  …and the source is named beside the field',
+      /not a level the app\s*\+?\s*'?\s*recommends|not a level the app /.test(_anSrc));
+    G._tcSsPeakPmol = _sv.ss; G._tcBwEntries = _sv.bw; G._tdState = _sv.st;
+  }
+  // A target the user typed is theirs.
+  check('a user-set target is never overwritten by the seed',
+    /if\(s\.targetPmol===''\|\|s\.targetPmol==null\)/.test(_anSrc));
+}
+
+// ── The workflow rule: stage, then ping. Never prod. ────────────────────────
+// Henrik, 2026-09-08: "you must move code to Stage, and once ready for test
+// ping me, but never ever push to prod!!" The earlier "explicit go-ahead in
+// that specific moment" clause was the crack any plausible argument could
+// widen, so it is gone and this asserts it stays gone.
+{
+  const _md = require('fs').readFileSync(require('path').join(__dirname, '../CLAUDE.md'), 'utf8');
+  check('CLAUDE.md states the stage-then-ping workflow up front',
+    /STAGE, THEN PING\. NEVER PROD/.test(_md) && _md.indexOf('STAGE, THEN PING') < 2000);
+  check('  …says landing on stage means MERGED, not just pushed',
+    /has not been delivered|unmerged branch has not been delivered/.test(_md));
+  check('  …and that questions go in a numbered list at the end',
+    /numbered[\s\S]{0,4}list of questions/.test(_md));
+  check('the prod prohibition carries no go-ahead exception any more',
+    /no "explicit go-ahead" exception any more/.test(_md) &&
+    !/without Henrik's explicit go-ahead in that specific moment/.test(_md));
+}
+
 // ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
 // Reported 2026-08-14: "The text in the green box says I am at 309pmol/l but graph
 // shows me at 894?" The steady-state window was Math.floor(totalDays/2), and totalDays
