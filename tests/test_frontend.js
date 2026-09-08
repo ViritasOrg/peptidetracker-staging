@@ -3146,10 +3146,20 @@ if (typeof G._tdSolveWeekly === 'function') {
 // the apparent error was that mistake.
 console.log('\n── Dose Finder: the number carries its own uncertainty ──────');
 if (typeof G._tdModelBias === 'function') {
-  const _svB = {bw:G._tcBwEntries, tp:G._tcp, c:G._tdBiasCache};
+  const _svB = {bw:G._tcBwEntries, tp:G._tcp, c:G._tdBiasCache, dr:G._tcDoseResponse};
   G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
   G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:'217', shbg:'45',
                                           totalT:'17', birthYear:'1980'});
+  // SERVED, NOT HARDCODED. The published anchors live in the backend
+  // (/systemic-interactions testosteroneDoseResponse) so two apps cannot quote
+  // different figures for one study. This is the backend's shape.
+  G._tcDoseResponse = {
+    measure:'mean nadir serum total testosterone', unit:'ng/dL',
+    source:"Bhasin S et al., Am J Physiol Endocrinol Metab 2001;281(6):E1172-81",
+    points:[{mg_per_week:25, value:253}, {mg_per_week:50, value:306},
+            {mg_per_week:125, value:542}, {mg_per_week:300, value:1345},
+            {mg_per_week:600, value:2370}]
+  };
   G._tdBiasCache = null;
   const _b = G._tdModelBias();
   check('the model measures its own bias against published data', !!_b && _b.n === 5,
@@ -3178,8 +3188,20 @@ if (typeof G._tdModelBias === 'function') {
     /Bhasin 2001/.test(_tdB) && /281:E1172/.test(_tdB));
   // Reference data belongs in the backend; this copy must carry that debt
   // visibly rather than settling in as a frontend constant.
-  check('  …and the hardcoded table is flagged for backend migration',
-    /OWES A MIGRATION TO THE BACKEND/.test(_tdB));
+  check('  …naming the study it checked against, from the served payload',
+    /Bhasin/.test(_b.source) && /nadir/.test(_b.measure));
+  // No local copy of the published data — a table in each frontend is how two
+  // apps start quoting different numbers for the same study.
+  check('  …with no local copy of that data in the tab',
+    /_tcDoseResponse/.test(_tdB) && !/mg_per_week:\s*25\b/.test(_tdB) &&
+    !/_TD_LIT_ANCHOR/.test(_tdB));
+  // With nothing served it must say nothing, not something stale — a fallback
+  // table would defeat the point of removing it.
+  const _svDr2 = G._tcDoseResponse;
+  G._tcDoseResponse = null; G._tdBiasCache = null;
+  check('  …and states no uncertainty at all rather than a stale one',
+    G._tdModelBias() === null);
+  G._tcDoseResponse = _svDr2; G._tdBiasCache = null;
 
   check('the solved dose is presented as a floor, not a point estimate',
     /treat that as the floor/.test(_tdB) && /How far to trust this/.test(_tdB));
@@ -3187,6 +3209,7 @@ if (typeof G._tdModelBias === 'function') {
     /calculated, not measured/.test(_tdB));
 
   G._tcBwEntries = _svB.bw; G._tcp = _svB.tp; G._tdBiasCache = _svB.c;
+  G._tcDoseResponse = _svB.dr;
 }
 
 // ── One number, one source — the standing rule ──────────────────────────────
@@ -3199,6 +3222,86 @@ if (typeof G._tdModelBias === 'function') {
     /_tcFreeTSeries/.test(_mdR) && /_renderEnhancedGuide/.test(_mdR));
   check('  …and requiring the fix at the source, not the display',
     /never at the display/.test(_mdR));
+}
+
+// ── EVERY RECOMMENDATION IS CHECKED AGAINST THE SOLVED TEST DOSE ────────────
+// Reported 2026-09-08: the solver returned 200 mg/week of testosterone and the
+// panel below recommended Masteron at "1:1 TEST:MAST — 400-500 mg/wk". One
+// screen, two numbers, contradicting each other: 1:1 with a 200 mg base is 200
+// mg. The catalogue's absolute ranges are written against an assumed ~450
+// mg/week base and nothing reconciled them with the base actually solved for.
+// That is ONE NUMBER, ONE SOURCE failing in the most visible way there is.
+console.log('\n── Dose Finder: recommendations checked against the base ────');
+if (typeof G._tdValidateAgainstBase === 'function') {
+  const _mast = {id:'mast_e', group:'DHT-Derived', unit:'mg/week'};
+  // The ratio is BACKEND DATA, not prose. `ratio` and `assumes_test_mg_wk` are
+  // served; parsing the label is a fallback for an older backend only, because a
+  // parse cannot recover the assumed base — the half that makes the conflict
+  // message accurate.
+  const _t11  = {label:'1:1 Test:Mast', dose:'400\u2013500 mg/wk',
+                 ratio:{test:1, comp:1}, assumesTest:[400, 500]};
+  const _t21  = {label:'2:1 Test:Mast', dose:'300\u2013400 mg/wk',
+                 ratio:{test:2, comp:1}, assumesTest:[600, 800]};
+
+  const _v200 = G._tdValidateAgainstBase(_mast, _t11, 200);
+  check('a ratio tier is resolved against the solved base',
+    _v200 && _v200.ratio && Math.round(_v200.impliedNative) === 200,
+    JSON.stringify(_v200 && _v200.impliedNative));
+  check('  …and the catalogue disagreeing with its own label is a conflict',
+    _v200.conflict === true);
+
+  // ⚠️ THE SELF-CHECK. At the base the catalogue was written for, its own 1:1
+  // tier must resolve cleanly — otherwise the rule is flagging noise rather than
+  // a real contradiction, and every card would shout.
+  const _v450 = G._tdValidateAgainstBase(_mast, _t11, 450);
+  check('  …while at the base the catalogue assumes, there is no conflict',
+    _v450.conflict === false && Math.round(_v450.impliedNative) === 450);
+  // The 2:1 tier is inconsistent in the catalogue itself: 2:1 of 450 is 225, not
+  // 300-400. Worth surfacing rather than smoothing over.
+  check('  …and a tier inconsistent at ANY base still reports as one',
+    G._tdValidateAgainstBase(_mast, _t21, 450).conflict === true);
+
+  // ⚠️ EXCLUDED BY GROUP, NOT BY UNIT. Anastrozole and finasteride are dosed in
+  // mg like every steroid here, so a unit test lets them through and prints
+  // "0.5 mg/wk = 0.003x your base" — noise dressed as rigour.
+  check('ancillaries are never compared to a testosterone base',
+    G._tdValidateAgainstBase({id:'anastrozole', group:'Estrogen Control', unit:'mg/week'},
+      {label:'Standard', dose:'0.5 mg/wk'}, 200) === null &&
+    G._tdValidateAgainstBase({id:'finasteride', group:'Side-Effect Support', unit:'mg/day'},
+      {label:'Standard', dose:'1 mg/day'}, 200) === null);
+  check('  …nor is anything without a solved base to compare against',
+    G._tdValidateAgainstBase(_mast, _t11, 0) === null);
+
+  // No ratio stated means nothing to derive — but the MULTIPLE of the base is
+  // arithmetic on two known figures, and a 19-nor at twice the base is a
+  // different protocol from the same milligrams beside a heavier one.
+  const _deca = G._tdValidateAgainstBase({id:'deca', group:'19-Nor', unit:'mg/week'},
+    {label:'Anabolic', dose:'300\u2013400 mg/wk'}, 200);
+  check('a tier with no ratio reports its multiple of the base instead',
+    !_deca.ratio && Math.abs(_deca.multipleLo - 1.5) < 0.01 &&
+    Math.abs(_deca.multipleHi - 2.0) < 0.01);
+  // Orals are per-day; the comparison has to be weekly on both sides.
+  const _var = G._tdValidateAgainstBase({id:'anavar', group:'Oral', unit:'mg/day'},
+    {label:'Standard', dose:'40\u201360 mg/day'}, 200);
+  check('  …with a per-day oral converted to weekly before comparing',
+    Math.abs(_var.multipleLo - (40*7/200)) < 0.01);
+
+  // The tab must not do this arithmetic itself — the catalogue owns doses.
+  const _tdV = require('fs').readFileSync(
+    require('path').join(__dirname, '../tab-tdose.js'), 'utf8');
+  check('the check derives from stated numbers and invents no dose',
+    /THIS INVENTS NO DOSES/.test(_tdV) && /_tdTierRatio\(/.test(_tdV));
+  check('  …taking the ratio from backend data, the label parse only a fallback',
+    /tier\.ratio && tier\.ratio\.test>0/.test(_tdV) && /FALLBACK ONLY/.test(_tdV));
+  check('  …and reading the assumed base rather than reverse-engineering it',
+    G._tdValidateAgainstBase(_mast, _t21, 200).ratio.assumesLo === 600);
+  // ⚠️ BOTH NUMBERS, NOT ONE PICKED. On a conflict the card shows what the
+  // ratio implies at the user's base AND what the catalogue states, plus the
+  // base the catalogue assumed. Choosing between them would be inventing a dose.
+  check('  …and both numbers are shown on a conflict, not one picked',
+    /is <strong>'\+Math\.round\(val\.impliedNative\)/.test(_tdV) &&
+    /_esc\(String\(rec\.dose\|\|''\)\)\+' assumes a '/.test(_tdV) &&
+    /mg\/week testosterone base/.test(_tdV));
 }
 
 // ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
