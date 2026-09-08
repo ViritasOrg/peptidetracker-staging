@@ -3201,6 +3201,71 @@ if (typeof G._tdModelBias === 'function') {
     /never at the display/.test(_mdR));
 }
 
+// ── EVERY RECOMMENDATION IS CHECKED AGAINST THE SOLVED TEST DOSE ────────────
+// Reported 2026-09-08: the solver returned 200 mg/week of testosterone and the
+// panel below recommended Masteron at "1:1 TEST:MAST — 400-500 mg/wk". One
+// screen, two numbers, contradicting each other: 1:1 with a 200 mg base is 200
+// mg. The catalogue's absolute ranges are written against an assumed ~450
+// mg/week base and nothing reconciled them with the base actually solved for.
+// That is ONE NUMBER, ONE SOURCE failing in the most visible way there is.
+console.log('\n── Dose Finder: recommendations checked against the base ────');
+if (typeof G._tdValidateAgainstBase === 'function') {
+  const _mast = {id:'mast_e', group:'DHT-Derived', unit:'mg/week'};
+  const _t11  = {label:'1:1 Test:Mast', dose:'400\u2013500 mg/wk'};
+  const _t21  = {label:'2:1 Test:Mast', dose:'300\u2013400 mg/wk'};
+
+  const _v200 = G._tdValidateAgainstBase(_mast, _t11, 200);
+  check('a ratio tier is resolved against the solved base',
+    _v200 && _v200.ratio && Math.round(_v200.impliedNative) === 200,
+    JSON.stringify(_v200 && _v200.impliedNative));
+  check('  …and the catalogue disagreeing with its own label is a conflict',
+    _v200.conflict === true);
+
+  // ⚠️ THE SELF-CHECK. At the base the catalogue was written for, its own 1:1
+  // tier must resolve cleanly — otherwise the rule is flagging noise rather than
+  // a real contradiction, and every card would shout.
+  const _v450 = G._tdValidateAgainstBase(_mast, _t11, 450);
+  check('  …while at the base the catalogue assumes, there is no conflict',
+    _v450.conflict === false && Math.round(_v450.impliedNative) === 450);
+  // The 2:1 tier is inconsistent in the catalogue itself: 2:1 of 450 is 225, not
+  // 300-400. Worth surfacing rather than smoothing over.
+  check('  …and a tier inconsistent at ANY base still reports as one',
+    G._tdValidateAgainstBase(_mast, _t21, 450).conflict === true);
+
+  // ⚠️ EXCLUDED BY GROUP, NOT BY UNIT. Anastrozole and finasteride are dosed in
+  // mg like every steroid here, so a unit test lets them through and prints
+  // "0.5 mg/wk = 0.003x your base" — noise dressed as rigour.
+  check('ancillaries are never compared to a testosterone base',
+    G._tdValidateAgainstBase({id:'anastrozole', group:'Estrogen Control', unit:'mg/week'},
+      {label:'Standard', dose:'0.5 mg/wk'}, 200) === null &&
+    G._tdValidateAgainstBase({id:'finasteride', group:'Side-Effect Support', unit:'mg/day'},
+      {label:'Standard', dose:'1 mg/day'}, 200) === null);
+  check('  …nor is anything without a solved base to compare against',
+    G._tdValidateAgainstBase(_mast, _t11, 0) === null);
+
+  // No ratio stated means nothing to derive — but the MULTIPLE of the base is
+  // arithmetic on two known figures, and a 19-nor at twice the base is a
+  // different protocol from the same milligrams beside a heavier one.
+  const _deca = G._tdValidateAgainstBase({id:'deca', group:'19-Nor', unit:'mg/week'},
+    {label:'Anabolic', dose:'300\u2013400 mg/wk'}, 200);
+  check('a tier with no ratio reports its multiple of the base instead',
+    !_deca.ratio && Math.abs(_deca.multipleLo - 1.5) < 0.01 &&
+    Math.abs(_deca.multipleHi - 2.0) < 0.01);
+  // Orals are per-day; the comparison has to be weekly on both sides.
+  const _var = G._tdValidateAgainstBase({id:'anavar', group:'Oral', unit:'mg/day'},
+    {label:'Standard', dose:'40\u201360 mg/day'}, 200);
+  check('  …with a per-day oral converted to weekly before comparing',
+    Math.abs(_var.multipleLo - (40*7/200)) < 0.01);
+
+  // The tab must not do this arithmetic itself — the catalogue owns doses.
+  const _tdV = require('fs').readFileSync(
+    require('path').join(__dirname, '../tab-tdose.js'), 'utf8');
+  check('the check derives from stated numbers and invents no dose',
+    /THIS INVENTS NO DOSES/.test(_tdV) && /_tdTierRatio\(/.test(_tdV));
+  check('  …and both numbers are shown on a conflict, not one picked',
+    /The catalogue's .*assumes a bigger base|assumes a bigger base/.test(_tdV));
+}
+
 // ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
 // Reported 2026-08-14: "The text in the green box says I am at 309pmol/l but graph
 // shows me at 894?" The steady-state window was Math.floor(totalDays/2), and totalDays

@@ -435,6 +435,89 @@ function _tdWeeklyEquivalent(cat, rec){
                    : (Math.round(lo)+'–'+Math.round(hi)+' '+base+'/week');
 }
 
+// ── EVERY RECOMMENDATION IS CHECKED AGAINST THE SOLVED TEST DOSE ────────────
+// Reported 2026-09-08: the solver returned 200 mg/week of testosterone and the
+// panel below it recommended Masteron at "1:1 TEST:MAST — 400-500 mg/wk". One
+// screen, two numbers, and they contradict each other: 1:1 with a 200 mg base is
+// 200 mg, not 400-500. The catalogue's absolute ranges are written against an
+// assumed ~400-500 mg/week base, and nothing reconciled them with the base the
+// user actually solved for.
+//
+// That is the ONE NUMBER, ONE SOURCE rule failing in the most visible way
+// possible, so it is fixed here rather than papered over: the ratio in the
+// tier's own label is applied to the solved dose, and where the catalogue's
+// figure disagrees the card says so in both numbers.
+//
+// ⚠️ THIS INVENTS NO DOSES. It multiplies two numbers the app already states —
+// the ratio the catalogue wrote into the tier label, and the base the solver
+// returned. Where a tier carries no ratio there is nothing to derive, and the
+// card reports the MULTIPLE of the test base instead, which is arithmetic on
+// two known figures and not a recommendation either. The catalogue remains the
+// only source of doses.
+
+// "2:1 Test:Mast" -> {test:2, comp:1}. The Test:Mast half has no digits, so the
+// numeric pair is unambiguous. Returns null when the tier states no ratio.
+// Reads `label`, which is what _tdRecommended produces — the raw catalogue tier
+// calls it `l`, so accept both rather than silently matching nothing.
+function _tdTierRatio(tier){
+  var lbl = (tier && (tier.label != null ? tier.label : tier.l)) || '';
+  var m = /(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)/.exec(lbl);
+  if(!m) return null;
+  var t = parseDec(m[1]), c = parseDec(m[2]);
+  if(!(t>0) || !(c>0)) return null;
+  return {test:t, comp:c, label:m[1]+':'+m[2]};
+}
+// The low/high mg the tier's dose column states, in the compound's own unit.
+function _tdTierRange(rec){
+  var ns = String((rec && rec.dose) || '').match(/[\d.]+/g);
+  if(!ns || !ns.length) return null;
+  var lo = parseDec(ns[0]), hi = parseDec(ns[ns.length-1]);
+  if(!(lo>0)) return null;
+  return {lo:lo, hi:(hi>0?hi:lo)};
+}
+// Weekly mg for a compound whose unit may be per-day.
+function _tdWeeklyMg(cat, v){
+  return (String((cat&&cat.unit)||'').indexOf('/day')>=0) ? v*7 : v;
+}
+// Compare one recommendation with the solved testosterone dose.
+//   ratio    — present when the tier states one; carries the mg it implies
+//   conflict — the tier states a ratio AND its own dose column contradicts it
+//   multiple — the catalogue dose as a multiple of the test base
+function _tdValidateAgainstBase(cat, rec, baseMgWk){
+  if(!cat || !rec || !(baseMgWk>0)) return null;
+  var unit = String(cat.unit||'');
+  // ⚠️ EXCLUDED BY GROUP, NOT BY UNIT.
+  // Only androgens compare meaningfully to a testosterone base. Anastrozole and
+  // finasteride are dosed in mg like every steroid here, so a unit test lets
+  // them through and prints "0.5 mg/wk = 0.003x your test base" — noise dressed
+  // as rigour. They are titrated to bloodwork and symptoms, which their own
+  // guide says. The androgen groups are the ones this tab already lists as
+  // injectables and orals.
+  var androgen = _TD_INJ_GROUPS.concat(_TD_ORAL_GROUPS);
+  if(androgen.indexOf(cat.group) < 0) return null;
+  if(unit.indexOf('mg')!==0) return null;
+  var range = _tdTierRange(rec);
+  if(!range) return null;
+
+  var out = {baseMgWk:baseMgWk, unit:unit};
+  var wkLo = _tdWeeklyMg(cat, range.lo), wkHi = _tdWeeklyMg(cat, range.hi);
+  out.multipleLo = wkLo/baseMgWk;
+  out.multipleHi = wkHi/baseMgWk;
+
+  var ratio = _tdTierRatio(rec);
+  if(ratio){
+    // The tier's own arithmetic, applied to the base the solver returned.
+    var impliedWk = baseMgWk * (ratio.comp/ratio.test);
+    out.ratio = ratio;
+    out.impliedWeekly = impliedWk;
+    // In the compound's stated unit, so it can be read next to the tier.
+    out.impliedNative = (unit.indexOf('/day')>=0) ? impliedWk/7 : impliedWk;
+    // A conflict is the catalogue's stated range not containing what its own
+    // label implies. A 10% tolerance keeps rounding out of it.
+    out.conflict = (impliedWk < wkLo*0.9) || (impliedWk > wkHi*1.1);
+  }
+  return out;
+}
 function tdToggleComp(id){
   _tdOpenComp[id] = !_tdOpenComp[id];
   buildTDose();
@@ -639,6 +722,10 @@ function _tdResultCardHtml(){
 
 function _tdCompoundRowsHtml(groups){
   var list = _tdCompounds(groups);
+  // The solved testosterone dose every recommendation below is checked against.
+  // The model figure, not the top of the uncertainty range — a ratio quoted
+  // against the widest possible base would overstate every companion compound.
+  var base = (_tdResult && _tdResult.ok && _tdResult.mgPerWeek>0) ? _tdResult.mgPerWeek : 0;
   if(!list.length){
     return '<div style="font-size:12px;color:var(--muted2);line-height:1.6;">'
       + 'Catalogue not loaded yet — open Protocols once to fetch it, or pull to refresh.</div>';
@@ -662,6 +749,43 @@ function _tdCompoundRowsHtml(groups){
       if(wk){
         h += '<div style="font-size:11px;color:var(--muted2);margin-top:3px;">= '+_esc(wk)+' total, taken daily — the weekly figure is arithmetic, not a way to take it.</div>';
       }
+      // ── CHECKED AGAINST THE SOLVED TESTOSTERONE DOSE ──────────────────────
+      var val = _tdValidateAgainstBase(cat, rec, base);
+      if(val){
+        if(val.ratio && val.conflict){
+          // The tier's own label and its own dose column disagree once the real
+          // base is put in. Both numbers are shown, because which one the user
+          // wants is their call and hiding either would be picking for them.
+          h += '<div style="font-size:11px;color:#f59e0b;line-height:1.6;margin-top:5px;'
+            +  'background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.35);'
+            +  'border-radius:6px;padding:6px 8px;">'
+            +  '⚠ At your <strong>'+Math.round(val.baseMgWk)+' mg/week</strong> base, '
+            +  _esc(val.ratio.label)+' is <strong>'+Math.round(val.impliedNative)+' '
+            +  _esc(val.unit.replace('mg/','mg/').replace('week','wk'))+'</strong>. '
+            +  'The catalogue\'s '+_esc(String(rec.dose||''))+' assumes a bigger base — '
+            +  'roughly '+Math.round(val.multipleLo*val.baseMgWk*val.ratio.test/val.ratio.comp)
+            +  '–'+Math.round(val.multipleHi*val.baseMgWk*val.ratio.test/val.ratio.comp)
+            +  ' mg/week of testosterone.</div>';
+        }else if(val.ratio){
+          h += '<div style="font-size:11px;color:var(--muted2);margin-top:4px;">'
+            +  '✓ '+_esc(val.ratio.label)+' against your '+Math.round(val.baseMgWk)
+            +  ' mg/week base is '+Math.round(val.impliedNative)+' '
+            +  _esc(val.unit)+' — consistent with the range above.</div>';
+        }else{
+          // No ratio stated, so nothing to derive. Reporting the multiple is
+          // arithmetic on two known figures, and it is the thing worth seeing:
+          // a 19-nor at twice the test base is a different protocol from the
+          // same milligrams beside a heavier base.
+          var _m = (Math.round(val.multipleLo*10)/10===Math.round(val.multipleHi*10)/10)
+            ? (Math.round(val.multipleLo*10)/10)+'x'
+            : (Math.round(val.multipleLo*10)/10)+'–'+(Math.round(val.multipleHi*10)/10)+'x';
+          h += '<div style="font-size:11px;color:'+(val.multipleLo>1?'#f59e0b':'var(--muted2)')
+            +  ';margin-top:4px;">'+(val.multipleLo>1?'⚠ ':'')+_esc(_m)+' your '
+            +  Math.round(val.baseMgWk)+' mg/week testosterone base.'
+            +  (val.multipleLo>1?' Running a compound above the test base is a deliberate choice, not a default.':'')
+            +  '</div>';
+        }
+      }
       if(rec.risk){
         h += '<div style="font-size:11px;color:#f59e0b;line-height:1.55;margin-top:4px;">⚠ '+_esc(rec.risk)+'</div>';
       }
@@ -683,7 +807,10 @@ function _tdAdvancedHtml(){
     + '<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-bottom:10px;">'
     + 'Weekly doses from the compound catalogue, with the tier it marks as recommended. '
     + 'Your testosterone base is the question above — these run alongside it, not instead of it. '
-    + 'Tap a compound for its full guide.</div>'
+    + ((_tdResult && _tdResult.ok)
+        ? 'Each one is checked against the ' + Math.round(_tdResult.mgPerWeek) + ' mg/week you solved for.'
+        : 'Solve for a testosterone dose above and these get checked against it.')
+    + ' Tap a compound for its full guide.</div>'
     + _tdCompoundRowsHtml(_TD_INJ_GROUPS));
 
   h += _tdCard(_tdLabel('Orals')
