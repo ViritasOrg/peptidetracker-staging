@@ -2804,6 +2804,93 @@ if (typeof G._tdSolveWeekly === 'function') {
   }
 }
 
+// ── A DELETE MUST REACH EVERY CACHE, T-CALC'S INCLUDED ──────────────────────
+// Reported 2026-09-08: "Clean up still requires app restart to not show the
+// orphan doses in T-calc". The rows were gone from the record; _tcSkippedPast
+// still held them and still drew them as amber "never ticked" stems, because
+// _tcHistory is fetched ONCE PER SESSION — _tcFetchHistory returns early on a
+// warm cache and buildTCalc only calls it while the state is 'idle'.
+console.log('\n── A delete reaches every injection cache, T-Calc included ──');
+{
+  const _fsIv = require('fs'), _pIv = require('path');
+  const _ivSrc = _fsIv.readFileSync(_pIv.join(__dirname, '../index.html'), 'utf8');
+  const _pick = (re) => (_ivSrc.match(re) || [''])[0];
+
+  // ⚠️ FORCED. A plain _tcFetchHistory() returns early on the warm cache this
+  // path is guaranteed to have, so an unforced call is indistinguishable from
+  // no call at all — and that is exactly the bug.
+  const _ivFn = _pick(/async function _injRowsChanged\(tag\)\{[\s\S]*?\n\}/);
+  check('one helper refreshes every cache that holds injection rows', _ivFn.length > 0);
+  check('  …_injectionsCache', /refreshInjectionsCache\(\)/.test(_ivFn));
+  check('  …the Timeline\'s', /_tlInvalidateInjections\(\)/.test(_ivFn));
+  check('  …and T-Calc\'s session-long history, FORCED',
+    /_tcFetchHistory\(true\)/.test(_ivFn));
+  check('  …never an unforced call, which a warm cache would ignore',
+    !/_tcFetchHistory\(\s*\)/.test(_ivFn));
+
+  // Both delete paths route through it. The sweep is what was reported; the
+  // protocol delete purges the same rows the same way and had the same gap.
+  const _cleanFn = _pick(/async function cleanupOrphanDoses\(\)\{[\s\S]*?\n\}/);
+  const _delFn   = _pick(/async function deleteStack\(idx\)\{[\s\S]*?\n\}/);
+  check('the orphan sweep invalidates through it', /_injRowsChanged\(/.test(_cleanFn));
+  check('  …and so does deleting a protocol',      /_injRowsChanged\(/.test(_delFn));
+  // Belt and braces: neither may quietly go back to refreshing only the caches
+  // it can see, which is how this regressed the first time.
+  check('  …with neither hand-rolling a partial refresh any more',
+    !/refreshInjectionsCache\(\)/.test(_cleanFn) && !/refreshInjectionsCache\(\)/.test(_delFn));
+
+  // The behaviour itself, driven through the real _tcFetchHistory.
+  if (typeof G._tcFetchHistory === 'function' && typeof G.injPurgeCyclePlan === 'function') {
+    const _sv = {f:G.fetch, h:G._tcHistory, hs:G._tcHistoryState, sk:G._tcSkippedPast,
+                 us:G._userStacks, ai:G._activeStackIndices, sc:G._stackCycleId};
+    const _pd = n => G.dateKey(new Date(Date.now() - n*86400000));
+    // An ACTIVE protocol carrying unlogged past rows, so the stems are genuinely
+    // visible and this isolates the CACHE from the display filter.
+    let _rows = [
+      {id:'a1',cycle_id:'p3',compound_id:'enanthate',tier:'trt',dose:'12.5',unit:'mg',date:_pd(6),logged:false,active:true},
+      {id:'a2',cycle_id:'p3',compound_id:'enanthate',tier:'trt',dose:'12.5',unit:'mg',date:_pd(4),logged:false,active:true},
+      {id:'k1',cycle_id:'p3',compound_id:'nebido',   tier:'trt',dose:'100', unit:'mg',date:_pd(5),logged:true, active:true}
+    ];
+    G.fetch = async (url, opt) => {
+      if (opt && opt.method === 'DELETE') {
+        const cid = decodeURIComponent(/cycle_id=([^&]+)/.exec(url)[1]);
+        const before = _rows.length;
+        _rows = _rows.filter(e => !(e.cycle_id === cid && !e.logged));
+        return {ok:true, status:200, json: async () => ({removed: before-_rows.length})};
+      }
+      return {ok:true, status:200, json: async () => _rows};
+    };
+    G._userStacks = [{id:'p3', name:'P3'}];
+    G._activeStackIndices = [0];
+    G._stackCycleId = st => st.id;
+
+    await G._tcFetchHistory(true);
+    check('unticked past rows show as stems to begin with',
+      G._tcSkippedVisible().length === 2, String(G._tcSkippedVisible().length));
+
+    await G.injPurgeCyclePlan('p3', 'test');
+    check('  …the purge removes them from the record, keeping the logged dose',
+      _rows.length === 1 && _rows[0].logged === true);
+    check('  …but T-Calc still shows them until it re-reads (the reported bug)',
+      G._tcSkippedVisible().length === 2);
+
+    // The precise reason a plain call is not enough.
+    await G._tcFetchHistory();
+    check('  …and an UNFORCED re-read changes nothing, the cache being warm',
+      G._tcSkippedVisible().length === 2);
+
+    await G._tcFetchHistory(true);
+    check('  …while the forced re-read clears them without a restart',
+      G._tcSkippedVisible().length === 0 && G._tcSkippedPast.length === 0);
+    check('  …and the logged dose is still in the history afterwards',
+      (G._tcHistory||[]).length === 1 && G._tcHistory[0].compId === 'nebido');
+
+    G.fetch = _sv.f; G._tcHistory = _sv.h; G._tcHistoryState = _sv.hs;
+    G._tcSkippedPast = _sv.sk; G._userStacks = _sv.us;
+    G._activeStackIndices = _sv.ai; G._stackCycleId = _sv.sc;
+  }
+}
+
 // ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
 // Reported 2026-08-14: "The text in the green box says I am at 309pmol/l but graph
 // shows me at 894?" The steady-state window was Math.floor(totalDays/2), and totalDays
@@ -15025,8 +15112,12 @@ console.log('\n── A deleted protocol leaves no plan behind ─────�
   // the plan erased while the protocol it belongs to is still there.
   check('  …and only after the stack list is saved',
     _delSrc.indexOf('await saveStacksToBackend()') < _delSrc.indexOf('injPurgeCyclePlan'));
-  check('  …then rebuilds both caches that hold injections',
-    /refreshInjectionsCache/.test(_delSrc) && /_tlInvalidateInjections/.test(_delSrc));
+  // "Both caches" was itself the bug: there are THREE, and the third — T-Calc's
+  // session-long _tcHistory — is the one that kept the deleted doses on screen
+  // until the app was restarted. _injRowsChanged is the single place that knows
+  // all of them, so asserting the call is stronger than re-listing two by hand.
+  check('  …then refreshes every cache that holds injections',
+    /_injRowsChanged\(/.test(_delSrc));
 
   // The purge is scoped by cycle_id ALONE — deliberately, and this is the assertion
   // that says so. A from_date would spare the debris dated in the past (39 of
@@ -15120,8 +15211,8 @@ console.log('\n── A deleted protocol leaves no plan behind ─────�
     /confirmGlobalDelete\(total\+/.test(_sweepSrc));
   check('  …and refuses outright on an unloaded protocol list',
     /if\(!live\)\{say\('protocols not loaded'\);return;\}/.test(_sweepSrc));
-  check('  …then rebuilds both caches that hold injections',
-    /refreshInjectionsCache/.test(_sweepSrc) && /_tlInvalidateInjections/.test(_sweepSrc));
+  check('  …then refreshes every cache that holds injections',
+    /_injRowsChanged\(/.test(_sweepSrc));
 
   // That refusal IS driven, because it is the one path that returns before its first
   // await — so the borrowed globals go back with no suspension in between, and the

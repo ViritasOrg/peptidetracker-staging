@@ -796,6 +796,39 @@ function _orphanPlanCycleIds(rows,liveIds){
   });
   return out;
 }
+// ── THE STORED ROWS CHANGED — EVERY CACHE OF THEM MUST RE-READ ──────────────
+// Three independent caches hold injection rows, and they are refreshed by three
+// different calls:
+//   _injectionsCache   refreshInjectionsCache()   — Today, the week strip, T-Calc's plan
+//   the Timeline's     _tlInvalidateInjections()
+//   _tcHistory         _tcFetchHistory(true)      — T-Calc's past, AND _tcSkippedPast
+//
+// The third is the one that gets forgotten, because it is the only one that is
+// fetched ONCE PER SESSION: _tcFetchHistory returns early on a warm cache, and
+// buildTCalc only calls it while the state is still 'idle'. So a delete that
+// refreshes the other two leaves T-Calc reading rows the backend no longer has,
+// for the rest of the session, and the user sees the deleted doses until they
+// close and reopen the app.
+//
+// Reported 2026-09-08 against the orphan sweep: "Clean up still requires app
+// restart to not show the orphan doses in T-calc". The rows were gone from the
+// record; _tcSkippedPast still held them and still drew them as amber "never
+// ticked" stems. Same omission in deleteStack, which purges the same rows the
+// same way. toggleInjection already forces this re-read and carries a long note
+// on the identical failure — this is that lesson, factored out so the next
+// delete path cannot forget it.
+//
+// FORCED, deliberately: the cache is warm by definition at this point, so a
+// plain call would return early and change nothing. _tcFetchHistory ends by
+// calling buildTCalc itself, so the curve redraws from fresh data.
+async function _injRowsChanged(tag){
+  if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
+  if(typeof _tlInvalidateInjections==='function')_tlInvalidateInjections();
+  try{
+    if(typeof _tcFetchHistory==='function')await _tcFetchHistory(true);
+    else if(typeof buildTCalc==='function')buildTCalc();
+  }catch(e){ if(typeof _logErr==='function')_logErr(tag||'injRowsChanged',e); }
+}
 async function cleanupOrphanDoses(){
   var btn=document.getElementById('s-orphan-btn');
   var out=document.getElementById('s-orphan-doses');
@@ -824,8 +857,7 @@ async function cleanupOrphanDoses(){
   var removed=res.reduce(function(a,n){return a+(typeof n==='number'?n:0);},0);
   var failed=res.filter(function(n){return n===null;}).length;
   say(removed+' removed'+(failed?' · '+failed+' failed':''));
-  if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
-  if(typeof _tlInvalidateInjections==='function')_tlInvalidateInjections();
+  await _injRowsChanged('cleanupOrphanDoses');
   if(typeof buildToday==='function')buildToday();
   if(typeof buildWeekStrip==='function')buildWeekStrip();
   reset();
@@ -1673,9 +1705,9 @@ async function deleteStack(idx){
       await Promise.all(_goneIds.map(function(cid){
         return injPurgeCyclePlan(cid,'deleteStack');
       }));
-      // The row set changed underneath both caches that hold injections.
-      if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
-      if(typeof _tlInvalidateInjections==='function')_tlInvalidateInjections();
+      // The row set changed underneath every cache that holds injections —
+      // T-Calc's session-long history included. See _injRowsChanged.
+      await _injRowsChanged('deleteStack');
     }
     updateWEEKLY();
     buildWeekStrip();
