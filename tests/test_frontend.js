@@ -3027,114 +3027,110 @@ if (typeof G._staleSpellingCycleIds === 'function') {
     _sweepFn.indexOf('confirmGlobalDelete') < _sweepFn.indexOf('injPurgeCyclePlan'));
 }
 
-// ── The target seed comes from the ACTIVE PROTOCOL ──────────────────────────
-if (typeof G._tdActiveProtocolLevel === 'function') {
-  const _sv = {cl:G._tcCurveLog, bw:G._tcBwEntries, st:G._tdState};
-  const _d = n => G.dateKey(new Date(Date.now() - n*86400000));
-  // A settled twice-weekly enanthate run.
-  const _log = [];
-  for (let i = 84; i >= 0; i -= 3.5)
-    _log.push({compId:'enanthate', doseMg:'50', date:G._tcSolveDayKey(
-      new Date(Date.now() - Math.round(i)*86400000))});
-  G._tcCurveLog = () => _log;
-  const _lvl = G._tdActiveProtocolLevel();
-  check('the seed is the level the active protocol holds', _lvl > 0, String(_lvl));
-  // ⚠️ Not _tcSsPeakPmol: that is the PEAK, and it is a side effect of T-Calc
-  // having rendered — so the seed would depend on which tabs the user visited.
-  const _tdSrc = require('fs').readFileSync(
-    require('path').join(__dirname, '../tab-tdose.js'), 'utf8');
-  // The ban is on USING it — the comment that explains why it is the wrong
-  // source must not trip the check, so comment lines are stripped first.
-  const _tdCode = _tdSrc.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-  check('  …computed from _tcCurveLog, not read off the chart',
-    /_tcCurveLog\(\)/.test(_tdCode) && !/_tcSsPeakPmol/.test(_tdCode));
-  check('  …and measured on the plateau, not the washout tail',
-    Math.abs(_lvl - G._tcSolveWindowStats(G._tcSolveSeries(_log),
-      new Date(_log[_log.length-1].date+'T12:00:00').getTime() - 7*86400000,
-      new Date(_log[_log.length-1].date+'T12:00:00').getTime()).mean) < 0.5);
-  check('  …and it is what _tdDefaultTarget seeds from',
-    G._tdDefaultTarget().value === Math.round(_lvl));
-
-  // No protocol → fall back to a MEASURED value, never an invented one.
-  G._tcCurveLog = () => [];
+// ── The target seed comes from BLOODWORK, and from nothing else ─────────────
+// It used to seed from the level the active protocol holds, read through
+// _tcCurveLog — the coupling this tab is not allowed to have. A measured draw is
+// the one value here that is neither a model output nor a recommendation.
+if (typeof G._tdDefaultTarget === 'function') {
+  const _sd = {bw:G._tcBwEntries, st:G._tdState};
   G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
-  check('with no active protocol it falls back to the last measured free T',
+  check('the target seeds from the last measured free T',
     G._tdDefaultTarget().value === 217);
+  check('  …naming the draw it came from, so it cannot read as advice',
+    /last measured free T/.test(G._tdDefaultTarget().source));
   G._tcBwEntries = [];
-  check('  …and to blank rather than an invented figure',
+  check('  …and blank rather than an invented figure when there is no draw',
     G._tdDefaultTarget().value === '');
-  G._tcCurveLog = _sv.cl; G._tcBwEntries = _sv.bw; G._tdState = _sv.st;
+  G._tcBwEntries = _sd.bw; G._tdState = _sd.st;
 }
 
-// ── THE PLATEAU IS THIS DOSE'S, NOT THIS DOSE PLUS WHAT IS STILL CLEARING ───
-// Reported 2026-09-08 with a screenshot: "100 mg/week sounds very low to achieve
-// such steady state". It was. ~362 mg/week of Nebido was logged through 7 Sep;
-// asked what holds 1457 pmol/L on enanthate, the tool answered 100 mg/week.
+// ── THE DOSE FINDER IS ISOLATED FROM THE T-CALC CURVE ───────────────────────
+// Henrik, 2026-09-08: "This tab should work in isolation from the t-calc curve.
+// This is not to be using past injections or anything. It should only take
+// available research resources and any existing blood work as input."
 //
-// The history is passed in to CALIBRATE the curve, but its drug does not stop at
-// the calibration — a 56-day depot keeps releasing. Reading the plateau 12 weeks
-// out scored that residue as if the candidate schedule had produced it: the
-// Nebido tail alone was worth 439 pmol/L, so 100 mg/week measured 1173 instead
-// of its true 594 and the answer came back at a THIRD of the dose required. It
-// would have read correctly for a few months, then fallen away as the depot
-// cleared — the worst shape of wrong.
-console.log('\n── Dose Finder: the plateau excludes what is still clearing ──');
+// The bug that made the rule necessary: ~362 mg/week of Nebido was logged, the
+// history was fed in to calibrate, and its 56-day depot was still releasing at
+// the measurement window. That residue was scored as if the candidate schedule
+// had produced it, so "what holds 1457 pmol/L on enanthate" came back as
+// 100 mg/week when the honest answer was 200.
+console.log('\n── Dose Finder: isolated from the curve, driven by bloodwork ─');
 if (typeof G._tdSolveWeekly === 'function') {
-  const _sv = {bw:G._tcBwEntries, tp:G._tcp, gh:G._tcGhStack};
-  G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
-  G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:'217', shbg:'45', totalT:'17', birthYear:'1980'});
+  const _sv = {bw:G._tcBwEntries, tp:G._tcp, gh:G._tcGhStack, sb:G._tcShbgBaseline};
+  const _setBw = (ft, shbg, tt) => {
+    G._tcBwEntries = [{date:'2026-06-26', free_t:ft, shbg:shbg, total_t:tt}];
+    G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:String(ft), shbg:String(shbg),
+                                            totalT:String(tt), birthYear:'1980'});
+  };
   G._tcGhStack = [];
-  const _cadW = k => (G._TC_CADENCES||[]).find(c => c.key === k);
+  const _cadI = k => (G._TC_CADENCES||[]).find(c => c.key === k);
+  const _run = o => G._tdSolveWeekly(Object.assign({targetPmol:1457, esterId:'enanthate',
+    cadence:_cadI('2xwk'), startDate:'2026-09-09', concMgPerMl:250, stepMl:0.05}, o));
 
-  // A long-depot history, exactly the reported shape: 100 mg Nebido every 2 days.
+  _setBw(217, 45, 17);
+  const _base = _run({});
+  check('it solves a target to a weekly dose from bloodwork alone',
+    _base.ok && _base.mgPerWeek > 0, JSON.stringify(_base).slice(0,140));
+
+  // ⚠️ THE CONTRACT. A history handed in must change NOTHING. This is the
+  // assertion that would have caught the 2026-09-08 report on the day.
   const _neb = [];
   for (let i = 74; i >= 0; i -= 2)
     _neb.push({compId:'nebido', doseMg:'100',
-      date:G._tcSolveDayKey(new Date(Date.now() - i*86400000))});
-  const _start = G._tcSolveDayKey(new Date(Date.now() + 86400000));
-  const _run = h => G._tdSolveWeekly({targetPmol:1457, esterId:'enanthate',
-    cadence:_cadW('2xwk'), history:h, startDate:_start, concMgPerMl:250, stepMl:0.05});
+      date:G._tcSolveDayKey(new Date(Date.parse('2026-09-08') - i*86400000))});
+  check('  …and a logged injection history changes the answer not at all',
+    _run({history:_neb}).mgPerWeek === _base.mgPerWeek,
+    _run({history:_neb}).mgPerWeek + ' vs ' + _base.mgPerWeek);
 
-  const _withHist = _run(_neb), _noHist = _run([]);
-  check('a long ester on board pushes the plateau window out past its washout',
-    _withHist.weeks > 26 && _withHist.washoutWeeks > 26,
-    _withHist.weeks + 'w, washout ' + _withHist.washoutWeeks + 'w');
-  check('  …while a clean start still settles in the short window',
-    _noHist.weeks <= 12, _noHist.weeks + 'w');
-
-  // ⚠️ THE POINT OF THE FIX: the answer must be the dose, not the dose plus the
-  // leftover. With the window past washout the two agree; at 12 weeks they did
-  // not, and the difference was a factor of two in prescribed milligrams.
-  check('  …so the answer no longer depends on what was already on board',
-    Math.abs(_withHist.mgPerWeek - _noHist.mgPerWeek) / _noHist.mgPerWeek < 0.15,
-    _withHist.mgPerWeek + ' vs ' + _noHist.mgPerWeek + ' mg/wk');
-
-  // And the residue genuinely is gone by then, not merely averaged down.
-  const _dsW = G._tcSolveDates(_cadW('2xwk'), _start, _withHist.weeks);
-  const _lastW = _dsW[_dsW.length-1].getTime();
-  const _tailOnly = G._tcSolveWindowStats(
-    G._tcSolveSeries(_neb), _lastW - 7*86400000, _lastW).mean;
-  const _cleanLvl = G._tcSolveWindowStats(G._tcSolveSeries(_dsW.map(d => ({
-    compId:'enanthate', doseMg:String(_withHist.mgPerInjection),
-    date:G._tcSolveDayKey(d)}))), _lastW - 7*86400000, _lastW).mean;
-  check('  …the old ester contributes almost nothing at the measured window',
-    Math.abs(_withHist.achieved - _cleanLvl) / _withHist.achieved < 0.10,
-    'with tail ' + Math.round(_withHist.achieved) + ' vs alone ' + Math.round(_cleanLvl));
-
-  // Elapsed time counts towards the washout — a plan starting a year after the
-  // last depot dose must not be pushed out all over again.
-  const _oldNeb = _neb.map(e => ({compId:'nebido', doseMg:'100',
-    date:G._tcSolveDayKey(new Date(new Date(e.date+'T12:00:00').getTime() - 400*86400000))}));
-  check('  …and time already elapsed since the last dose counts towards it',
-    _run(_oldNeb).weeks <= 12, _run(_oldNeb).weeks + 'w');
-
-  // A window this long is not self-explanatory; the card has to say why.
-  const _tdSrc2 = require('fs').readFileSync(
+  // Source-level: the coupling must be gone, not merely unused by one caller.
+  const _tdI = require('fs').readFileSync(
     require('path').join(__dirname, '../tab-tdose.js'), 'utf8');
-  check('  …and the card explains the long window rather than just printing it',
-    /still clearing from your logged doses/.test(_tdSrc2));
+  const _tdCodeI = _tdI.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  check('  …with no reference to the curve\'s data anywhere in the tab',
+    !/_tcLoggedHistory|_tcCurveLog|_tcSsPeakPmol|_injectionsCache/.test(_tdCodeI));
+  // Isolated from the DATA, not from the pharmacology — a second free-T model
+  // here would let two surfaces disagree about the same drug.
+  check('  …while still scoring through the shared free-T model',
+    /_tcSolveSeries\(/.test(_tdCodeI) && /_tcCompInfo\(/.test(_tdCodeI));
+
+  // BLOODWORK IS AN INPUT, so it must actually move the answer, in the right
+  // direction: a higher measured free T means less drug is needed to hold a
+  // target, a higher SHBG means more.
+  _setBw(400, 45, 30); const _hi = _run({});
+  _setBw(120, 70, 12); const _lo = _run({});
+  _setBw(217, 45, 17);
+  check('bloodwork drives the result, and in the right direction',
+    _hi.mgPerWeek < _base.mgPerWeek && _lo.mgPerWeek > _base.mgPerWeek,
+    [_hi.mgPerWeek, _base.mgPerWeek, _lo.mgPerWeek].join(' / '));
+
+  // The settling window is now the chosen ester's own, and nothing else's.
+  const _prop = _run({esterId:'propionate'}), _neb2 = _run({esterId:'nebido', cadence:_cadI('1xwk')});
+  // Five half-lives, floored at 12 weeks: propionate (0.8 d) hits the floor,
+  // a 56-day depot needs 40. The exact figure tracks the catalogue's half-life,
+  // so assert the relationship rather than a number that moves with the data.
+  check('the window is the chosen ester\'s settling time alone',
+    _prop.weeks === 12 && _neb2.weeks >= 40 && _neb2.weeks > _prop.weeks,
+    'propionate ' + _prop.weeks + 'w, nebido ' + _neb2.weeks + 'w');
+  check('  …and the card explains a long one as the ester\'s own, not leftovers',
+    /is slow to /.test(_tdI) && /Nothing you have already injected/.test(_tdI));
+
+  // ⚠️ REFUSE ON UNLOADED INPUTS RATHER THAN ANSWER FROM NOTHING.
+  // With neither bloodwork nor the population tables the conversion has nothing
+  // behind it and the solve still returns a number — 4025 mg/week on a blank
+  // profile, which is not a dose, it is an artefact wearing one.
+  G._tcBwEntries = [];
+  G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:'', shbg:'', totalT:'', birthYear:'1980'});
+  const _sbSave = G._tcShbgBaseline;
+  G._tcShbgBaseline = null;
+  check('with neither bloodwork nor population tables it refuses to answer',
+    _run({}).reason === 'no-basis');
+  G._tcShbgBaseline = {unit:'nmol/L', bands:[{max_age:200, value:38}]};
+  check('  …but the population tables alone are a valid basis',
+    _run({}).ok === true);
+  G._tcShbgBaseline = _sbSave;
 
   G._tcBwEntries = _sv.bw; G._tcp = _sv.tp; G._tcGhStack = _sv.gh;
+  G._tcShbgBaseline = _sv.sb;
 }
 
 // ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
