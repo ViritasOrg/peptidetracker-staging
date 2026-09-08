@@ -21,6 +21,9 @@ const patchedScript = rawScript
   .replace('let _googleToken=',      'var _googleToken=')
   .replace('const GOOGLE_CLIENT_ID=', 'var GOOGLE_CLIENT_ID=')
   .replace('const CYCLE_SUGGESTIONS=','var CYCLE_SUGGESTIONS=')
+  // Needed by the all-hidden nav fallback check, which derives the Levels group
+  // from the app rather than hardcoding its members.
+  .replace('const PRIMARY_GROUPS=',    'var PRIMARY_GROUPS=')
   .replace('var WIZ_TITLES=',         'var WIZ_TITLES=')
   .replace('const WIZ_TITLES=',       'var WIZ_TITLES=')
   .replace('let WEEKLY=',             'var WEEKLY=')
@@ -78,7 +81,7 @@ const sandbox = vm.createContext({
 vm.runInContext(patchedScript, sandbox);
 // Load tab files so their functions/vars are available in the same sandbox
 const tabFiles = ['inj-writer.js','tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js',
-                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-labs.js','tab-supplements.js'];
+                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-tdose.js','tab-labs.js','tab-supplements.js'];
 const dir = path.dirname(path.resolve(htmlPath));
 tabFiles.forEach(f => {
   const tabPath = path.join(dir, f);
@@ -2673,6 +2676,133 @@ if (typeof G._tcSkippedVisible === 'function') {
   G._activeStackIndices = _ghSave.ai;
 }
 
+
+// ── DOSE FINDER: target free T → mg/week ────────────────────────────────────
+// The tab inverts the model; it must never grow one of its own. Every assertion
+// here is either "it agrees with _tcFreeTSeries" or "it says what it does not know".
+console.log('\n── Dose Finder: target free T → weekly mg ─────────────────');
+if (typeof G._tdSolveWeekly === 'function') {
+  const _tdSave = {bw:G._tcBwEntries, tp:G._tcp, gh:G._tcGhStack, cat:G._tcExtraCatalog};
+  G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
+  G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:'217', shbg:'45', totalT:'17', birthYear:'1980'});
+  G._tcGhStack = [];
+  const _cad = k => (G._TC_CADENCES||[]).find(c => c.key === k);
+  const _solve = (o) => G._tdSolveWeekly(Object.assign(
+    {esterId:'enanthate', cadence:_cad('2xwk'), history:[], startDate:'2026-09-09',
+     concMgPerMl:250, stepMl:0.05}, o));
+
+  const _r600 = _solve({targetPmol:600});
+  check('solves a target to a weekly dose', _r600.ok && _r600.mgPerWeek > 0,
+    JSON.stringify(_r600).slice(0,160));
+  // The whole point: the answer must be reachable, not merely returned.
+  check('  …landing within 15% of the target level',
+    Math.abs(_r600.achieved - 600)/600 < 0.15,
+    'achieved ' + Math.round(_r600.achieved));
+  check('  …with mg/week = mg per injection x injections per week',
+    Math.abs(_r600.mgPerWeek - _r600.mgPerInjection*_r600.perWeek) < 1e-9);
+
+  // ⚠️ SCORED BY THE SAME FUNCTION THAT DRAWS THE CURVE.
+  // Re-deriving the achieved level here from _tcSolveSeries directly is what
+  // proves there is no second pharmacology in the tab: if the finder ever grew
+  // its own model, these two numbers would part company.
+  const _dates = G._tcSolveDates(_cad('2xwk'), '2026-09-09', _r600.weeks);
+  const _evts  = _dates.map(d => ({compId:'enanthate', doseMg:String(_r600.mgPerInjection),
+                                   date:G._tcSolveDayKey(d)}));
+  const _ser   = G._tcSolveSeries(_evts);
+  const _last  = _dates[_dates.length-1].getTime();
+  const _indep = G._tcSolveWindowStats(_ser, _last - 7*86400000, _last).mean;
+  check('  …and the reported level is the model\'s own, not a second calculation',
+    Math.abs(_indep - _r600.achieved) < 0.5,
+    'tab ' + Math.round(_r600.achieved) + ' vs model ' + Math.round(_indep));
+
+  // Monotone: a higher target must never ask for less drug.
+  const _r400 = _solve({targetPmol:400}), _r900 = _solve({targetPmol:900});
+  check('a higher target never returns a smaller dose',
+    _r400.mgPerWeek <= _r600.mgPerWeek && _r600.mgPerWeek <= _r900.mgPerWeek,
+    [_r400.mgPerWeek,_r600.mgPerWeek,_r900.mgPerWeek].join(' / '));
+
+  // Steady state is ester-specific: a 56-day depot needs far longer to settle
+  // than a 4.5-day ester, and averaging too early reports a rising curve.
+  const _rNeb = _solve({targetPmol:600, esterId:'nebido', cadence:_cad('1xwk')});
+  check('the settling window is sized off the ester\'s half-life',
+    _rNeb.weeks > _r600.weeks, 'nebido ' + _rNeb.weeks + 'w vs enanthate ' + _r600.weeks + 'w');
+  check('  …and a long depot still solves to a holdable weekly dose',
+    _rNeb.ok && Math.abs(_rNeb.achieved - 600)/600 < 0.15, 'achieved ' + Math.round(_rNeb.achieved));
+
+  // ⚠️ THE WINDOW ENDS AT THE LAST INJECTION.
+  // _tcFreeTSeries appends ~4.3 half-lives of washout. Averaging across it reports
+  // the decay as the plateau — the 309-vs-1090 error. A trough far under the mean
+  // is the signature of that bug, so assert the plateau is a plateau.
+  check('the level is measured on the plateau, never the washout tail',
+    _rNeb.trough > _rNeb.achieved * 0.8,
+    'trough ' + Math.round(_rNeb.trough) + ' vs mean ' + Math.round(_rNeb.achieved));
+
+  // Snapping is to what a syringe can draw, and the reported figures are the
+  // SNAPPED schedule — never the continuous solution behind it.
+  const _step = 250*0.05;
+  check('the dose is snapped to whole syringe steps',
+    Math.abs(_r600.mgPerInjection/_step - Math.round(_r600.mgPerInjection/_step)) < 1e-9,
+    _r600.mgPerInjection + ' mg vs ' + _step + ' mg steps');
+  check('  …and the level reported is the snapped one, not the exact solution',
+    _r600.stepMg === _step);
+
+  // Guards: say what it cannot do rather than returning a confident number.
+  check('an empty target is refused, not solved',  _solve({targetPmol:''}).reason === 'no-target');
+  check('a missing cadence is refused',            _solve({targetPmol:600, cadence:null}).reason === 'no-cadence');
+  const _huge = _solve({targetPmol:900000, esterId:'propionate', cadence:_cad('1xwk')});
+  check('an unreachable target is flagged, not silently capped', _huge.ok && _huge.maxedOut === true);
+
+  // Cheap enough to run on a phone: the fixed-point exists so this stays in the
+  // single digits rather than the ~40 rebuilds a bisection would cost.
+  check('the solve costs only a handful of model rebuilds',
+    _r600.modelCalls > 0 && _r600.modelCalls <= 12, _r600.modelCalls + ' calls');
+
+  G._tcBwEntries = _tdSave.bw; G._tcp = _tdSave.tp; G._tcGhStack = _tdSave.gh;
+  G._tcExtraCatalog = _tdSave.cat;
+}
+
+// ── Dose Finder: the advanced-compound half invents nothing ─────────────────
+{
+  const _fsTd = require('fs'), _pTd = require('path');
+  const _tdSrc = _fsTd.readFileSync(_pTd.join(__dirname, '../tab-tdose.js'), 'utf8');
+  // Doses come from the catalogue, through the SAME renderer the Protocols tab
+  // uses. A second renderer here is how two surfaces start quoting different
+  // milligrams for one compound.
+  check('advanced doses render through the shared enhanced guide',
+    /_renderEnhancedGuide\(cat/.test(_tdSrc));
+  check('  …reading the backend catalogue, not a local dose table',
+    /ENHANCEMENT_COMPOUNDS/.test(_tdSrc) &&
+    !/doseTiers\s*[:=]\s*\[/.test(_tdSrc) && !/var _TD_DOSES/.test(_tdSrc));
+  // 'Base' is the testosterone the solver above answers for. Listing it again
+  // invites reading a catalogue default as the answer to the solved question.
+  check('  …and excludes the testosterone base from the compound lists',
+    !/_TD_INJ_GROUPS\s*=\s*\[[^\]]*'Base'/.test(_tdSrc));
+  check('the tab carries no pharmacology of its own',
+    !/halfLife\s*[:=]\s*\d/.test(_tdSrc) && !/_TD_T_FRACTION/.test(_tdSrc));
+
+  if (typeof G._tdRecommended === 'function') {
+    // The catalogue marks one tier as recommended with `b`. Falling back to the
+    // FIRST tier would present the lowest as the recommendation.
+    const _fake = {id:'x', unit:'mg/week', doseTiers:[
+      {l:'Low', d:'100-200 mg/wk'}, {l:'Standard', d:'300-400 mg/wk', b:true}]};
+    check('the recommended tier is the one the catalogue marks, not the first',
+      G._tdRecommended(_fake).label === 'Standard');
+    check('  …falling back to the catalogue default when no tier is marked',
+      G._tdRecommended({id:'y', defaultDose:50, unit:'mg/day', doseTiers:[]}).dose === '50 mg/day');
+    check('  …and returning nothing rather than guessing when there is neither',
+      G._tdRecommended({id:'z'}) === null);
+  }
+  if (typeof G._tdWeeklyEquivalent === 'function') {
+    // Orals are prescribed per day; a weekly total is arithmetic for comparison,
+    // never a dosing instruction, and the UI says so next to it.
+    check('a daily oral shows a weekly equivalent',
+      G._tdWeeklyEquivalent({unit:'mg/day'}, {dose:'40-60 mg/day'}) === '280–420 mg/week');
+    check('  …and a weekly injectable is not double-converted',
+      G._tdWeeklyEquivalent({unit:'mg/week'}, {dose:'300-400 mg/wk'}) === '');
+    check('  …with the caveat shown beside it, not buried',
+      /arithmetic, not a way to take it/.test(_tdSrc));
+  }
+}
 
 // ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
 // Reported 2026-08-14: "The text in the green box says I am at 309pmol/l but graph
@@ -12532,10 +12662,16 @@ if (typeof G.switchPrimary === 'function' && typeof G.primaryOf === 'function') 
   // Regression: legacy per-tab settings that hid EVERY sub-tab in a group must not
   // leave the primary empty/unreachable — it falls back to the whole group.
   var _svVis = G._tabVis;
-  G._tabVis = { blood:false, tcalc:false, thist:false }; _cap = null; G._lastSub = {};
+  // Derived from PRIMARY_GROUPS, not hardcoded: this asserts the ALL-hidden
+  // fallback, and a hardcoded list stops testing it the moment a sub-tab is added
+  // (the new one stays visible, so nothing falls back and the check passes for the
+  // wrong reason). Adding 'tdose' to Levels is what exposed that.
+  var _lvGroup = G.PRIMARY_GROUPS.levels;
+  var _allHidden = {}; _lvGroup.forEach(function(t){ _allHidden[t] = false; });
+  G._tabVis = _allHidden; _cap = null; G._lastSub = {};
   G.switchPrimary('levels'); check('switchPrimary: all sub-tabs hidden → still opens the group (fallback)', _cap === 'blood');
   if (typeof G._groupVisibleSubs === 'function') {
-    check('_groupVisibleSubs: falls back to full group when all hidden', G._groupVisibleSubs('levels').length === 3);
+    check('_groupVisibleSubs: falls back to full group when all hidden', G._groupVisibleSubs('levels').length === _lvGroup.length);
   }
   G._tabVis = _svVis;
   G.switchTab = _origSwitch;
