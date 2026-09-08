@@ -3133,6 +3133,74 @@ if (typeof G._tdSolveWeekly === 'function') {
   G._tcShbgBaseline = _sv.sb;
 }
 
+// ── The dose is reported as a RANGE, and the model states its own bias ──────
+// The model is metabolic-clearance arithmetic and lands within a few percent of
+// doing that sum directly from the MCR the backend cites. It STILL reads ~1.5x
+// above Bhasin 2001, the only measured dose-response data, compared like for
+// like (its trough against that study's nadir samples). Both facts are true, and
+// one bold figure on screen tells only the first — so the solved number is the
+// floor of a range, not the middle of one.
+//
+// ⚠️ An earlier reading called this 2x and was WRONG: it compared the model's
+// weekly MEAN against Bhasin's NADIR, which are different quantities. A third of
+// the apparent error was that mistake.
+console.log('\n── Dose Finder: the number carries its own uncertainty ──────');
+if (typeof G._tdModelBias === 'function') {
+  const _svB = {bw:G._tcBwEntries, tp:G._tcp, c:G._tdBiasCache};
+  G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
+  G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:'217', shbg:'45',
+                                          totalT:'17', birthYear:'1980'});
+  G._tdBiasCache = null;
+  const _b = G._tdModelBias();
+  check('the model measures its own bias against published data', !!_b && _b.n === 5,
+    JSON.stringify(_b));
+  // If this ever drifts far from ~1.5 the pharmacology has changed underneath —
+  // which is exactly what the check is for. Wide bounds, so it flags a real
+  // shift rather than nagging about noise.
+  check('  …and reads high against it, by roughly half again',
+    _b.mean > 1.2 && _b.mean < 1.9, 'mean ' + _b.mean.toFixed(2) + 'x');
+  check('  …with the spread across dose levels reported, not averaged away',
+    _b.lo < _b.mean && _b.hi > _b.mean);
+
+  // ⚠️ MEASURED AGAINST THE LIVE MODEL, NOT HARDCODED. If the pharmacology is
+  // corrected the stated uncertainty must narrow by itself rather than quietly
+  // becoming a lie. Only the published data — a fixed historical fact — is fixed.
+  const _tdB = require('fs').readFileSync(
+    require('path').join(__dirname, '../tab-tdose.js'), 'utf8');
+  const _tdBc = _tdB.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  check('  …computed from the live model rather than written down',
+    /_tcSolveSeries\(/.test((_tdBc.match(/function _tdModelBias\(\)[\s\S]*?\n\}/)||[''])[0]) &&
+    !/bias\s*[:=]\s*1\.5/.test(_tdBc));
+  // Trough vs nadir is the whole correctness of the comparison.
+  check('  …comparing trough against nadir, not mean against nadir',
+    /st\.trough/.test((_tdBc.match(/function _tdModelBias\(\)[\s\S]*?\n\}/)||[''])[0]));
+  check('  …against a cited, dated source',
+    /Bhasin 2001/.test(_tdB) && /281:E1172/.test(_tdB));
+  // Reference data belongs in the backend; this copy must carry that debt
+  // visibly rather than settling in as a frontend constant.
+  check('  …and the hardcoded table is flagged for backend migration',
+    /OWES A MIGRATION TO THE BACKEND/.test(_tdB));
+
+  check('the solved dose is presented as a floor, not a point estimate',
+    /treat that as the floor/.test(_tdB) && /How far to trust this/.test(_tdB));
+  check('  …and free T is declared calculated rather than measured',
+    /calculated, not measured/.test(_tdB));
+
+  G._tcBwEntries = _svB.bw; G._tcp = _svB.tp; G._tdBiasCache = _svB.c;
+}
+
+// ── One number, one source — the standing rule ──────────────────────────────
+{
+  const _mdR = require('fs').readFileSync(
+    require('path').join(__dirname, '../CLAUDE.md'), 'utf8');
+  check('CLAUDE.md forbids two surfaces disagreeing about the same quantity',
+    /ONE NUMBER, ONE SOURCE/.test(_mdR) && _mdR.indexOf('ONE NUMBER, ONE SOURCE') < 4000);
+  check('  …naming one model and one renderer as the mechanism',
+    /_tcFreeTSeries/.test(_mdR) && /_renderEnhancedGuide/.test(_mdR));
+  check('  …and requiring the fix at the source, not the display',
+    /never at the display/.test(_mdR));
+}
+
 // ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
 // Reported 2026-08-14: "The text in the green box says I am at 309pmol/l but graph
 // shows me at 894?" The steady-state window was Math.floor(totalDays/2), and totalDays

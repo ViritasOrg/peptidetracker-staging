@@ -109,6 +109,92 @@ function _tdSet(k,v){
   buildTDose();
 }
 
+// ── HOW FAR TO TRUST THE NUMBER ─────────────────────────────────────────────
+// The model is a faithful first-principles calculation and it still disagrees
+// with the best measured dose-response data. Both of those are true, and a
+// single bold figure on screen says only the first.
+//
+// WHERE IT AGREES. The model is TT = TT_base * total/P — serum testosterone
+// proportional to appearance rate, anchored on the user's own baseline. That is
+// metabolic-clearance arithmetic, and it lands within a few percent of doing the
+// sum directly with the MCR the backend cites (1240 L/day for men, J Clin Invest
+// 1967 PMID 6025489): at 125 mg/week enanthate the model says a mean of 1100
+// ng/dL and the raw MCR sum says 1037.
+//
+// WHERE IT DOES NOT. Bhasin 2001 (Am J Physiol 281:E1172) gave weekly TE under
+// GnRH-agonist suppression and measured MEAN NADIR concentrations — the sample
+// taken immediately before the next injection. Read like for like, model trough
+// against published nadir, the model runs about 1.5x high across the ladder.
+//
+// ⚠️ AN EARLIER READING OF THIS SAID 2x AND WAS WRONG: it compared the model's
+// weekly MEAN against Bhasin's NADIR, which are not the same quantity. A third
+// of the apparent error was that mistake. Always compare trough to nadir here.
+//
+// The most likely single cause of what remains is bioavailability: the catalogue
+// declares none for the injectable esters, so the model treats the full injected
+// mass as reaching circulation. The ratio also falls as dose rises (1.62x at 25
+// mg/week, 1.37x at 300), which is what you would expect from SHBG dropping and
+// clearance rising at supraphysiological levels — an effect no fixed factor
+// captures.
+//
+// ⚠️ THE FACTOR IS MEASURED AGAINST THE LIVE MODEL, NOT HARDCODED.
+// _tdModelBias runs the current model at Bhasin's doses and compares. If the
+// pharmacology is ever corrected, the reported uncertainty narrows by itself
+// instead of quietly becoming a lie. What IS hardcoded is the published data
+// itself, which is a fixed historical fact.
+//
+// ⚠️ OWES A MIGRATION TO THE BACKEND. Per CLAUDE.md all reference data belongs
+// in claude-agent-backend and this table is reference data. It is here because
+// this session had read-only backend access and could not add the endpoint.
+// Move it to /systemic-interactions (alongside endogenousT and shbgBaseline)
+// and read it from there; do not copy it into a second frontend.
+var _TD_LIT_ANCHOR = {
+  source: 'Bhasin 2001, Am J Physiol Endocrinol Metab 281:E1172',
+  design: 'weekly testosterone enanthate under GnRH-agonist suppression, healthy young men',
+  measure:'mean NADIR total T, ng/dL',
+  ester:  'enanthate',
+  points: [{mgWk:25, ngdl:253}, {mgWk:50, ngdl:306}, {mgWk:125, ngdl:542},
+           {mgWk:300, ngdl:1345}, {mgWk:600, ngdl:2370}]
+};
+var _TD_NGDL_PER_NMOL = 28.84;   // testosterone MW 288.4 — a unit conversion, not data
+var _tdBiasCache = null;
+
+// Ratio of what this model predicts to what was measured, at matched doses and
+// matched quantity (trough vs nadir, weekly cadence). >1 means the model reads
+// high, so the dose it returns is a FLOOR: holding the target for real is likely
+// to need more, not less.
+function _tdModelBias(){
+  if(_tdBiasCache) return _tdBiasCache;
+  try{
+    var cad = (_TC_CADENCES||[]).find(function(c){ return c.key==='1xwk'; });
+    var shbg = parseDec((_tdCalibration()||{}).shbg) || 45;
+    if(!cad || typeof _tcInvVermeulenTT!=='function') return null;
+    var ratios = [];
+    _TD_LIT_ANCHOR.points.forEach(function(pt){
+      var dates = _tcSolveDates(cad, dateKey(NOW), 26);
+      if(!dates.length) return;
+      var last = dates[dates.length-1].getTime();
+      var ser = _tcSolveSeries(dates.map(function(d){
+        return {compId:_TD_LIT_ANCHOR.ester, doseMg:String(pt.mgWk), date:_tcSolveDayKey(d)};
+      }));
+      if(!ser) return;
+      var st = _tcSolveWindowStats(ser, last-7*86400000, last);
+      // Trough, to match a nadir sample. Converted to total T because that is
+      // what the study measured; free T there was not reported.
+      var ng = _tcInvVermeulenTT(st.trough, shbg) * _TD_NGDL_PER_NMOL;
+      if(ng>0 && pt.ngdl>0) ratios.push(ng/pt.ngdl);
+    });
+    if(!ratios.length) return null;
+    ratios.sort(function(a,b){ return a-b; });
+    var mean = ratios.reduce(function(a,b){ return a+b; },0)/ratios.length;
+    _tdBiasCache = {mean:mean, lo:ratios[0], hi:ratios[ratios.length-1], n:ratios.length};
+    return _tdBiasCache;
+  }catch(e){
+    if(typeof _logErr==='function') _logErr('tdModelBias', e);
+    return null;
+  }
+}
+
 // ── THE SOLVE ───────────────────────────────────────────────────────────────
 // Steady state, not a ramp. tcSolveTransition answers "how do I get from the
 // ester I am on to a target without a trough" — a scheduling problem with an
@@ -459,9 +545,26 @@ function _tdResultCardHtml(){
 
   var cadObj = (_TC_CADENCES||[]).find(function(c){ return c.key===s.cadenceKey; });
 
+  // ⚠️ A RANGE, NOT A FIGURE.
+  // The model matches metabolic-clearance arithmetic and still reads ~1.5x above
+  // the only measured dose-response data, so the solved number is the BOTTOM of
+  // the plausible range, not the middle of it. Printing one bold figure claims a
+  // precision the pharmacology does not have, and this is a dose.
+  var bias = _tdModelBias();
+  var hiMg = (bias && bias.mean>1) ? r.mgPerWeek*bias.mean : 0;
+
   var h = _tdLabel('Weekly dose');
-  h += '<div style="font-size:34px;font-weight:900;color:var(--accent);line-height:1.1;">'
-    +  (Math.round(r.mgPerWeek*10)/10)+'<span style="font-size:16px;font-weight:700;color:var(--muted2);"> mg/week</span></div>';
+  if(hiMg > r.mgPerWeek*1.05){
+    h += '<div style="font-size:34px;font-weight:900;color:var(--accent);line-height:1.1;">'
+      +  (Math.round(r.mgPerWeek))+'<span style="font-size:22px;color:var(--muted2);">–</span>'
+      +  (Math.round(hiMg))+'<span style="font-size:16px;font-weight:700;color:var(--muted2);"> mg/week</span></div>';
+    h += '<div style="font-size:12px;color:var(--muted2);margin-top:5px;line-height:1.6;">'
+      +  'The model says <strong style="color:var(--text)">'+Math.round(r.mgPerWeek)+' mg/week</strong>; '
+      +  'measured trial data says it reads high, so treat that as the floor.</div>';
+  }else{
+    h += '<div style="font-size:34px;font-weight:900;color:var(--accent);line-height:1.1;">'
+      +  (Math.round(r.mgPerWeek*10)/10)+'<span style="font-size:16px;font-weight:700;color:var(--muted2);"> mg/week</span></div>';
+  }
   h += '<div style="font-size:13px;color:var(--text);margin-top:6px;line-height:1.6;">'
     +  '<strong>'+(Math.round(r.mgPerInjection*10)/10)+' mg</strong> per injection'
     +  (ml>0?(' (<strong>'+(Math.round(ml*100)/100)+' ml</strong> at '+_esc(String(s.concMgPerMl))+' mg/ml)'):'')
@@ -496,6 +599,29 @@ function _tdResultCardHtml(){
       +  'settle — five half-lives. Nothing you have already injected is included in this '
       +  'figure; it is what the schedule above holds on its own.</div>';
   }
+  // ⚠️ SAY WHAT THE NUMBER RESTS ON AND WHERE IT IS KNOWN TO BE WRONG.
+  // This is the difference between a calculator and a recommendation.
+  if(bias){
+    h += '<div style="height:1px;background:var(--border);margin:12px 0;"></div>';
+    h += '<div style="font-size:10px;font-weight:700;letter-spacing:1.4px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px;">How far to trust this</div>';
+    h += '<div style="font-size:11px;color:var(--muted2);line-height:1.7;">'
+      +  'The maths is metabolic-clearance arithmetic and agrees with doing that sum '
+      +  'directly from the clearance rate in the literature. Checked against '
+      +  _esc(_TD_LIT_ANCHOR.source)+' — '+_esc(_TD_LIT_ANCHOR.design)+' — it reads '
+      +  '<strong style="color:var(--text)">'+(Math.round(bias.mean*100)/100)+'x high</strong> '
+      +  'at matched doses (range '+(Math.round(bias.lo*100)/100)+'–'
+      +  (Math.round(bias.hi*100)/100)+'x across '+bias.n+' dose levels), comparing its '
+      +  'trough against that study\'s nadir samples. The likeliest single cause is that '
+      +  'the catalogue declares no bioavailability for injectable esters, so the whole '
+      +  'injected mass is modelled as reaching circulation.'
+      +  '</div>';
+    h += '<div style="font-size:11px;color:var(--muted2);line-height:1.7;margin-top:8px;">'
+      +  'Free T here is <strong style="color:var(--text)">calculated, not measured</strong> '
+      +  '(Vermeulen from total T and SHBG), and a direct assay has been seen to exceed the '
+      +  'calculation. Both effects point the same way: this is a starting point to test '
+      +  'against a draw, never a substitute for one.</div>';
+  }
+
   // The app's own ceiling copy, not a new opinion.
   var ceil = (typeof _FT_REF!=='undefined') ? _FT_REF : null;
   if(ceil && ceil.ceiling_pmol_l && r.target > ceil.ceiling_pmol_l){
