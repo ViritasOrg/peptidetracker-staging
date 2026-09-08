@@ -2265,8 +2265,16 @@ console.log('\n── T-calc: skipped doses are reported, not absorbed ───
   // artefact of two adjacent series joining, which it is not (the join is seamless;
   // the flat is entirely the unticked doses). Prose under the chart was not enough.
   check('skipped doses are marked on the chart itself',
-    /_tcSkippedPast && _tcSkippedPast\.length/.test(_skSrc) &&
+    /var _skVis = _tcSkippedVisible\(\);[\s\S]{0,40}?if \(_skVis\.length\)/.test(_skSrc) &&
     /ctx\.arc\(sx, PAD\.top \+ cH \+ 3/.test(_skSrc));
+  // …and BOTH surfaces read the filtered list. The stems and the prose have to agree;
+  // one filtered and one not is how a "12 never ticked" note ends up under a chart
+  // that draws none of them.
+  check('  …and the note under the chart reads the same filtered list',
+    /var _sk = _tcSkippedVisible\(\)\.filter/.test(_skSrc));
+  check('  …with neither surface reading the raw unfiltered list any more',
+    !/_tcSkippedPast && _tcSkippedPast\.length/.test(_skSrc) &&
+    !/var _sk = \(_tcSkippedPast \|\| \[\]\)\.filter/.test(_skSrc));
   check('  …distinct from a real dose tick, not drawn as one',
     /setLineDash\(\[2,2\]\)[\s\S]{0,400}?ctx\.arc\(sx/.test(_skSrc));
 
@@ -2605,6 +2613,64 @@ if (typeof G._tcFetchHistory === 'function') {
     (G._tcHistory||[]).some(e => e.date === _past));
   G.fetch = _dpSave.f; G._tcHistory = _dpSave.h;
   G._tcHistoryState = _dpSave.hs; G._tcSkippedPast = _dpSave.sk;
+}
+
+
+// ── GHOST DOSES: A DELETED OR SWITCHED-OFF PROTOCOL'S SCHEDULE ──────────────
+// Reported 2026-09-08 with a screenshot: a dozen amber "never ticked" stems across
+// late August on a run where every planned Nebido dose HAD been ticked in Today.
+// _tcSkippedPast is built from a deliberately active_only=false fetch — the curve
+// needs every logged dose whatever stack it was filed under — but it never inherited
+// the filters the curve applies to the PLAN (_tcActiveCycleIds, _tcIsTcalcOwned).
+// Rows left behind by a deleted or deactivated protocol were therefore reported as
+// missed injections the model was penalised for, while the curve itself had rightly
+// ignored them. The logged-day de-duplication above cannot catch these: it needs a
+// ticked dose on the SAME DAY, and a dead protocol's schedule sits on its own dates.
+if (typeof G._tcSkippedVisible === 'function') {
+  const _ghSave = {sk:G._tcSkippedPast, us:G._userStacks, ai:G._activeStackIndices};
+  const _d = n => G.dateKey(new Date(Date.now() - n*86400000));
+  G._userStacks = [{id:'live', name:'Current'}, {id:'off', name:'Old'}];
+  G._activeStackIndices = [0];
+  G._tcSkippedPast = [
+    {compId:'nebido', doseMg:'100', date:_d(9), cycleId:'live'},   // real miss
+    {compId:'nebido', doseMg:'100', date:_d(7), cycleId:'off'},    // switched off
+    {compId:'nebido', doseMg:'100', date:_d(5), cycleId:'gone'},   // deleted protocol
+    {compId:'nebido', doseMg:'100', date:_d(3), cycleId:'tcalc:live'}, // round-trip copy
+  ];
+  const _ghSeen = G._tcSkippedVisible().map(e => e.cycleId);
+  check('a dose on a switched-off protocol is not reported as missed',
+    _ghSeen.indexOf('off') < 0, 'saw ' + JSON.stringify(_ghSeen));
+  check('  …nor one left behind by a deleted protocol',
+    _ghSeen.indexOf('gone') < 0, 'saw ' + JSON.stringify(_ghSeen));
+  check("  …nor T-Calc's own round-tripped copy of the plan",
+    _ghSeen.indexOf('tcalc:live') < 0, 'saw ' + JSON.stringify(_ghSeen));
+  check('  …while a genuine miss on the ACTIVE protocol is still reported',
+    _ghSeen.length === 1 && _ghSeen[0] === 'live', 'saw ' + JSON.stringify(_ghSeen));
+  // The raw list is untouched — only the reporting is filtered. Anything that needs
+  // every row (the planner's own scoping, the debug dump) still has it.
+  check('  …and the underlying list is not mutated',
+    (G._tcSkippedPast || []).length === 4);
+
+  // ⚠️ THE FALLBACK. _tcActiveCycleIds() returns null until loadStacks has run, and a
+  // history fetch can land first. Hiding every miss behind that race would be a worse
+  // bug than the one being fixed, so an unloaded stack list reports everything.
+  G._userStacks = [];
+  G._activeStackIndices = [];
+  const _ghBoot = G._tcSkippedVisible().map(e => e.cycleId);
+  check('an unloaded stack list reports real misses rather than hiding them',
+    _ghBoot.indexOf('live') >= 0 && _ghBoot.indexOf('off') >= 0,
+    'saw ' + JSON.stringify(_ghBoot));
+  check("  …though T-Calc's round-trip copies are dropped even then",
+    _ghBoot.indexOf('tcalc:live') < 0, 'saw ' + JSON.stringify(_ghBoot));
+
+  // Nothing is active, stacks ARE loaded: hiding everything is correct here.
+  G._userStacks = [{id:'live', name:'Current'}];
+  G._activeStackIndices = [];
+  check('with stacks loaded and none active, nothing is reported missed',
+    G._tcSkippedVisible().length === 0);
+
+  G._tcSkippedPast = _ghSave.sk; G._userStacks = _ghSave.us;
+  G._activeStackIndices = _ghSave.ai;
 }
 
 
