@@ -14847,16 +14847,44 @@ console.log('\n── A deleted protocol leaves no plan behind ─────�
   const _delSrc = (_idxSrc3.match(/async function deleteStack\(idx\)\{[\s\S]*?\n\}/) || [''])[0];
 
   check('deleteStack purges the protocol\'s stored plan',
-    /injPurgeCyclePlan\(_goneId/.test(_delSrc));
-  // A T-Calc plan assigned to this protocol is its rows too ('tcalc:<id>'), and is
-  // orphaned by exactly the same delete.
-  check('  …including a T-Calc plan assigned to it',
-    /injPurgeCyclePlan\('tcalc:'\+_goneId/.test(_delSrc));
-  // After the splice there is nothing left to derive the id from, and an empty
+    /injPurgeCyclePlan\(cid/.test(_delSrc) && /_stackOwnedCycleIds\(_userStacks\[idx\]\)/.test(_delSrc));
+  // After the splice there is nothing left to derive the ids from, and an empty
   // cycle_id is not a narrow delete — it is no filter at all.
-  check('  …reading the id off the stack BEFORE it is spliced out',
-    _delSrc.indexOf('var _goneId=') !== -1 &&
-    _delSrc.indexOf('var _goneId=') < _delSrc.indexOf('_userStacks.splice'));
+  check('  …reading the ids off the stack BEFORE it is spliced out',
+    _delSrc.indexOf('var _goneIds=') !== -1 &&
+    _delSrc.indexOf('var _goneIds=') < _delSrc.indexOf('_userStacks.splice'));
+
+  // ── EVERY SPELLING, NOT JUST THE FROZEN ONE ──────────────────────────────
+  // A protocol's rows are split across up to two cycle_ids: the frozen stack.id and
+  // the name_start form derived from its CURRENT name and cycle_start. Purging only
+  // _stackCycleId left the other spelling's rows stored, dated, and owned by an id
+  // that resolves to nothing — which is what T-Calc then drew as "never ticked".
+  // Prod on 2026-09-08 held 768 rows under protocol_4_nostart and 84 more under
+  // protocol_4_2026-09-25, plus 24 + 12 across two hormone_health_trt spellings.
+  const _ownIds = G._stackOwnedCycleIds({id:'protocol_4_nostart', name:'Protocol 4',
+                                         cycle_start:'2026-09-25'});
+  check('a protocol\'s owned ids include the FROZEN stack id',
+    _ownIds.indexOf('protocol_4_nostart') >= 0, JSON.stringify(_ownIds));
+  check('  …and the derived name_start spelling it also wrote rows under',
+    _ownIds.indexOf('protocol_4_2026-09-25') >= 0, JSON.stringify(_ownIds));
+  // A T-Calc plan assigned to this protocol is its rows too, under either spelling.
+  check('  …and the T-Calc namespace of BOTH',
+    _ownIds.indexOf('tcalc:protocol_4_nostart') >= 0 &&
+    _ownIds.indexOf('tcalc:protocol_4_2026-09-25') >= 0, JSON.stringify(_ownIds));
+  // The common case: id frozen to the very form it derives to, so there is only one
+  // spelling and the purge must not ask for it twice.
+  check('  …with no duplicates when the two spellings agree',
+    JSON.stringify(G._stackOwnedCycleIds({id:'p1_nostart', name:'p1'})) ===
+    JSON.stringify(['p1_nostart', 'tcalc:p1_nostart']));
+  // Bare 'tcalc' and 'manual' are shared namespaces owned by no protocol, so no
+  // single protocol's deletion may clear them. injPurgeCyclePlan refuses them too —
+  // this keeps the delete from even asking.
+  check('  …and a shared namespace is never claimed as a protocol\'s own',
+    G._stackOwnedCycleIds({id:'tcalc', name:'tcalc'}).indexOf('tcalc') < 0 &&
+    G._stackOwnedCycleIds({id:'manual', name:'manual'}).indexOf('manual') < 0);
+  check('  …and a missing stack yields no ids at all, never an empty-string filter',
+    G._stackOwnedCycleIds(null).length === 0 &&
+    G._stackOwnedCycleIds({}).every(function(c){ return !!c; }));
   // The stack list is saved first. The other order risks the unrecoverable failure:
   // the plan erased while the protocol it belongs to is still there.
   check('  …and only after the stack list is saved',

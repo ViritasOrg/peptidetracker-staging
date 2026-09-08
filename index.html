@@ -1605,25 +1605,69 @@ async function useStack(idx){
 // protocol is gone and some plan rows survive — debris the cleanup in Settings can
 // still sweep. The other order risks the opposite, which is not recoverable: the
 // plan erased while the protocol it belongs to is still there.
+// ── EVERY ID SPELLING A PROTOCOL EVER OWNED ─────────────────────────────────
+// A protocol does not have one cycle_id, it has up to two, and its stored rows are
+// split across both.
+//
+// _stackCycleId returns the FROZEN stack.id. _deriveStackCycleId computes the
+// name_start form (`protocol_4_nostart`) from the stack's CURRENT name and
+// cycle_start. They agree only while neither has moved: rows written before the id
+// was frozen carry the derived form, and renaming a protocol or moving its cycle
+// start mints a further spelling for every row written after it.
+//
+// Prod on 2026-09-08 held exactly this, in two protocols at once:
+//   protocol_4_nostart          768 rows, 0 logged
+//   protocol_4_2026-09-25        84 rows, 0 logged
+//   hormone_health_trt_2026-07-26 24 rows, 0 logged
+//   hormone_health_trt_2026-08-01 12 rows, 0 logged
+// deleteStack purged _stackCycleId only, so deleting either protocol left the other
+// spelling's rows behind — still stored, still dated, owned by a cycle_id that now
+// resolves to nothing, and still drawn on the T-Calc chart as doses that were
+// "never ticked". That is the ghost-dose report of 2026-09-08.
+//
+// The cleanup sweep in Settings cannot finish the job either, and deliberately so:
+// _livePlanOwnerIds spares BOTH spellings so a live protocol's rows are never
+// mistaken for debris. Sparing is the direction an error there has to fall, so the
+// fix belongs here, at the delete, where the protocol is known to be going.
+//
+// ⚠️ LOGGED DOSES ARE NOT TOUCHED, AND CANNOT BE FROM HERE. injPurgeCyclePlan
+// hardcodes unlogged_only and takes no argument for it. A dose that was
+// administered is a fact about the user's body and outlives the protocol that
+// planned it — only the untaken plan goes.
+function _stackOwnedCycleIds(stack){
+  if(!stack)return [];
+  var ids=[];
+  var add=function(c){
+    // injPurgeCyclePlan refuses these anyway; filtering here keeps the delete from
+    // logging a scary refusal for a protocol that simply has no derived form.
+    if(!c||c==='tcalc'||c==='manual')return;
+    if(ids.indexOf(c)<0)ids.push(c);
+  };
+  var frozen=(typeof _stackCycleId==='function')?_stackCycleId(stack):(stack.id||'');
+  var derived=(typeof _deriveStackCycleId==='function')?_deriveStackCycleId(stack):'';
+  [frozen,derived].forEach(function(c){
+    add(c);
+    // The T-Calc plan assigned to this protocol. Bare 'tcalc' is the unassigned
+    // pool and belongs to no protocol, so it is never this delete's to touch.
+    if(c)add('tcalc:'+c);
+  });
+  return ids;
+}
 async function deleteStack(idx){
   if(!confirmGlobalDelete('this protocol'))return;
   if(idx>=0&&idx<_userStacks.length){
-    // Read the id off the stack before it leaves the array — after the splice there
-    // is nothing left to derive it from, and an empty cycle_id is not a narrow
+    // Read the ids off the stack before it leaves the array — after the splice there
+    // is nothing left to derive them from, and an empty cycle_id is not a narrow
     // delete, it is no filter at all.
-    var _goneId=_stackCycleId(_userStacks[idx]);
+    var _goneIds=_stackOwnedCycleIds(_userStacks[idx]);
     _userStacks.splice(idx,1);
     _activeStackIndices=_activeStackIndices.filter(function(i){return i!==idx;}).map(function(i){return i>idx?i-1:i;});
     if(_activeStackIndices.length&&_activeStackIndices[0]>=_userStacks.length)_activeStackIndices=[Math.max(0,_userStacks.length-1)];
     await saveStacksToBackend();
-    // Both namespaces this protocol owns: its own rows, and a T-Calc plan assigned
-    // to it ('tcalc:<id>'). Bare 'tcalc' is the unassigned pool and belongs to no
-    // protocol, so it is not this delete's to touch — injPurgeCyclePlan refuses it.
-    if(_goneId&&typeof injPurgeCyclePlan==='function'){
-      await Promise.all([
-        injPurgeCyclePlan(_goneId,'deleteStack'),
-        injPurgeCyclePlan('tcalc:'+_goneId,'deleteStack')
-      ]);
+    if(_goneIds.length&&typeof injPurgeCyclePlan==='function'){
+      await Promise.all(_goneIds.map(function(cid){
+        return injPurgeCyclePlan(cid,'deleteStack');
+      }));
       // The row set changed underneath both caches that hold injections.
       if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
       if(typeof _tlInvalidateInjections==='function')_tlInvalidateInjections();
