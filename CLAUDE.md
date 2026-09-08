@@ -24,6 +24,42 @@ depend on the answer, land it on stage, and end the reply with a **numbered
 list of questions**. Do not bury a question inside a long explanation — it will
 not be read.
 
+## 🔗 ONE NUMBER, ONE SOURCE — NOTHING MAY DISAGREE WITH ITSELF 🔗
+**Henrik, 2026-09-08: "make it a rule that nowhere in any app can there be data
+not agreeing with each other."**
+
+Across every app in this ecosystem — peptidetracker, peptidetracker-staging,
+workout, workout-staging — **the same quantity must have exactly one definition,
+in one place, and every surface must read it from there.** Two screens showing
+different numbers for the same thing is a defect on its own, even when both
+numbers are individually defensible, and even when nobody has noticed yet.
+
+This applies to all of it: compound parameters, half-lives, dose tiers,
+reference ranges, unit conversions, pharmacological models, and the derived
+figures shown on screen.
+
+**In practice:**
+- A quantity read from the backend is read from the backend *everywhere*. Never
+  copy a served value into a constant "so this tab doesn't have to fetch".
+- One model, one implementation. If two tabs answer questions about the same
+  drug, they call the same function — a second implementation is how they start
+  disagreeing. The Dose Finder is isolated from T-Calc's *data* and still shares
+  its pharmacology (`_tcFreeTSeries`) for exactly this reason.
+- One renderer for one kind of content. Dose guidance is `_renderEnhancedGuide`
+  in every tab that shows it, so wording and numbers cannot drift apart.
+- A derived figure names its source. If a number is computed rather than
+  measured or served, say which, so a reader can tell them apart.
+- Fix disagreements at the source, never at the display. Patching one screen to
+  match another leaves the two definitions in place and hides the drift.
+
+**When you find two places disagreeing:** say so immediately, identify which one
+is authoritative, and make the other read from it. Do not average them, do not
+pick the one that looks nicer, and do not leave both in place with a comment.
+
+This is why hardcoded frontend data is tech debt rather than a shortcut: every
+copy is a future disagreement. See the standing backend rule directly below —
+the two rules are the same rule seen from different sides.
+
 ## 🔒 ALL DATA LIVES IN THE BACKEND — ALWAYS. NEVER ASK AGAIN. 🔒
 **Every piece of data — compound/PK/pharmacology parameters, reference ranges,
 baselines, catalogue entries, and all user data — lives in `claude-agent-backend`
