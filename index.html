@@ -35,6 +35,7 @@
     <div class="tab"        id="tab-btn-blood"    onclick="switchTab('blood',this)">Levels</div>
     <div class="tab"        id="tab-btn-tcalc"   onclick="switchTab('tcalc',this)">T-Calc</div>
     <div class="tab"        id="tab-btn-thist"   onclick="switchTab('thist',this)">T-History</div>
+    <div class="tab"        id="tab-btn-tdose"   onclick="switchTab('tdose',this)">Dose Finder</div>
     <div class="tab"        id="tab-btn-labs"    onclick="switchTab('labs',this)">Labs</div>
     <div class="tab"        id="tab-btn-supplements" onclick="switchTab('supplements',this)">Supplements</div>
     <div class="tab"        id="tab-btn-recon"    onclick="switchTab('recon',this)">Recon</div>
@@ -63,6 +64,7 @@
   <div class="content hidden" id="tab-blood"><div id="blood-body"></div></div>
   <div class="content hidden" id="tab-tcalc"><div id="tcalc-body"></div></div>
   <div class="content hidden" id="tab-thist"><div id="thist-body"></div></div>
+  <div class="content hidden" id="tab-tdose"><div id="tdose-body"></div></div>
   <div class="content hidden" id="tab-labs"><div id="labs-body"></div></div>
   <div class="content hidden" id="tab-schedule">
     <div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent2)"></div><div class="card-title">WEEKLY PATTERN</div></div></div><div class="card-body" id="schedule-body"></div></div>
@@ -342,16 +344,16 @@ function _normalizeActiveStack(){
 }
 let _stackViewTab='peptides';let _editInnerTab='peptides';
 let _reconStackIdx=0;let _reconStackPicked=false;let _reconState={};
-const TAB_LABELS=Object.assign({today:'Today',stacks:'Protocols',blood:'Levels',tcalc:'T-Calc',thist:'T-History',labs:'Labs',supplements:'Supplements',recon:'Recon',schedule:'Schedule',macros:'Macros',timeline:'Timeline',body:'Body Comp'},IS_STAGING?{storage:'Storage'}:{});
-const TAB_DEFAULTS=Object.assign({today:true,stacks:true,blood:true,tcalc:true,thist:true,labs:true,supplements:true,recon:true,schedule:false,macros:true,timeline:true,body:true},IS_STAGING?{storage:true}:{});
+const TAB_LABELS=Object.assign({today:'Today',stacks:'Protocols',blood:'Levels',tcalc:'T-Calc',thist:'T-History',tdose:'Dose Finder',labs:'Labs',supplements:'Supplements',recon:'Recon',schedule:'Schedule',macros:'Macros',timeline:'Timeline',body:'Body Comp'},IS_STAGING?{storage:'Storage'}:{});
+const TAB_DEFAULTS=Object.assign({today:true,stacks:true,blood:true,tcalc:true,thist:true,tdose:true,labs:true,supplements:true,recon:true,schedule:false,macros:true,timeline:true,body:true},IS_STAGING?{storage:true}:{});
 // Two-tier navigation (usability study): 6 bottom "primary" tabs, each grouping
 // several of the existing destinations as a secondary sub-tab strip. Every legacy
 // tab id and switchTab(id,el) call is preserved — this is an additive nav layer.
-const PRIMARY_GROUPS={today:['today','macros','schedule'],plan:['stacks','supplements','recon'],timeline:['timeline'],levels:['blood','tcalc','thist'],labs:['labs','body'],more:['settings','storage']};
+const PRIMARY_GROUPS={today:['today','macros','schedule'],plan:['stacks','supplements','recon'],timeline:['timeline'],levels:['blood','tcalc','thist','tdose'],labs:['labs','body'],more:['settings','storage']};
 const PRIMARY_LABELS={today:'Today',plan:'Plan',timeline:'Timeline',levels:'Levels',labs:'Labs',more:'More'};
 const PRIMARY_ORDER=['today','plan','timeline','levels','labs','more'];
 // Human surface names for the sub-tabs (T-Calc→Testosterone, Recon→Reconstitution…).
-const SUBTAB_LABELS={today:'Today',supplements:'Supplements',schedule:'Schedule',stacks:'Protocols',timeline:'Timeline',recon:'Reconstitution',blood:'Blood Levels',tcalc:'Testosterone',thist:'T-History',labs:'Bloodwork',body:'Body Comp',macros:'Macros',settings:'Settings',storage:'Storage'};
+const SUBTAB_LABELS={today:'Today',supplements:'Supplements',schedule:'Schedule',stacks:'Protocols',timeline:'Timeline',recon:'Reconstitution',blood:'Blood Levels',tcalc:'Testosterone',thist:'T-History',tdose:'Dose Finder',labs:'Bloodwork',body:'Body Comp',macros:'Macros',settings:'Settings',storage:'Storage'};
 function primaryOf(id){for(var _p in PRIMARY_GROUPS){if(PRIMARY_GROUPS[_p].indexOf(id)>=0)return _p;}return '';}
 let _tabVis={};let _currentTab='today';let _currentPrimary='today';let _lastSub={};
 const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';let _googleToken=localStorage.getItem('google_token')||'';let _sessionToken=localStorage.getItem('session_token')||'';function authHeaders(extra){const h={};if(APP_ID)h['X-App-Id']=APP_ID;const _t=_sessionToken||_googleToken;if(_t)h['Authorization']='Bearer '+_t;return extra?Object.assign({},h,extra):h;}
@@ -721,7 +723,7 @@ function lsDbgCopy(i,btn){var k=_lsDbgKeys[i];if(k==null)return;var v=localStora
 function lsDbgCopyAll(btn){var out={};for(var _ci=0;_ci<localStorage.length;_ci++){var _ck=localStorage.key(_ci);if(!_ck)continue;var _cv=localStorage.getItem(_ck)||'';try{out[_ck]=JSON.parse(_cv);}catch(e){out[_ck]=_cv;}}_lsCopyText(JSON.stringify(out,null,2),btn||document.getElementById('lsdbg-copy-all'));}
 function lsDbgClearAll(){if(!confirm('Clear all local cache? The app will reload and re-sync from the backend. You will stay signed in.'))return;var _t=window.localStorage.getItem('google_token');var _e=window.localStorage.getItem('google_email');localStorage.clear();if(_t)window.localStorage.setItem('google_token',_t);if(_e)window.localStorage.setItem('google_email',_e);window.location.reload();}
 function _setPrimaryActive(p){PRIMARY_ORDER.forEach(function(pp){var b=document.getElementById('navbtn-'+pp);if(b){if(pp===p)b.classList.add('active');else b.classList.remove('active');}});}
-function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id);var _pr=primaryOf(id);if(_pr){_currentPrimary=_pr;_lastSub[_pr]=id;try{localStorage.setItem('pep-last-sub-'+_pr,id);}catch(e){}_setPrimaryActive(_pr);_applySubtabVis(_pr);}document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);if(id==='settings')loadSettings();if(id==='storage')buildStoragePage();if(id==='macros')loadMacros();if(id==='timeline')buildTimeline();if(id==='recon')renderRecon();if(id==='supplements')buildSupplements();if(id==='schedule')buildSchedule();if(id==='stacks'){buildStackStore();openCyclesTab();}if(id==='blood')buildBloodLevels();if(id==='tcalc')buildTCalc();if(id==='thist')buildTHist();if(id==='labs')buildLabs();if(id==='body'){var wi=document.getElementById('bc-weight-in');var hi=document.getElementById('bc-height-in');if(wi){var sw=localStorage.getItem('user_weight');var sh=localStorage.getItem('user_height');if(sw)wi.value=sw;if(sh)hi.value=sh;}setBioSex(localStorage.getItem('user_sex')||'male');var ai=document.getElementById('bc-age-in');if(ai){var sa=localStorage.getItem('user_age');if(sa)ai.value=sa;}}}
+function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id);var _pr=primaryOf(id);if(_pr){_currentPrimary=_pr;_lastSub[_pr]=id;try{localStorage.setItem('pep-last-sub-'+_pr,id);}catch(e){}_setPrimaryActive(_pr);_applySubtabVis(_pr);}document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);if(id==='settings')loadSettings();if(id==='storage')buildStoragePage();if(id==='macros')loadMacros();if(id==='timeline')buildTimeline();if(id==='recon')renderRecon();if(id==='supplements')buildSupplements();if(id==='schedule')buildSchedule();if(id==='stacks'){buildStackStore();openCyclesTab();}if(id==='blood')buildBloodLevels();if(id==='tcalc')buildTCalc();if(id==='thist')buildTHist();if(id==='tdose')buildTDose();if(id==='labs')buildLabs();if(id==='body'){var wi=document.getElementById('bc-weight-in');var hi=document.getElementById('bc-height-in');if(wi){var sw=localStorage.getItem('user_weight');var sh=localStorage.getItem('user_height');if(sw)wi.value=sw;if(sh)hi.value=sh;}setBioSex(localStorage.getItem('user_sex')||'male');var ai=document.getElementById('bc-age-in');if(ai){var sa=localStorage.getItem('user_age');if(sa)ai.value=sa;}}}
 
 function logout(){_googleToken='';_sessionToken='';localStorage.removeItem('google_token');localStorage.removeItem('google_email');localStorage.removeItem('session_token');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('signin-screen').classList.remove('hidden');}
 function _fmtTokExp(tok){try{var p=JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));if(!p.exp)return null;return{exp:new Date(p.exp*1000),leftMin:Math.round((p.exp*1000-Date.now())/60000)};}catch(e){return null;}}
@@ -794,6 +796,39 @@ function _orphanPlanCycleIds(rows,liveIds){
   });
   return out;
 }
+// ── THE STORED ROWS CHANGED — EVERY CACHE OF THEM MUST RE-READ ──────────────
+// Three independent caches hold injection rows, and they are refreshed by three
+// different calls:
+//   _injectionsCache   refreshInjectionsCache()   — Today, the week strip, T-Calc's plan
+//   the Timeline's     _tlInvalidateInjections()
+//   _tcHistory         _tcFetchHistory(true)      — T-Calc's past, AND _tcSkippedPast
+//
+// The third is the one that gets forgotten, because it is the only one that is
+// fetched ONCE PER SESSION: _tcFetchHistory returns early on a warm cache, and
+// buildTCalc only calls it while the state is still 'idle'. So a delete that
+// refreshes the other two leaves T-Calc reading rows the backend no longer has,
+// for the rest of the session, and the user sees the deleted doses until they
+// close and reopen the app.
+//
+// Reported 2026-09-08 against the orphan sweep: "Clean up still requires app
+// restart to not show the orphan doses in T-calc". The rows were gone from the
+// record; _tcSkippedPast still held them and still drew them as amber "never
+// ticked" stems. Same omission in deleteStack, which purges the same rows the
+// same way. toggleInjection already forces this re-read and carries a long note
+// on the identical failure — this is that lesson, factored out so the next
+// delete path cannot forget it.
+//
+// FORCED, deliberately: the cache is warm by definition at this point, so a
+// plain call would return early and change nothing. _tcFetchHistory ends by
+// calling buildTCalc itself, so the curve redraws from fresh data.
+async function _injRowsChanged(tag){
+  if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
+  if(typeof _tlInvalidateInjections==='function')_tlInvalidateInjections();
+  try{
+    if(typeof _tcFetchHistory==='function')await _tcFetchHistory(true);
+    else if(typeof buildTCalc==='function')buildTCalc();
+  }catch(e){ if(typeof _logErr==='function')_logErr(tag||'injRowsChanged',e); }
+}
 async function cleanupOrphanDoses(){
   var btn=document.getElementById('s-orphan-btn');
   var out=document.getElementById('s-orphan-doses');
@@ -822,8 +857,7 @@ async function cleanupOrphanDoses(){
   var removed=res.reduce(function(a,n){return a+(typeof n==='number'?n:0);},0);
   var failed=res.filter(function(n){return n===null;}).length;
   say(removed+' removed'+(failed?' · '+failed+' failed':''));
-  if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
-  if(typeof _tlInvalidateInjections==='function')_tlInvalidateInjections();
+  await _injRowsChanged('cleanupOrphanDoses');
   if(typeof buildToday==='function')buildToday();
   if(typeof buildWeekStrip==='function')buildWeekStrip();
   reset();
@@ -1605,28 +1639,75 @@ async function useStack(idx){
 // protocol is gone and some plan rows survive — debris the cleanup in Settings can
 // still sweep. The other order risks the opposite, which is not recoverable: the
 // plan erased while the protocol it belongs to is still there.
+// ── EVERY ID SPELLING A PROTOCOL EVER OWNED ─────────────────────────────────
+// A protocol does not have one cycle_id, it has up to two, and its stored rows are
+// split across both.
+//
+// _stackCycleId returns the FROZEN stack.id. _deriveStackCycleId computes the
+// name_start form (`protocol_4_nostart`) from the stack's CURRENT name and
+// cycle_start. They agree only while neither has moved: rows written before the id
+// was frozen carry the derived form, and renaming a protocol or moving its cycle
+// start mints a further spelling for every row written after it.
+//
+// The record on 2026-09-08 held exactly this, in two protocols at once. Counts are
+// per user_id namespace — the store is partitioned by it, and a read that merges
+// namespaces double-counts every row:
+//   henrik.schaub@gmail.com   protocol_4_nostart            384 rows, 0 logged
+//                             protocol_4_2026-09-25          84 rows, 0 logged
+//   trt:henrik.schaub@...     hormone_health_trt_2026-07-26  12 rows, 0 logged
+//                             hormone_health_trt_2026-08-01  12 rows, 0 logged
+// deleteStack purged _stackCycleId only, so deleting either protocol left the other
+// spelling's rows behind — still stored, still dated, owned by a cycle_id that now
+// resolves to nothing, and still drawn on the T-Calc chart as doses that were
+// "never ticked". Those 384 rows are 81 enanthate doses at 12.5 mg daily; nine of
+// them fell in the past window and drew as the amber stems of the 2026-09-08 report.
+//
+// The cleanup sweep in Settings cannot finish the job either, and deliberately so:
+// _livePlanOwnerIds spares BOTH spellings so a live protocol's rows are never
+// mistaken for debris. Sparing is the direction an error there has to fall, so the
+// fix belongs here, at the delete, where the protocol is known to be going.
+//
+// ⚠️ LOGGED DOSES ARE NOT TOUCHED, AND CANNOT BE FROM HERE. injPurgeCyclePlan
+// hardcodes unlogged_only and takes no argument for it. A dose that was
+// administered is a fact about the user's body and outlives the protocol that
+// planned it — only the untaken plan goes.
+function _stackOwnedCycleIds(stack){
+  if(!stack)return [];
+  var ids=[];
+  var add=function(c){
+    // injPurgeCyclePlan refuses these anyway; filtering here keeps the delete from
+    // logging a scary refusal for a protocol that simply has no derived form.
+    if(!c||c==='tcalc'||c==='manual')return;
+    if(ids.indexOf(c)<0)ids.push(c);
+  };
+  var frozen=(typeof _stackCycleId==='function')?_stackCycleId(stack):(stack.id||'');
+  var derived=(typeof _deriveStackCycleId==='function')?_deriveStackCycleId(stack):'';
+  [frozen,derived].forEach(function(c){
+    add(c);
+    // The T-Calc plan assigned to this protocol. Bare 'tcalc' is the unassigned
+    // pool and belongs to no protocol, so it is never this delete's to touch.
+    if(c)add('tcalc:'+c);
+  });
+  return ids;
+}
 async function deleteStack(idx){
   if(!confirmGlobalDelete('this protocol'))return;
   if(idx>=0&&idx<_userStacks.length){
-    // Read the id off the stack before it leaves the array — after the splice there
-    // is nothing left to derive it from, and an empty cycle_id is not a narrow
+    // Read the ids off the stack before it leaves the array — after the splice there
+    // is nothing left to derive them from, and an empty cycle_id is not a narrow
     // delete, it is no filter at all.
-    var _goneId=_stackCycleId(_userStacks[idx]);
+    var _goneIds=_stackOwnedCycleIds(_userStacks[idx]);
     _userStacks.splice(idx,1);
     _activeStackIndices=_activeStackIndices.filter(function(i){return i!==idx;}).map(function(i){return i>idx?i-1:i;});
     if(_activeStackIndices.length&&_activeStackIndices[0]>=_userStacks.length)_activeStackIndices=[Math.max(0,_userStacks.length-1)];
     await saveStacksToBackend();
-    // Both namespaces this protocol owns: its own rows, and a T-Calc plan assigned
-    // to it ('tcalc:<id>'). Bare 'tcalc' is the unassigned pool and belongs to no
-    // protocol, so it is not this delete's to touch — injPurgeCyclePlan refuses it.
-    if(_goneId&&typeof injPurgeCyclePlan==='function'){
-      await Promise.all([
-        injPurgeCyclePlan(_goneId,'deleteStack'),
-        injPurgeCyclePlan('tcalc:'+_goneId,'deleteStack')
-      ]);
-      // The row set changed underneath both caches that hold injections.
-      if(typeof refreshInjectionsCache==='function')await refreshInjectionsCache();
-      if(typeof _tlInvalidateInjections==='function')_tlInvalidateInjections();
+    if(_goneIds.length&&typeof injPurgeCyclePlan==='function'){
+      await Promise.all(_goneIds.map(function(cid){
+        return injPurgeCyclePlan(cid,'deleteStack');
+      }));
+      // The row set changed underneath every cache that holds injections —
+      // T-Calc's session-long history included. See _injRowsChanged.
+      await _injRowsChanged('deleteStack');
     }
     updateWEEKLY();
     buildWeekStrip();
@@ -2633,6 +2714,7 @@ function buildTabsSettingsCard(){const card=document.getElementById('s-tabs-card
 <script src="tab-labs.js?v=1.748"></script>
 <script src="tab-tcalc.js?v=1.748"></script>
 <script src="tab-thist.js?v=1.748"></script>
+<script src="tab-tdose.js?v=1.748"></script>
 <script src="tab-supplements.js?v=1.748"></script>
 <script>
 init();

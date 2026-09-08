@@ -1330,6 +1330,45 @@ function _tcActiveCycleIds(){
   });
   return set;
 }
+
+// ── GHOST DOSES — A DEAD PROTOCOL'S SCHEDULE IS NOT A MISSED INJECTION ───────
+// _tcSkippedPast is collected inside _tcFetchHistory, off a fetch that is
+// deliberately active_only=false: the CURVE needs every logged dose whatever stack
+// it was filed under, and narrowing that fetch is what broke the curve once already.
+// The skipped list inherited that breadth without inheriting the curve's own
+// filters. _tcProtocolInjections drops rows whose protocol is switched off or no
+// longer exists (_tcActiveCycleIds) and T-Calc's round-tripped copies
+// (_tcIsTcalcOwned); nothing applied either to the skipped list.
+//
+// Reported 2026-09-08: the chart drew a run of amber "never ticked" stems across
+// late August on a plan where every scheduled Nebido dose HAD been ticked in Today.
+// They were rows left behind by a protocol that had been deleted or deactivated —
+// the same orphans the debug dump already warns about ("no such protocol — left
+// behind by a delete"). The logged-day de-duplication in _tcFetchHistory cannot
+// catch these: it drops a scheduled row only when a ticked dose exists for the same
+// compound on the SAME DAY, and a dead protocol's schedule sits on its own dates.
+//
+// A dose the curve never counted cannot be a dose the curve is missing. Filtering
+// here keeps the two statements consistent — the stems and the note describe exactly
+// the rows the model WOULD have used had they been ticked, and nothing else.
+//
+// ⚠️ FILTERED AT READ TIME, NOT IN _tcFetchHistory.
+// The history fetch can land before loadStacks does, and _tcActiveCycleIds() returns
+// null until stacks exist. Baking that null in would freeze the unfiltered answer
+// until the next forced refetch — the same class of bug as caching a curve built on
+// partial inputs. Both callers run inside a render, by which time stacks are loaded.
+function _tcSkippedVisible(){
+  var activeIds = _tcActiveCycleIds();
+  return (_tcSkippedPast || []).filter(function(e){
+    if (!e) return false;
+    // T-Calc's own copies of the plan are never a separate missed injection.
+    if (_tcIsTcalcOwned(e.cycleId)) return false;
+    // null = stack state not loaded (tests, early boot). Report everything rather
+    // than hide a real miss behind a race — the same fallback the curve uses.
+    if (activeIds && !activeIds[e.cycleId || '']) return false;
+    return true;
+  });
+}
 function _tcProtocolInjections(){
   if (typeof _injectionsCache === 'undefined' || !_injectionsCache) return [];
   var out = [], todayKey = dateKey(NOW);
@@ -1552,7 +1591,7 @@ function _tcHistoryNoteHtml(){
   // Say so, in the same breath as the count, and name the dates. Silence here is what
   // made a gap read as a low number instead of as missing data (the same reason this
   // line states what it stands on at all).
-  var _sk = (_tcSkippedPast || []).filter(function(e){ return (e.date || '') >= first; });
+  var _sk = _tcSkippedVisible().filter(function(e){ return (e.date || '') >= first; });
   var _skHtml = '';
   if (_sk.length) {
     var _skDates = _sk.slice(-3).map(function(e){
@@ -4080,9 +4119,10 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   // seamless. The note under the chart already names the dates; the gap has to be
   // legible at the point it happens, not only in prose. Drawn as a hollow amber
   // stem so it reads as "a dose belongs here and is not counted", never as a dose.
-  if (_tcSkippedPast && _tcSkippedPast.length) {
+  var _skVis = _tcSkippedVisible();
+  if (_skVis.length) {
     ctx.save();
-    _tcSkippedPast.forEach(function(e) {
+    _skVis.forEach(function(e) {
       if (!e || !e.date) return;
       var sd = Math.round((new Date(e.date + 'T12:00:00') - firstDate) / 86400000);
       if (sd < xStart || sd > xEnd) return;
@@ -4844,14 +4884,28 @@ function _tcDebugDump(){
     // Doses scheduled in the PAST and never ticked. These are the gap between what the
     // model thinks was taken and what was: they under-model the tail, and the on-ramp
     // then over-doses to compensate.
-    var untick=0, untickLast=[];
+    var untick=0, untickLast=[], untickGhost=0, untickGhostCyc={};
     if(typeof _injectionsCache!=='undefined'&&_injectionsCache){
       var tk=dateKey(NOW);
+      var _actIds=(typeof _tcActiveCycleIds==='function')?_tcActiveCycleIds():null;
       Object.keys(_injectionsCache).forEach(function(dk){
         (_injectionsCache[dk]||[]).forEach(function(e){
           if(!e||e.logged||e.active===false)return;
           if((e.date||'')>=tk)return;
           if(typeof _tcIsTestoRow==='function'&&!_tcIsTestoRow(e.tier,e.compound_id))return;
+          // A row whose protocol is switched off or no longer exists was never IN the
+          // curve, so it cannot be under-modelling the tail — it is a ghost, and the
+          // chart no longer reports it as missed (see _tcSkippedVisible). Counted
+          // separately rather than dropped: making orphaned rows visible is the whole
+          // job of this dump, and the split is what tells the two cases apart.
+          var _gh=(!!_actIds&&!_actIds[e.cycle_id||''])
+                ||(typeof _tcIsTcalcOwned==='function'&&_tcIsTcalcOwned(e.cycle_id));
+          if(_gh){
+            untickGhost++;
+            var _gk=e.cycle_id||'(no cycle id)';
+            untickGhostCyc[_gk]=(untickGhostCyc[_gk]||0)+1;
+            return;
+          }
           untick++; untickLast.push(e.date+' '+(e.compound_id||'')+' '+(e.dose||'')+(e.unit||''));
         });
       });
@@ -4859,6 +4913,15 @@ function _tcDebugDump(){
     p('  unticked past scheduled: '+untick
       +(untick?'  ← under-models the tail':''));
     untickLast.sort().slice(-5).forEach(function(s){p('    '+s);});
+    if(untickGhost){
+      p('  ghost rows (inactive or deleted protocol): '+untickGhost
+        +'  ← never in the curve, not reported as missed');
+      Object.keys(untickGhostCyc).sort().forEach(function(k){
+        var live=all.some(function(sx){return sx&&sx.id===k;});
+        p('    '+pad(k,26)+untickGhostCyc[k]+' rows'
+          +(live?'  [switched off]':'  ⚠ no such protocol — left behind by a delete'));
+      });
+    }
 
     // ── calibration: recomputed from the same call the chart makes ──
     p('');

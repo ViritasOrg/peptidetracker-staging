@@ -21,6 +21,9 @@ const patchedScript = rawScript
   .replace('let _googleToken=',      'var _googleToken=')
   .replace('const GOOGLE_CLIENT_ID=', 'var GOOGLE_CLIENT_ID=')
   .replace('const CYCLE_SUGGESTIONS=','var CYCLE_SUGGESTIONS=')
+  // Needed by the all-hidden nav fallback check, which derives the Levels group
+  // from the app rather than hardcoding its members.
+  .replace('const PRIMARY_GROUPS=',    'var PRIMARY_GROUPS=')
   .replace('var WIZ_TITLES=',         'var WIZ_TITLES=')
   .replace('const WIZ_TITLES=',       'var WIZ_TITLES=')
   .replace('let WEEKLY=',             'var WEEKLY=')
@@ -78,7 +81,7 @@ const sandbox = vm.createContext({
 vm.runInContext(patchedScript, sandbox);
 // Load tab files so their functions/vars are available in the same sandbox
 const tabFiles = ['inj-writer.js','tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js',
-                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-labs.js','tab-supplements.js'];
+                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-tdose.js','tab-labs.js','tab-supplements.js'];
 const dir = path.dirname(path.resolve(htmlPath));
 tabFiles.forEach(f => {
   const tabPath = path.join(dir, f);
@@ -2265,8 +2268,16 @@ console.log('\n── T-calc: skipped doses are reported, not absorbed ───
   // artefact of two adjacent series joining, which it is not (the join is seamless;
   // the flat is entirely the unticked doses). Prose under the chart was not enough.
   check('skipped doses are marked on the chart itself',
-    /_tcSkippedPast && _tcSkippedPast\.length/.test(_skSrc) &&
+    /var _skVis = _tcSkippedVisible\(\);[\s\S]{0,40}?if \(_skVis\.length\)/.test(_skSrc) &&
     /ctx\.arc\(sx, PAD\.top \+ cH \+ 3/.test(_skSrc));
+  // …and BOTH surfaces read the filtered list. The stems and the prose have to agree;
+  // one filtered and one not is how a "12 never ticked" note ends up under a chart
+  // that draws none of them.
+  check('  …and the note under the chart reads the same filtered list',
+    /var _sk = _tcSkippedVisible\(\)\.filter/.test(_skSrc));
+  check('  …with neither surface reading the raw unfiltered list any more',
+    !/_tcSkippedPast && _tcSkippedPast\.length/.test(_skSrc) &&
+    !/var _sk = \(_tcSkippedPast \|\| \[\]\)\.filter/.test(_skSrc));
   check('  …distinct from a real dose tick, not drawn as one',
     /setLineDash\(\[2,2\]\)[\s\S]{0,400}?ctx\.arc\(sx/.test(_skSrc));
 
@@ -2607,6 +2618,278 @@ if (typeof G._tcFetchHistory === 'function') {
   G._tcHistoryState = _dpSave.hs; G._tcSkippedPast = _dpSave.sk;
 }
 
+
+// ── GHOST DOSES: A DELETED OR SWITCHED-OFF PROTOCOL'S SCHEDULE ──────────────
+// Reported 2026-09-08 with a screenshot: a dozen amber "never ticked" stems across
+// late August on a run where every planned Nebido dose HAD been ticked in Today.
+// _tcSkippedPast is built from a deliberately active_only=false fetch — the curve
+// needs every logged dose whatever stack it was filed under — but it never inherited
+// the filters the curve applies to the PLAN (_tcActiveCycleIds, _tcIsTcalcOwned).
+// Rows left behind by a deleted or deactivated protocol were therefore reported as
+// missed injections the model was penalised for, while the curve itself had rightly
+// ignored them. The logged-day de-duplication above cannot catch these: it needs a
+// ticked dose on the SAME DAY, and a dead protocol's schedule sits on its own dates.
+if (typeof G._tcSkippedVisible === 'function') {
+  const _ghSave = {sk:G._tcSkippedPast, us:G._userStacks, ai:G._activeStackIndices};
+  const _d = n => G.dateKey(new Date(Date.now() - n*86400000));
+  G._userStacks = [{id:'live', name:'Current'}, {id:'off', name:'Old'}];
+  G._activeStackIndices = [0];
+  G._tcSkippedPast = [
+    {compId:'nebido', doseMg:'100', date:_d(9), cycleId:'live'},   // real miss
+    {compId:'nebido', doseMg:'100', date:_d(7), cycleId:'off'},    // switched off
+    {compId:'nebido', doseMg:'100', date:_d(5), cycleId:'gone'},   // deleted protocol
+    {compId:'nebido', doseMg:'100', date:_d(3), cycleId:'tcalc:live'}, // round-trip copy
+  ];
+  const _ghSeen = G._tcSkippedVisible().map(e => e.cycleId);
+  check('a dose on a switched-off protocol is not reported as missed',
+    _ghSeen.indexOf('off') < 0, 'saw ' + JSON.stringify(_ghSeen));
+  check('  …nor one left behind by a deleted protocol',
+    _ghSeen.indexOf('gone') < 0, 'saw ' + JSON.stringify(_ghSeen));
+  check("  …nor T-Calc's own round-tripped copy of the plan",
+    _ghSeen.indexOf('tcalc:live') < 0, 'saw ' + JSON.stringify(_ghSeen));
+  check('  …while a genuine miss on the ACTIVE protocol is still reported',
+    _ghSeen.length === 1 && _ghSeen[0] === 'live', 'saw ' + JSON.stringify(_ghSeen));
+  // The raw list is untouched — only the reporting is filtered. Anything that needs
+  // every row (the planner's own scoping, the debug dump) still has it.
+  check('  …and the underlying list is not mutated',
+    (G._tcSkippedPast || []).length === 4);
+
+  // ⚠️ THE FALLBACK. _tcActiveCycleIds() returns null until loadStacks has run, and a
+  // history fetch can land first. Hiding every miss behind that race would be a worse
+  // bug than the one being fixed, so an unloaded stack list reports everything.
+  G._userStacks = [];
+  G._activeStackIndices = [];
+  const _ghBoot = G._tcSkippedVisible().map(e => e.cycleId);
+  check('an unloaded stack list reports real misses rather than hiding them',
+    _ghBoot.indexOf('live') >= 0 && _ghBoot.indexOf('off') >= 0,
+    'saw ' + JSON.stringify(_ghBoot));
+  check("  …though T-Calc's round-trip copies are dropped even then",
+    _ghBoot.indexOf('tcalc:live') < 0, 'saw ' + JSON.stringify(_ghBoot));
+
+  // Nothing is active, stacks ARE loaded: hiding everything is correct here.
+  G._userStacks = [{id:'live', name:'Current'}];
+  G._activeStackIndices = [];
+  check('with stacks loaded and none active, nothing is reported missed',
+    G._tcSkippedVisible().length === 0);
+
+  G._tcSkippedPast = _ghSave.sk; G._userStacks = _ghSave.us;
+  G._activeStackIndices = _ghSave.ai;
+}
+
+
+// ── DOSE FINDER: target free T → mg/week ────────────────────────────────────
+// The tab inverts the model; it must never grow one of its own. Every assertion
+// here is either "it agrees with _tcFreeTSeries" or "it says what it does not know".
+console.log('\n── Dose Finder: target free T → weekly mg ─────────────────');
+if (typeof G._tdSolveWeekly === 'function') {
+  const _tdSave = {bw:G._tcBwEntries, tp:G._tcp, gh:G._tcGhStack, cat:G._tcExtraCatalog};
+  G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
+  G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:'217', shbg:'45', totalT:'17', birthYear:'1980'});
+  G._tcGhStack = [];
+  const _cad = k => (G._TC_CADENCES||[]).find(c => c.key === k);
+  const _solve = (o) => G._tdSolveWeekly(Object.assign(
+    {esterId:'enanthate', cadence:_cad('2xwk'), history:[], startDate:'2026-09-09',
+     concMgPerMl:250, stepMl:0.05}, o));
+
+  const _r600 = _solve({targetPmol:600});
+  check('solves a target to a weekly dose', _r600.ok && _r600.mgPerWeek > 0,
+    JSON.stringify(_r600).slice(0,160));
+  // The whole point: the answer must be reachable, not merely returned.
+  check('  …landing within 15% of the target level',
+    Math.abs(_r600.achieved - 600)/600 < 0.15,
+    'achieved ' + Math.round(_r600.achieved));
+  check('  …with mg/week = mg per injection x injections per week',
+    Math.abs(_r600.mgPerWeek - _r600.mgPerInjection*_r600.perWeek) < 1e-9);
+
+  // ⚠️ SCORED BY THE SAME FUNCTION THAT DRAWS THE CURVE.
+  // Re-deriving the achieved level here from _tcSolveSeries directly is what
+  // proves there is no second pharmacology in the tab: if the finder ever grew
+  // its own model, these two numbers would part company.
+  const _dates = G._tcSolveDates(_cad('2xwk'), '2026-09-09', _r600.weeks);
+  const _evts  = _dates.map(d => ({compId:'enanthate', doseMg:String(_r600.mgPerInjection),
+                                   date:G._tcSolveDayKey(d)}));
+  const _ser   = G._tcSolveSeries(_evts);
+  const _last  = _dates[_dates.length-1].getTime();
+  const _indep = G._tcSolveWindowStats(_ser, _last - 7*86400000, _last).mean;
+  check('  …and the reported level is the model\'s own, not a second calculation',
+    Math.abs(_indep - _r600.achieved) < 0.5,
+    'tab ' + Math.round(_r600.achieved) + ' vs model ' + Math.round(_indep));
+
+  // Monotone: a higher target must never ask for less drug.
+  const _r400 = _solve({targetPmol:400}), _r900 = _solve({targetPmol:900});
+  check('a higher target never returns a smaller dose',
+    _r400.mgPerWeek <= _r600.mgPerWeek && _r600.mgPerWeek <= _r900.mgPerWeek,
+    [_r400.mgPerWeek,_r600.mgPerWeek,_r900.mgPerWeek].join(' / '));
+
+  // Steady state is ester-specific: a 56-day depot needs far longer to settle
+  // than a 4.5-day ester, and averaging too early reports a rising curve.
+  const _rNeb = _solve({targetPmol:600, esterId:'nebido', cadence:_cad('1xwk')});
+  check('the settling window is sized off the ester\'s half-life',
+    _rNeb.weeks > _r600.weeks, 'nebido ' + _rNeb.weeks + 'w vs enanthate ' + _r600.weeks + 'w');
+  check('  …and a long depot still solves to a holdable weekly dose',
+    _rNeb.ok && Math.abs(_rNeb.achieved - 600)/600 < 0.15, 'achieved ' + Math.round(_rNeb.achieved));
+
+  // ⚠️ THE WINDOW ENDS AT THE LAST INJECTION.
+  // _tcFreeTSeries appends ~4.3 half-lives of washout. Averaging across it reports
+  // the decay as the plateau — the 309-vs-1090 error. A trough far under the mean
+  // is the signature of that bug, so assert the plateau is a plateau.
+  check('the level is measured on the plateau, never the washout tail',
+    _rNeb.trough > _rNeb.achieved * 0.8,
+    'trough ' + Math.round(_rNeb.trough) + ' vs mean ' + Math.round(_rNeb.achieved));
+
+  // Snapping is to what a syringe can draw, and the reported figures are the
+  // SNAPPED schedule — never the continuous solution behind it.
+  const _step = 250*0.05;
+  check('the dose is snapped to whole syringe steps',
+    Math.abs(_r600.mgPerInjection/_step - Math.round(_r600.mgPerInjection/_step)) < 1e-9,
+    _r600.mgPerInjection + ' mg vs ' + _step + ' mg steps');
+  check('  …and the level reported is the snapped one, not the exact solution',
+    _r600.stepMg === _step);
+
+  // Guards: say what it cannot do rather than returning a confident number.
+  check('an empty target is refused, not solved',  _solve({targetPmol:''}).reason === 'no-target');
+  check('a missing cadence is refused',            _solve({targetPmol:600, cadence:null}).reason === 'no-cadence');
+  const _huge = _solve({targetPmol:900000, esterId:'propionate', cadence:_cad('1xwk')});
+  check('an unreachable target is flagged, not silently capped', _huge.ok && _huge.maxedOut === true);
+
+  // Cheap enough to run on a phone: the fixed-point exists so this stays in the
+  // single digits rather than the ~40 rebuilds a bisection would cost.
+  check('the solve costs only a handful of model rebuilds',
+    _r600.modelCalls > 0 && _r600.modelCalls <= 12, _r600.modelCalls + ' calls');
+
+  G._tcBwEntries = _tdSave.bw; G._tcp = _tdSave.tp; G._tcGhStack = _tdSave.gh;
+  G._tcExtraCatalog = _tdSave.cat;
+}
+
+// ── Dose Finder: the advanced-compound half invents nothing ─────────────────
+{
+  const _fsTd = require('fs'), _pTd = require('path');
+  const _tdSrc = _fsTd.readFileSync(_pTd.join(__dirname, '../tab-tdose.js'), 'utf8');
+  // Doses come from the catalogue, through the SAME renderer the Protocols tab
+  // uses. A second renderer here is how two surfaces start quoting different
+  // milligrams for one compound.
+  check('advanced doses render through the shared enhanced guide',
+    /_renderEnhancedGuide\(cat/.test(_tdSrc));
+  check('  …reading the backend catalogue, not a local dose table',
+    /ENHANCEMENT_COMPOUNDS/.test(_tdSrc) &&
+    !/doseTiers\s*[:=]\s*\[/.test(_tdSrc) && !/var _TD_DOSES/.test(_tdSrc));
+  // 'Base' is the testosterone the solver above answers for. Listing it again
+  // invites reading a catalogue default as the answer to the solved question.
+  check('  …and excludes the testosterone base from the compound lists',
+    !/_TD_INJ_GROUPS\s*=\s*\[[^\]]*'Base'/.test(_tdSrc));
+  check('the tab carries no pharmacology of its own',
+    !/halfLife\s*[:=]\s*\d/.test(_tdSrc) && !/_TD_T_FRACTION/.test(_tdSrc));
+
+  if (typeof G._tdRecommended === 'function') {
+    // The catalogue marks one tier as recommended with `b`. Falling back to the
+    // FIRST tier would present the lowest as the recommendation.
+    const _fake = {id:'x', unit:'mg/week', doseTiers:[
+      {l:'Low', d:'100-200 mg/wk'}, {l:'Standard', d:'300-400 mg/wk', b:true}]};
+    check('the recommended tier is the one the catalogue marks, not the first',
+      G._tdRecommended(_fake).label === 'Standard');
+    check('  …falling back to the catalogue default when no tier is marked',
+      G._tdRecommended({id:'y', defaultDose:50, unit:'mg/day', doseTiers:[]}).dose === '50 mg/day');
+    check('  …and returning nothing rather than guessing when there is neither',
+      G._tdRecommended({id:'z'}) === null);
+  }
+  if (typeof G._tdWeeklyEquivalent === 'function') {
+    // Orals are prescribed per day; a weekly total is arithmetic for comparison,
+    // never a dosing instruction, and the UI says so next to it.
+    check('a daily oral shows a weekly equivalent',
+      G._tdWeeklyEquivalent({unit:'mg/day'}, {dose:'40-60 mg/day'}) === '280–420 mg/week');
+    check('  …and a weekly injectable is not double-converted',
+      G._tdWeeklyEquivalent({unit:'mg/week'}, {dose:'300-400 mg/wk'}) === '');
+    check('  …with the caveat shown beside it, not buried',
+      /arithmetic, not a way to take it/.test(_tdSrc));
+  }
+}
+
+// ── A DELETE MUST REACH EVERY CACHE, T-CALC'S INCLUDED ──────────────────────
+// Reported 2026-09-08: "Clean up still requires app restart to not show the
+// orphan doses in T-calc". The rows were gone from the record; _tcSkippedPast
+// still held them and still drew them as amber "never ticked" stems, because
+// _tcHistory is fetched ONCE PER SESSION — _tcFetchHistory returns early on a
+// warm cache and buildTCalc only calls it while the state is 'idle'.
+console.log('\n── A delete reaches every injection cache, T-Calc included ──');
+{
+  const _fsIv = require('fs'), _pIv = require('path');
+  const _ivSrc = _fsIv.readFileSync(_pIv.join(__dirname, '../index.html'), 'utf8');
+  const _pick = (re) => (_ivSrc.match(re) || [''])[0];
+
+  // ⚠️ FORCED. A plain _tcFetchHistory() returns early on the warm cache this
+  // path is guaranteed to have, so an unforced call is indistinguishable from
+  // no call at all — and that is exactly the bug.
+  const _ivFn = _pick(/async function _injRowsChanged\(tag\)\{[\s\S]*?\n\}/);
+  check('one helper refreshes every cache that holds injection rows', _ivFn.length > 0);
+  check('  …_injectionsCache', /refreshInjectionsCache\(\)/.test(_ivFn));
+  check('  …the Timeline\'s', /_tlInvalidateInjections\(\)/.test(_ivFn));
+  check('  …and T-Calc\'s session-long history, FORCED',
+    /_tcFetchHistory\(true\)/.test(_ivFn));
+  check('  …never an unforced call, which a warm cache would ignore',
+    !/_tcFetchHistory\(\s*\)/.test(_ivFn));
+
+  // Both delete paths route through it. The sweep is what was reported; the
+  // protocol delete purges the same rows the same way and had the same gap.
+  const _cleanFn = _pick(/async function cleanupOrphanDoses\(\)\{[\s\S]*?\n\}/);
+  const _delFn   = _pick(/async function deleteStack\(idx\)\{[\s\S]*?\n\}/);
+  check('the orphan sweep invalidates through it', /_injRowsChanged\(/.test(_cleanFn));
+  check('  …and so does deleting a protocol',      /_injRowsChanged\(/.test(_delFn));
+  // Belt and braces: neither may quietly go back to refreshing only the caches
+  // it can see, which is how this regressed the first time.
+  check('  …with neither hand-rolling a partial refresh any more',
+    !/refreshInjectionsCache\(\)/.test(_cleanFn) && !/refreshInjectionsCache\(\)/.test(_delFn));
+
+  // The behaviour itself, driven through the real _tcFetchHistory.
+  if (typeof G._tcFetchHistory === 'function' && typeof G.injPurgeCyclePlan === 'function') {
+    const _sv = {f:G.fetch, h:G._tcHistory, hs:G._tcHistoryState, sk:G._tcSkippedPast,
+                 us:G._userStacks, ai:G._activeStackIndices, sc:G._stackCycleId};
+    const _pd = n => G.dateKey(new Date(Date.now() - n*86400000));
+    // An ACTIVE protocol carrying unlogged past rows, so the stems are genuinely
+    // visible and this isolates the CACHE from the display filter.
+    let _rows = [
+      {id:'a1',cycle_id:'p3',compound_id:'enanthate',tier:'trt',dose:'12.5',unit:'mg',date:_pd(6),logged:false,active:true},
+      {id:'a2',cycle_id:'p3',compound_id:'enanthate',tier:'trt',dose:'12.5',unit:'mg',date:_pd(4),logged:false,active:true},
+      {id:'k1',cycle_id:'p3',compound_id:'nebido',   tier:'trt',dose:'100', unit:'mg',date:_pd(5),logged:true, active:true}
+    ];
+    G.fetch = async (url, opt) => {
+      if (opt && opt.method === 'DELETE') {
+        const cid = decodeURIComponent(/cycle_id=([^&]+)/.exec(url)[1]);
+        const before = _rows.length;
+        _rows = _rows.filter(e => !(e.cycle_id === cid && !e.logged));
+        return {ok:true, status:200, json: async () => ({removed: before-_rows.length})};
+      }
+      return {ok:true, status:200, json: async () => _rows};
+    };
+    G._userStacks = [{id:'p3', name:'P3'}];
+    G._activeStackIndices = [0];
+    G._stackCycleId = st => st.id;
+
+    await G._tcFetchHistory(true);
+    check('unticked past rows show as stems to begin with',
+      G._tcSkippedVisible().length === 2, String(G._tcSkippedVisible().length));
+
+    await G.injPurgeCyclePlan('p3', 'test');
+    check('  …the purge removes them from the record, keeping the logged dose',
+      _rows.length === 1 && _rows[0].logged === true);
+    check('  …but T-Calc still shows them until it re-reads (the reported bug)',
+      G._tcSkippedVisible().length === 2);
+
+    // The precise reason a plain call is not enough.
+    await G._tcFetchHistory();
+    check('  …and an UNFORCED re-read changes nothing, the cache being warm',
+      G._tcSkippedVisible().length === 2);
+
+    await G._tcFetchHistory(true);
+    check('  …while the forced re-read clears them without a restart',
+      G._tcSkippedVisible().length === 0 && G._tcSkippedPast.length === 0);
+    check('  …and the logged dose is still in the history afterwards',
+      (G._tcHistory||[]).length === 1 && G._tcHistory[0].compId === 'nebido');
+
+    G.fetch = _sv.f; G._tcHistory = _sv.h; G._tcHistoryState = _sv.hs;
+    G._tcSkippedPast = _sv.sk; G._userStacks = _sv.us;
+    G._activeStackIndices = _sv.ai; G._stackCycleId = _sv.sc;
+  }
+}
 
 // ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
 // Reported 2026-08-14: "The text in the green box says I am at 309pmol/l but graph
@@ -12466,10 +12749,16 @@ if (typeof G.switchPrimary === 'function' && typeof G.primaryOf === 'function') 
   // Regression: legacy per-tab settings that hid EVERY sub-tab in a group must not
   // leave the primary empty/unreachable — it falls back to the whole group.
   var _svVis = G._tabVis;
-  G._tabVis = { blood:false, tcalc:false, thist:false }; _cap = null; G._lastSub = {};
+  // Derived from PRIMARY_GROUPS, not hardcoded: this asserts the ALL-hidden
+  // fallback, and a hardcoded list stops testing it the moment a sub-tab is added
+  // (the new one stays visible, so nothing falls back and the check passes for the
+  // wrong reason). Adding 'tdose' to Levels is what exposed that.
+  var _lvGroup = G.PRIMARY_GROUPS.levels;
+  var _allHidden = {}; _lvGroup.forEach(function(t){ _allHidden[t] = false; });
+  G._tabVis = _allHidden; _cap = null; G._lastSub = {};
   G.switchPrimary('levels'); check('switchPrimary: all sub-tabs hidden → still opens the group (fallback)', _cap === 'blood');
   if (typeof G._groupVisibleSubs === 'function') {
-    check('_groupVisibleSubs: falls back to full group when all hidden', G._groupVisibleSubs('levels').length === 3);
+    check('_groupVisibleSubs: falls back to full group when all hidden', G._groupVisibleSubs('levels').length === _lvGroup.length);
   }
   G._tabVis = _svVis;
   G.switchTab = _origSwitch;
@@ -14781,22 +15070,54 @@ console.log('\n── A deleted protocol leaves no plan behind ─────�
   const _delSrc = (_idxSrc3.match(/async function deleteStack\(idx\)\{[\s\S]*?\n\}/) || [''])[0];
 
   check('deleteStack purges the protocol\'s stored plan',
-    /injPurgeCyclePlan\(_goneId/.test(_delSrc));
-  // A T-Calc plan assigned to this protocol is its rows too ('tcalc:<id>'), and is
-  // orphaned by exactly the same delete.
-  check('  …including a T-Calc plan assigned to it',
-    /injPurgeCyclePlan\('tcalc:'\+_goneId/.test(_delSrc));
-  // After the splice there is nothing left to derive the id from, and an empty
+    /injPurgeCyclePlan\(cid/.test(_delSrc) && /_stackOwnedCycleIds\(_userStacks\[idx\]\)/.test(_delSrc));
+  // After the splice there is nothing left to derive the ids from, and an empty
   // cycle_id is not a narrow delete — it is no filter at all.
-  check('  …reading the id off the stack BEFORE it is spliced out',
-    _delSrc.indexOf('var _goneId=') !== -1 &&
-    _delSrc.indexOf('var _goneId=') < _delSrc.indexOf('_userStacks.splice'));
+  check('  …reading the ids off the stack BEFORE it is spliced out',
+    _delSrc.indexOf('var _goneIds=') !== -1 &&
+    _delSrc.indexOf('var _goneIds=') < _delSrc.indexOf('_userStacks.splice'));
+
+  // ── EVERY SPELLING, NOT JUST THE FROZEN ONE ──────────────────────────────
+  // A protocol's rows are split across up to two cycle_ids: the frozen stack.id and
+  // the name_start form derived from its CURRENT name and cycle_start. Purging only
+  // _stackCycleId left the other spelling's rows stored, dated, and owned by an id
+  // that resolves to nothing — which is what T-Calc then drew as "never ticked".
+  // Prod on 2026-09-08 held 768 rows under protocol_4_nostart and 84 more under
+  // protocol_4_2026-09-25, plus 24 + 12 across two hormone_health_trt spellings.
+  const _ownIds = G._stackOwnedCycleIds({id:'protocol_4_nostart', name:'Protocol 4',
+                                         cycle_start:'2026-09-25'});
+  check('a protocol\'s owned ids include the FROZEN stack id',
+    _ownIds.indexOf('protocol_4_nostart') >= 0, JSON.stringify(_ownIds));
+  check('  …and the derived name_start spelling it also wrote rows under',
+    _ownIds.indexOf('protocol_4_2026-09-25') >= 0, JSON.stringify(_ownIds));
+  // A T-Calc plan assigned to this protocol is its rows too, under either spelling.
+  check('  …and the T-Calc namespace of BOTH',
+    _ownIds.indexOf('tcalc:protocol_4_nostart') >= 0 &&
+    _ownIds.indexOf('tcalc:protocol_4_2026-09-25') >= 0, JSON.stringify(_ownIds));
+  // The common case: id frozen to the very form it derives to, so there is only one
+  // spelling and the purge must not ask for it twice.
+  check('  …with no duplicates when the two spellings agree',
+    JSON.stringify(G._stackOwnedCycleIds({id:'p1_nostart', name:'p1'})) ===
+    JSON.stringify(['p1_nostart', 'tcalc:p1_nostart']));
+  // Bare 'tcalc' and 'manual' are shared namespaces owned by no protocol, so no
+  // single protocol's deletion may clear them. injPurgeCyclePlan refuses them too —
+  // this keeps the delete from even asking.
+  check('  …and a shared namespace is never claimed as a protocol\'s own',
+    G._stackOwnedCycleIds({id:'tcalc', name:'tcalc'}).indexOf('tcalc') < 0 &&
+    G._stackOwnedCycleIds({id:'manual', name:'manual'}).indexOf('manual') < 0);
+  check('  …and a missing stack yields no ids at all, never an empty-string filter',
+    G._stackOwnedCycleIds(null).length === 0 &&
+    G._stackOwnedCycleIds({}).every(function(c){ return !!c; }));
   // The stack list is saved first. The other order risks the unrecoverable failure:
   // the plan erased while the protocol it belongs to is still there.
   check('  …and only after the stack list is saved',
     _delSrc.indexOf('await saveStacksToBackend()') < _delSrc.indexOf('injPurgeCyclePlan'));
-  check('  …then rebuilds both caches that hold injections',
-    /refreshInjectionsCache/.test(_delSrc) && /_tlInvalidateInjections/.test(_delSrc));
+  // "Both caches" was itself the bug: there are THREE, and the third — T-Calc's
+  // session-long _tcHistory — is the one that kept the deleted doses on screen
+  // until the app was restarted. _injRowsChanged is the single place that knows
+  // all of them, so asserting the call is stronger than re-listing two by hand.
+  check('  …then refreshes every cache that holds injections',
+    /_injRowsChanged\(/.test(_delSrc));
 
   // The purge is scoped by cycle_id ALONE — deliberately, and this is the assertion
   // that says so. A from_date would spare the debris dated in the past (39 of
@@ -14890,8 +15211,8 @@ console.log('\n── A deleted protocol leaves no plan behind ─────�
     /confirmGlobalDelete\(total\+/.test(_sweepSrc));
   check('  …and refuses outright on an unloaded protocol list',
     /if\(!live\)\{say\('protocols not loaded'\);return;\}/.test(_sweepSrc));
-  check('  …then rebuilds both caches that hold injections',
-    /refreshInjectionsCache/.test(_sweepSrc) && /_tlInvalidateInjections/.test(_sweepSrc));
+  check('  …then refreshes every cache that holds injections',
+    /_injRowsChanged\(/.test(_sweepSrc));
 
   // That refusal IS driven, because it is the one path that returns before its first
   // await — so the borrowed globals go back with no suspension in between, and the
