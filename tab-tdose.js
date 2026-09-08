@@ -58,22 +58,48 @@ function _tdGet(){
 
 // ── WHAT THE TARGET FIELD STARTS AT ─────────────────────────────────────────
 // ⚠️ A PREFILLED TARGET IS DESCRIPTIVE, NEVER A RECOMMENDATION.
-// The app does not have an opinion on what level anyone should hold, and a
-// number sitting in the box on first open would be read as one. So it is seeded
-// only from where the user ALREADY IS, and the UI names the source next to it:
+// The app has no opinion on what level anyone should hold, and a number sitting
+// in the box on first open would be read as one. So it is seeded only from where
+// the user ALREADY IS, and the UI names the source next to it:
 //
-//   1. the current modelled steady state (_tcSsPeakPmol, set when T-Calc draws)
+//   1. the free T the ACTIVE PROTOCOL holds at steady state
 //   2. failing that, the most recent MEASURED free T from bloodwork
 //   3. failing that, blank — better an empty field than an invented figure
 //
 // Seeding from a reference range instead was considered and rejected: "the top
-// of the healthy young-male range" is exactly the kind of number that becomes a
-// goal because it was pre-typed, and choosing the level is the user's half of
-// this tool. Only ever fills an EMPTY field — a target the user typed is theirs
-// and is never overwritten.
+// of the healthy young-male range" is exactly the number that becomes a goal
+// because it was pre-typed, and choosing the level is the user's half of this
+// tool. Only ever fills an EMPTY field — a target the user typed is theirs.
+//
+// ⚠️ COMPUTED HERE, NOT READ OFF THE CHART.
+// The obvious source is _tcSsPeakPmol, and it is the wrong one twice over: it is
+// the PEAK rather than the level held, and it is a side effect of T-Calc having
+// rendered — so it is null until that tab is opened and the seed silently
+// changes depending on where the user has been. _tcCurveLog() is the injection
+// list the curve is built from (logged past + the active protocol's plan,
+// de-duplicated), so running it through the same _tcSolveSeries the solve uses
+// gives the level this protocol actually holds, from anywhere, every time.
+function _tdActiveProtocolLevel(){
+  if(typeof _tcCurveLog!=='function' || typeof _tcSolveSeries!=='function') return 0;
+  var log = _tcCurveLog();
+  if(!log || !log.length) return 0;
+  var ser = _tcSolveSeries(log);
+  if(!ser) return 0;
+  // The plateau, measured over the last DOSING week — never the washout tail the
+  // series appends, for the same reason the solve never measures there.
+  var lastMs = 0;
+  log.forEach(function(e){
+    var t = new Date(e.date+'T12:00:00').getTime();
+    if(isFinite(t) && t>lastMs) lastMs = t;
+  });
+  if(!lastMs) return 0;
+  var st = _tcSolveWindowStats(ser, lastMs-7*86400000, lastMs);
+  return (st && st.mean>0) ? st.mean : 0;
+}
 function _tdDefaultTarget(){
-  if(typeof _tcSsPeakPmol!=='undefined' && _tcSsPeakPmol>0)
-    return {value:Math.round(_tcSsPeakPmol), source:'your current modelled steady state'};
+  var lvl = _tdActiveProtocolLevel();
+  if(lvl>0) return {value:Math.round(lvl),
+                    source:'the level your active protocol holds'};
   var cal = _tdCalibration();
   if(cal.ok && parseDec(cal.free_t)>0)
     return {value:Math.round(parseDec(cal.free_t)),
