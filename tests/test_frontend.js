@@ -3066,6 +3066,77 @@ if (typeof G._tdActiveProtocolLevel === 'function') {
   G._tcCurveLog = _sv.cl; G._tcBwEntries = _sv.bw; G._tdState = _sv.st;
 }
 
+// ── THE PLATEAU IS THIS DOSE'S, NOT THIS DOSE PLUS WHAT IS STILL CLEARING ───
+// Reported 2026-09-08 with a screenshot: "100 mg/week sounds very low to achieve
+// such steady state". It was. ~362 mg/week of Nebido was logged through 7 Sep;
+// asked what holds 1457 pmol/L on enanthate, the tool answered 100 mg/week.
+//
+// The history is passed in to CALIBRATE the curve, but its drug does not stop at
+// the calibration — a 56-day depot keeps releasing. Reading the plateau 12 weeks
+// out scored that residue as if the candidate schedule had produced it: the
+// Nebido tail alone was worth 439 pmol/L, so 100 mg/week measured 1173 instead
+// of its true 594 and the answer came back at a THIRD of the dose required. It
+// would have read correctly for a few months, then fallen away as the depot
+// cleared — the worst shape of wrong.
+console.log('\n── Dose Finder: the plateau excludes what is still clearing ──');
+if (typeof G._tdSolveWeekly === 'function') {
+  const _sv = {bw:G._tcBwEntries, tp:G._tcp, gh:G._tcGhStack};
+  G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
+  G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:'217', shbg:'45', totalT:'17', birthYear:'1980'});
+  G._tcGhStack = [];
+  const _cadW = k => (G._TC_CADENCES||[]).find(c => c.key === k);
+
+  // A long-depot history, exactly the reported shape: 100 mg Nebido every 2 days.
+  const _neb = [];
+  for (let i = 74; i >= 0; i -= 2)
+    _neb.push({compId:'nebido', doseMg:'100',
+      date:G._tcSolveDayKey(new Date(Date.now() - i*86400000))});
+  const _start = G._tcSolveDayKey(new Date(Date.now() + 86400000));
+  const _run = h => G._tdSolveWeekly({targetPmol:1457, esterId:'enanthate',
+    cadence:_cadW('2xwk'), history:h, startDate:_start, concMgPerMl:250, stepMl:0.05});
+
+  const _withHist = _run(_neb), _noHist = _run([]);
+  check('a long ester on board pushes the plateau window out past its washout',
+    _withHist.weeks > 26 && _withHist.washoutWeeks > 26,
+    _withHist.weeks + 'w, washout ' + _withHist.washoutWeeks + 'w');
+  check('  …while a clean start still settles in the short window',
+    _noHist.weeks <= 12, _noHist.weeks + 'w');
+
+  // ⚠️ THE POINT OF THE FIX: the answer must be the dose, not the dose plus the
+  // leftover. With the window past washout the two agree; at 12 weeks they did
+  // not, and the difference was a factor of two in prescribed milligrams.
+  check('  …so the answer no longer depends on what was already on board',
+    Math.abs(_withHist.mgPerWeek - _noHist.mgPerWeek) / _noHist.mgPerWeek < 0.15,
+    _withHist.mgPerWeek + ' vs ' + _noHist.mgPerWeek + ' mg/wk');
+
+  // And the residue genuinely is gone by then, not merely averaged down.
+  const _dsW = G._tcSolveDates(_cadW('2xwk'), _start, _withHist.weeks);
+  const _lastW = _dsW[_dsW.length-1].getTime();
+  const _tailOnly = G._tcSolveWindowStats(
+    G._tcSolveSeries(_neb), _lastW - 7*86400000, _lastW).mean;
+  const _cleanLvl = G._tcSolveWindowStats(G._tcSolveSeries(_dsW.map(d => ({
+    compId:'enanthate', doseMg:String(_withHist.mgPerInjection),
+    date:G._tcSolveDayKey(d)}))), _lastW - 7*86400000, _lastW).mean;
+  check('  …the old ester contributes almost nothing at the measured window',
+    Math.abs(_withHist.achieved - _cleanLvl) / _withHist.achieved < 0.10,
+    'with tail ' + Math.round(_withHist.achieved) + ' vs alone ' + Math.round(_cleanLvl));
+
+  // Elapsed time counts towards the washout — a plan starting a year after the
+  // last depot dose must not be pushed out all over again.
+  const _oldNeb = _neb.map(e => ({compId:'nebido', doseMg:'100',
+    date:G._tcSolveDayKey(new Date(new Date(e.date+'T12:00:00').getTime() - 400*86400000))}));
+  check('  …and time already elapsed since the last dose counts towards it',
+    _run(_oldNeb).weeks <= 12, _run(_oldNeb).weeks + 'w');
+
+  // A window this long is not self-explanatory; the card has to say why.
+  const _tdSrc2 = require('fs').readFileSync(
+    require('path').join(__dirname, '../tab-tdose.js'), 'utf8');
+  check('  …and the card explains the long window rather than just printing it',
+    /still clearing from your logged doses/.test(_tdSrc2));
+
+  G._tcBwEntries = _sv.bw; G._tcp = _sv.tp; G._tcGhStack = _sv.gh;
+}
+
 // ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
 // Reported 2026-08-14: "The text in the green box says I am at 309pmol/l but graph
 // shows me at 894?" The steady-state window was Math.floor(totalDays/2), and totalDays
