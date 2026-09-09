@@ -39,37 +39,209 @@ function syncMacrosTrainEnergy(cb){
     .then(function(d){ _macrosTrainKcal=(d&&isFinite(d.avg_per_calendar_day))?d.avg_per_calendar_day:0; if(cb)cb(); })
     .catch(function(){ if(cb)cb(); });
 }
-function calcMacros(bw,phase,onAndrogens){
+// ── ENERGY MODEL ─────────────────────────────────────────────────────────────
+// Replaces `bodyweight × 31`, which appeared in NO source — not here, not in the
+// backend docs that cite every other number on this screen (Helms 2014, Morton 2018,
+// Whittaker 2021, Ainsworth 2011). It was the largest figure the user sees and the
+// only one nobody had justified; against Bhasin 1996's standardised maintenance diet
+// of 36 kcal/kg it ran ~14% low before the phase deficit was even applied.
+// Henrik, 2026-09-09: "As scientific correct as possible, age should be a part of this."
+//
+// BMR, in preference order:
+//   Katch-McArdle   370 + 21.6 × FFM        — when body fat % is on file. Lean-mass
+//     equations outperform weight-based ones in low-body-fat athletic populations,
+//     and a measured FFM already carries the age-related lean-mass loss that a
+//     population age term stands in for.
+//   Mifflin-St Jeor 10W + 6.25H − 5A + s    — the Academy of Nutrition and Dietetics
+//     clinical default, explicitly age-dependent (−5 kcal per year of age).
+//   Neither → NO NUMBER. The caller is told what to fill in. Inventing a constant to
+//     cover missing profile data is exactly how 31 kcal/kg got here.
+var MACROS_PAL_BASE = 1.40;
+// FAO/WHO/UNU 2004 "sedentary or light activity lifestyle" is 1.40–1.69. The BOTTOM of
+// that band on purpose: measured training energy is added separately below, and the PAL
+// bands already contain some activity, so the lower bound double-counts least.
+var MACROS_MEALS_PER_DAY = 4;
+
+// The user's profile as the energy model needs it. Read once, in one place, so the
+// Macros tab and the protocol wizard cannot compute different targets.
+function _macrosProfile(){
+  var bf=0;
+  try{ if(typeof _latestBodyFat==='function'){ var v=_latestBodyFat(); if(v>0) bf=v; } }catch(e){}
+  return {
+    bw:       parseDec(localStorage.getItem('user_weight'))||0,
+    heightCm: parseDec(localStorage.getItem('user_height'))||0,
+    age:      parseInt(localStorage.getItem('user_age'),10)||0,
+    sex:      ((localStorage.getItem('user_sex')||'male').toLowerCase()==='female')?'female':'male',
+    bodyFatPct: bf
+  };
+}
+
+// Basal metabolic rate. Returns null rather than guessing when the profile cannot
+// support either equation — see the note above.
+function macrosBmr(p){
+  if(!p||!(p.bw>0)) return null;
+  if(p.bodyFatPct>0 && p.bodyFatPct<70){
+    var ffm=p.bw*(1-p.bodyFatPct/100);
+    return {kcal:370+21.6*ffm, method:'katch', ffm:ffm};
+  }
+  if(p.heightCm>0 && p.age>0){
+    return {kcal:10*p.bw+6.25*p.heightCm-5*p.age+((p.sex==='female')?-161:5),
+            method:'mifflin', ffm:0};
+  }
+  return null;
+}
+
+// Age-aware protein FLOOR. Moore 2015: the per-meal relative dose that maximally
+// stimulates myofibrillar protein synthesis rises from 0.24 g/kg in young men (mean
+// ~22 y) to 0.40 g/kg in older men (mean ~71 y) — anabolic resistance. Linear between
+// the two measured points, flat outside them.
+//
+// ⚠️ A FLOOR, NEVER A MULTIPLIER. Scaling the DAILY target by that same 1.67× would
+// double-count: 2.2–2.5 g/kg spread over four meals is already 0.55–0.63 g/kg per meal,
+// well above even the older threshold at every age, so every meal is saturated before
+// any age adjustment. As a multiplier it would put a 45-year-old at 3.3 g/kg — above
+// every published upper bound including Helms' 3.1 g/kg of FAT-FREE mass. As a floor it
+// can only raise a target that was too low, which is what the evidence actually supports.
+function _macrosPerMealProtein(age){
+  if(!(age>0)) return 0.24;
+  var a=Math.max(22,Math.min(71,age));
+  return 0.24+(a-22)*(0.40-0.24)/(71-22);
+}
+
+// Whether measured training energy is added to the calorie target. Henrik, 2026-09-09:
+// "Yes but make it visible so user can choose to ignore" — so it is ON by default and
+// carries a visible toggle. It used to be excluded silently, which made the real deficit
+// on a training day 300 + the burn rather than the 300 the code intended.
+function _macrosIncludeTraining(){
+  try{ return localStorage.getItem('macros-include-training')!=='false'; }catch(e){ return true; }
+}
+function setMacrosIncludeTraining(v){
+  var on=!!v;
+  if(typeof setData==='function') setData('macros-include-training',on);
+  if(typeof pushPepSettingsToAgent==='function') pushPepSettingsToAgent({'macros-include-training':on});
+  if(typeof loadMacros==='function') loadMacros();
+  return on;
+}
+
+// Energy availability = (intake − exercise energy) ÷ fat-free mass. The thresholds are
+// the ones the LEA literature uses: >45 kcal/kg FFM supports gain, 30–45 is suboptimal
+// and at-risk, ≤30 is low energy availability. Needs a measured FFM, so it is reported
+// only when body fat % is on file — never estimated into existence.
+function macrosEnergyAvailability(kcal,trainKcal,ffm){
+  if(!(ffm>0)||!(kcal>0)) return null;
+  var ea=(kcal-Math.max(0,trainKcal||0))/ffm;
+  return {value:ea, tier: ea<=30?'low' : ea<45?'suboptimal' : 'adequate'};
+}
+
+function calcMacros(bw,phase,onAndrogens,opts){
+  opts=opts||{};
+  var prof={
+    bw: bw>0?bw:0,
+    heightCm: (opts.heightCm!=null)?opts.heightCm:0,
+    age:      (opts.age!=null)?opts.age:0,
+    sex:      opts.sex||'male',
+    bodyFatPct:(opts.bodyFatPct!=null)?opts.bodyFatPct:0
+  };
   // Protein is phase-aware. In a caloric deficit, lean resistance-trained athletes
   // need MORE protein to preserve muscle — 2.3–3.1 g/kg fat-free mass (Helms 2014),
   // ~2.5 g/kg total bodyweight for a lean build — so a cut targets 2.5 g/kg; a
   // maintenance/surplus phase stays at the 2.2 g/kg upper-athletic bound (Morton 2018).
   // Androgens improve nitrogen retention, so being on-cycle does not raise the
-  // requirement further — the driver is the deficit, not the compounds.
+  // requirement further — the driver is the deficit, not the compounds. (Bhasin 1996
+  // built +6.1 kg FFM on 600 mg/wk with the diet standardised at 1.5 g/kg.)
   var proteinPerKg=phase==='cut'?2.5:2.2;
+  // …then the age-aware floor, which binds only if the phase target were ever too low.
+  var perMeal=_macrosPerMealProtein(prof.age);
+  var floorPerKg=perMeal*MACROS_MEALS_PER_DAY;
+  var proteinFloorBound=floorPerKg>proteinPerKg;
+  if(proteinFloorBound) proteinPerKg=floorPerKg;
   var protein=Math.round(bw*proteinPerKg);
-  // Calorie target is intake-only and independent of training burn: ~31 kcal/kg
-  // maintenance ± phase. Training expenditure is reported separately (see the
-  // Training Burn card / _macrosBurnCard), never folded into this number.
-  var kcalBase=Math.round(bw*31);
-  var kcal=phase==='cut'?kcalBase-300:phase==='reset'?kcalBase:kcalBase+100;
+
+  var bmr=macrosBmr(prof);
+  var trainKcal=Math.max(0,Math.round(opts.trainKcal||0));
+  var includeTraining=(opts.includeTraining!=null)?!!opts.includeTraining:true;
+  var kcal=null, tdee=null;
+  if(bmr){
+    tdee=bmr.kcal*MACROS_PAL_BASE+(includeTraining?trainKcal:0);
+    // Phase adjustment is an absolute offset on maintenance, unchanged from before —
+    // only the maintenance figure it is applied to has been re-sourced.
+    kcal=Math.round(phase==='cut'?tdee-300:phase==='reset'?tdee:tdee+100);
+    tdee=Math.round(tdee);
+  }
   // On exogenous androgens the endogenous-T-protection reason for higher fat is moot
   // (Whittaker 2021), so fat can run down to a ~0.5–0.6 g/kg essential-fat floor;
   // otherwise keep ~0.9 g/kg (~25–30% kcal). See docs/enhanced-bodybuilding/08.
   var fat=Math.round(bw*(onAndrogens?0.6:0.9));
-  var carbs=Math.max(0,Math.round((kcal-protein*4-fat*9)/4));
-  return {protein:protein,carbs:carbs,fat:fat,kcal:kcal,onAndrogens:!!onAndrogens};
+  var carbs=(kcal==null)?null:Math.max(0,Math.round((kcal-protein*4-fat*9)/4));
+  var ffm=bmr&&bmr.ffm>0?bmr.ffm:(prof.bodyFatPct>0?bw*(1-prof.bodyFatPct/100):0);
+  return {protein:protein, carbs:carbs, fat:fat, kcal:kcal, onAndrogens:!!onAndrogens,
+          bmr:bmr?Math.round(bmr.kcal):null, bmrMethod:bmr?bmr.method:null,
+          tdee:tdee, trainKcal:trainKcal, includeTraining:includeTraining,
+          proteinPerKg:proteinPerKg, proteinFloorBound:proteinFloorBound,
+          perMealProteinPerKg:perMeal, ffm:ffm,
+          ea:macrosEnergyAvailability(kcal,trainKcal,ffm),
+          // What the user must supply before a calorie target can exist at all.
+          missing:bmr?[]:(prof.bw>0?['body fat %','or height and age']:['body weight'])};
+}
+// One call path for "compute macros for the current user", so the Macros tab and the
+// protocol wizard cannot drift apart on inputs the way they could when each read its
+// own subset of the profile.
+function macrosForUser(phase,onAndrogens){
+  var p=_macrosProfile();
+  return calcMacros(p.bw,phase,onAndrogens,{
+    heightCm:p.heightCm, age:p.age, sex:p.sex, bodyFatPct:p.bodyFatPct,
+    trainKcal:_macrosTrainKcal, includeTraining:_macrosIncludeTraining()
+  });
 }
 // A standalone card showing the estimated training burn from logged workouts. It is
 // presented separately and explicitly NOT added to the calorie target above.
-function _macrosBurnCard(){
-  var t=Math.max(0,Math.round(_macrosTrainKcal||0));
+function _macrosBurnCard(m){
+  var t=Math.max(0,Math.round((m&&m.trainKcal)||_macrosTrainKcal||0));
+  var on=_macrosIncludeTraining();
   var note=(t>0)
-    ? 'Estimated from your logged workouts (training volume × range-of-motion, placed in the resistance-training MET band — Ainsworth 2011). Shown for awareness; <b>not added to the calorie target above</b>.'
-    : 'Log your workouts in the workout tracker to see your estimated training burn here. It is shown separately and never changes your calorie target.';
+    ? (on
+      ? 'Estimated from your logged workouts (training volume × range-of-motion, placed in the resistance-training MET band — Ainsworth 2011). <b>Added to the calorie target above.</b> Untick to hold the target at non-training expenditure only.'
+      : 'Estimated from your logged workouts (Ainsworth 2011). <b>Not added</b> to the calorie target — so on a training day you are eating this much further below expenditure than the phase deficit alone.')
+    : 'Log your workouts in the workout tracker to see your estimated training burn here.';
   return '<div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent2)"></div><div class="card-title">TRAINING BURN</div></div><span style="font-size:11px;color:var(--muted2)">14-day avg</span></div>'
-    +'<div style="padding:16px 6px;text-align:center"><div style="font-family:var(--font-mono);font-size:26px;line-height:1;color:var(--accent2)">'+(t>0?('+'+t):'—')+'</div><div style="font-size:9px;color:var(--muted2);text-transform:uppercase;letter-spacing:0.5px;margin-top:3px">kcal / day</div></div>'
-    +'<div class="card-body"><div style="font-size:11px;color:var(--muted2);line-height:1.6">'+note+'</div></div></div>';
+    +'<div style="padding:16px 6px;text-align:center"><div style="font-family:var(--font-mono);font-size:26px;line-height:1;color:var(--accent2)">'+(t>0?('+'+t):'\u2014')+'</div><div style="font-size:9px;color:var(--muted2);text-transform:uppercase;letter-spacing:0.5px;margin-top:3px">kcal / day</div></div>'
+    +'<div class="card-body">'
+    +'<label style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--text);cursor:pointer;user-select:none;margin-bottom:8px">'
+    +'<input type="checkbox" '+(on?'checked':'')+' onchange="setMacrosIncludeTraining(this.checked)" style="accent-color:var(--accent2);width:15px;height:15px;cursor:pointer;margin:0"> Count training in my calorie target</label>'
+    +'<div style="font-size:11px;color:var(--muted2);line-height:1.6">'+note+'</div></div></div>';
+}
+// How the calorie number was reached, shown rather than asserted. The old target was
+// bodyweight × 31 with no source and no working; this card is the working.
+function _macrosEnergyCard(m){
+  if(!m||m.kcal==null){
+    return '<div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">ENERGY</div></div></div>'
+      +'<div class="card-body"><div style="font-size:12px;color:var(--muted2);line-height:1.6">'
+      +'No calorie target yet — it needs <b>'+(m?m.missing.join(' '):'your body weight')+'</b>. '
+      +'Add a body-fat reading in the <b>Body</b> tab (most accurate for a trained build), or your height and age. '
+      +'Nothing is guessed here: a made-up constant is what this replaced.</div></div></div>';
+  }
+  var how=m.bmrMethod==='katch'
+    ? 'BMR from <b>Katch-McArdle</b> (370 + 21.6 × fat-free mass) — the lean-mass equation, which outperforms weight-based ones at low body fat, and reads your age through your measured FFM rather than a population average.'
+    : 'BMR from <b>Mifflin-St Jeor</b> (10W + 6.25H \u2212 5\u00d7age + 5) — the Academy of Nutrition and Dietetics clinical default, and directly age-adjusted at \u22125 kcal per year. Add a body-fat reading in the <b>Body</b> tab and this switches to the more accurate lean-mass equation.';
+  var rows=[['BMR',m.bmr+' kcal'],
+            ['\u00d7 PAL '+MACROS_PAL_BASE.toFixed(2)+' (non-training)',Math.round(m.bmr*MACROS_PAL_BASE)+' kcal'],
+            ['Training (14-day avg)',(m.includeTraining?'+':'excl. ')+m.trainKcal+' kcal'],
+            ['Maintenance',m.tdee+' kcal'],
+            ['Phase ('+_macrosPhase+')',(m.kcal-m.tdee>=0?'+':'')+(m.kcal-m.tdee)+' kcal']];
+  var h='<div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">ENERGY</div></div><span style="font-size:11px;color:var(--muted2)">'+(m.bmrMethod==='katch'?'Katch-McArdle':'Mifflin-St Jeor')+'</span></div><div class="card-body">';
+  rows.forEach(function(r){ h+='<div class="info-row"><span class="info-label">'+r[0]+'</span><span class="info-val">'+r[1]+'</span></div>'; });
+  h+='<div class="info-row" style="font-weight:800"><span class="info-label" style="color:var(--text)">Target</span><span class="info-val" style="color:var(--accent)">'+m.kcal+' kcal</span></div>';
+  h+='<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:8px">'+how+' PAL 1.40 is the bottom of FAO/WHO/UNU\u2019s sedentary/light-activity band \u2014 the bottom because measured training is added separately.</div>';
+  if(m.ea){
+    var col=m.ea.tier==='low'?'var(--danger,#ff3c3c)':m.ea.tier==='suboptimal'?'var(--accent4)':'var(--accent3)';
+    var lbl=m.ea.tier==='low'?'LOW':m.ea.tier==='suboptimal'?'SUBOPTIMAL':'ADEQUATE';
+    h+='<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">';
+    h+='<div class="info-row"><span class="info-label">Energy availability</span><span class="info-val" style="color:'+col+'">'+m.ea.value.toFixed(0)+' kcal/kg FFM \u00b7 '+lbl+'</span></div>';
+    h+='<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:4px">(intake \u2212 training) \u00f7 fat-free mass. Above 45 supports gaining; 30\u201345 is suboptimal and at-risk; 30 or below is low energy availability, where lean mass and endocrine function start paying for it.'
+      +(m.ea.tier!=='adequate'?' <b>Fine for a short controlled cut \u2014 not a place to sit through a long push.</b>':'')+'</div></div>';
+  }
+  h+='</div></div>';
+  return h;
 }
 // True when the user's active stack(s) include any injected androgen (TRT or Enhanced),
 // which lowers the dietary-fat floor (see calcMacros). Read-only over the active stacks.
@@ -84,10 +256,18 @@ function _macrosOnAndrogens(){
 }
 // Evidence-backed macro note; branches on the cut/deficit phase (protein) and on
 // whether injected androgens are present (fat).
-function _macrosFatNote(onAndrogens,phase){
+function _macrosFatNote(onAndrogens,phase,m){
   var protein=phase==='cut'
     ? 'Protein <b>2.5 g/kg</b> — raised for the cut: in a caloric deficit, lean trained athletes need more protein to preserve muscle (2.3–3.1 g/kg fat-free mass, Helms 2014).'
     : 'Protein 2.2 g/kg — upper end of the evidence-based range for muscle retention (Morton 2018).';
+  // The age finding is real but it lives in DISTRIBUTION, not in the daily total: older
+  // muscle needs a bigger per-meal dose to be maximally stimulated, and the daily target
+  // already clears that at any age. So say where it actually applies.
+  if(m&&m.perMealProteinPerKg>0){
+    protein+=' Spread it: at your age a meal needs at least <b>'+m.perMealProteinPerKg.toFixed(2)
+      +' g/kg</b> to maximally stimulate muscle protein synthesis (0.24 g/kg young rising to 0.40 g/kg by ~70 — anabolic resistance, Moore 2015).'
+      +(m.proteinFloorBound?' That floor is what set your target here.':'');
+  }
   return onAndrogens
     ? protein+' <b>Fat set lower</b> (~0.5–0.6 g/kg): on injected hormones the main reason to keep fat high — protecting your own testosterone — no longer applies (low-fat diets cut endogenous T ~10–15%, Whittaker 2021; your testes are already suppressed on-cycle). Kept at an essential-fat floor for fatty acids and satiety; carbs take the freed calories around training.'
     : protein+' Keep fat ~0.9 g/kg (≈25–30% kcal) to protect endogenous testosterone (low-fat diets cut it ~10–15%, Whittaker 2021). Adjust carbs and fat around training windows, not randomly.';
@@ -97,7 +277,7 @@ function saveMacrosTrainDur(val){localStorage.setItem('macros-train-dur',String(
 function renderMacros(bw,onAndrogens){
   var body=document.getElementById('macros-body');if(!body)return;
   if(!bw){body.innerHTML='<div style="padding:40px 20px;text-align:center;color:var(--muted2)"><div style="font-size:32px;margin-bottom:12px">⚖️</div><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:8px">Set your body weight</div><div style="font-size:13px;line-height:1.5">Log your weight in the <b>Weights</b> tab so macros can be calculated for you.</div></div>';return;}
-  var m=calcMacros(bw,_macrosPhase,onAndrogens);
+  var m=macrosForUser(_macrosPhase,onAndrogens);
   var phases=[{id:'reset',label:'Reset',color:'var(--accent4)'},{id:'cut',label:'Cut',color:'var(--accent2)'},{id:'recomp',label:'Recomp',color:'var(--accent3)'}];
   var trainTime=localStorage.getItem('macros-train-time')||'17:00';
   var trainDur=parseInt(localStorage.getItem('macros-train-dur'))||60;
@@ -111,10 +291,12 @@ function renderMacros(bw,onAndrogens){
   h+='<div class="card">';
   h+='<div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">DAILY TARGETS</div></div><span style="font-size:11px;color:var(--muted2)">'+bw+' kg</span></div>';
   h+='<div style="display:grid;grid-template-columns:repeat(4,1fr)">';
-  var mi=[{l:'Calories',v:m.kcal,u:'kcal',c:'var(--accent)'},{l:'Protein',v:m.protein,u:'g',c:'var(--accent3)'},{l:'Carbs',v:m.carbs,u:'g',c:'var(--accent2)'},{l:'Fat',v:m.fat,u:'g',c:'var(--accent4)'}];
+  var _dash='\u2014';
+  var mi=[{l:'Calories',v:(m.kcal==null?_dash:m.kcal),u:'kcal',c:'var(--accent)'},{l:'Protein',v:m.protein,u:'g',c:'var(--accent3)'},{l:'Carbs',v:(m.carbs==null?_dash:m.carbs),u:'g',c:'var(--accent2)'},{l:'Fat',v:m.fat,u:'g',c:'var(--accent4)'}];
   mi.forEach(function(x,i){h+='<div style="padding:16px 6px;text-align:center'+(i<3?';border-right:1px solid var(--border)':'')+'">';h+='<div style="font-family:var(--font-mono);font-size:26px;line-height:1;color:'+x.c+'">'+x.v+'</div>';h+='<div style="font-size:9px;color:var(--muted2);text-transform:uppercase;letter-spacing:0.5px;margin-top:3px">'+x.u+'</div>';h+='<div style="font-size:9px;color:var(--muted2)">'+x.l+'</div></div>';});
-  h+='</div><div class="card-body"><div style="font-size:11px;color:var(--muted2);line-height:1.5">'+_macrosFatNote(onAndrogens,_macrosPhase)+'</div></div></div>';
-  h+=_macrosBurnCard();
+  h+='</div><div class="card-body"><div style="font-size:11px;color:var(--muted2);line-height:1.5">'+_macrosFatNote(onAndrogens,_macrosPhase,m)+'</div></div></div>';
+  h+=_macrosEnergyCard(m);
+  h+=_macrosBurnCard(m);
   h+='<div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent2)"></div><div class="card-title">MEAL TIMING</div></div></div>';
   h+='<div class="card-body" style="gap:12px">';
   h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
