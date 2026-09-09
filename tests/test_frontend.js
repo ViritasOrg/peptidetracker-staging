@@ -3370,6 +3370,50 @@ if (typeof G._tdSolveWeekly === 'function' && Array.isArray(G._TC_CADENCES)) {
   G._tcBwEntries = _svD.bw; G._tcp = _svD.tp; G._tcGhStack = _svD.gh;
 }
 
+// ── A LONG PROTOCOL NAME MUST NOT RESIZE THE PROTOCOL GRID ──────────────────
+// Reported 2026-09-09 with a screenshot: "Protocol 4 TRT-HGH-Mast-Reta/GLOW"
+// took most of its row and squeezed the card beside it to a sliver.
+//
+// The subtle part: .stack-card-name has had ellipsis truncation all along, and
+// it never fired. A `1fr` track's minimum is `auto`, which resolves to
+// min-content, so the COLUMN grew to fit the name rather than the name being
+// clipped to the column. Truncation is unreachable while the container will
+// simply widen for it.
+console.log('\n── Protocol cards: a long name cannot break the grid ────────');
+{
+  const _fsG = require('fs'), _pG = require('path');
+  const _idxG = _fsG.readFileSync(_pG.join(__dirname, '../index.html'), 'utf8');
+  const _cssG = _fsG.readFileSync(_pG.join(__dirname, '../css/main.css'), 'utf8');
+  const _buildG = (_idxG.match(/function buildStackStore\(\)\{[\s\S]*?\n\}/) || [''])[0];
+  check('the protocol grid exists to assert against', _buildG.length > 0);
+
+  // BOTH are needed and NEITHER is sufficient: the track can only shrink if the
+  // item inside it can too, and the item can only shrink if the track lets it.
+  check('the grid tracks can shrink below their content',
+    /grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\)/.test(_buildG));
+  check('  …and the card itself can shrink with them',
+    /\.stack-card\{[^}]*min-width:0;?\}/.test(_cssG));
+  // The truncation that was already there and could not fire.
+  check('  …so the name truncates instead of widening the column',
+    /\.stack-card-name\{[^}]*text-overflow:ellipsis[^}]*\}/.test(_cssG) &&
+    /\.stack-card-name\{[^}]*white-space:nowrap[^}]*\}/.test(_cssG) &&
+    /\.stack-card-name\{[^}]*overflow:hidden[^}]*\}/.test(_cssG));
+  // A plain 1fr anywhere in this grid reintroduces the bug.
+  check('  …with no bare 1fr track left in the protocol grid',
+    !/grid-template-columns:1fr 1fr/.test(_buildG));
+
+  // ⚠️ THE NAME IS CLIPPED FOR DISPLAY, NOT TRUNCATED IN DATA.
+  // Cutting the string in JS would put a shortened name in the DOM and lose the
+  // rest; CSS clipping keeps the whole name there, adapts to any width, and the
+  // full text is one tap away in the detail view.
+  check('the full name is still rendered, only visually clipped',
+    /_esc\(st\.name\|\|'Protocol '\+\(i\+1\)\)/.test(_buildG) &&
+    !/\.slice\(0,\s*\d+\)/.test(_buildG) && !/substring\(/.test(_buildG));
+  // And it is escaped — a protocol name is user input rendered into innerHTML.
+  check('  …and escaped, being user input going into innerHTML',
+    /_esc\(st\.name/.test(_buildG));
+}
+
 // ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
 // Reported 2026-08-14: "The text in the green box says I am at 309pmol/l but graph
 // shows me at 894?" The steady-state window was Math.floor(totalDays/2), and totalDays
