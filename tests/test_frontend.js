@@ -3204,6 +3204,55 @@ if (typeof G._tdModelBias === 'function') {
   // visibly rather than settling in as a frontend constant.
   check('  …naming the study it checked against, from the served payload',
     /Bhasin/.test(_b.source) && /nadir/.test(_b.measure));
+
+  // ── THE EXPOSURE CARD MUST CARRY THE SAME UNCERTAINTY ──
+  // A headline that states a level to the pmol/L without saying the model runs ~1.5x
+  // high against the measured dose-response claims a precision the pharmacology does
+  // not have. That is how a projected number becomes a target.
+  // _FT_REF arrives from /lab-markers at runtime, so seed the backend's shape here.
+  var _svFtRef = G._FT_REF;
+  G._FT_REF = G._FT_REF || {
+    floor_pmol_l:243, median_pmol_l:492, ceiling_pmol_l:796, round_to:0.5,
+    cite:['bhasin-2011'], caveat_cite:['goldman-2017'],
+    caveat:'Free T here is calculated, not measured.',
+    above_ceiling_note:'Above the top of the healthy young-male range.'
+  };
+  if (typeof G._ftExposureHtml === 'function' && G._FT_REF && G._FT_REF.ceiling_pmol_l) {
+    G._tdBiasCache = null;
+    var _ceilP = G._FT_REF.ceiling_pmol_l;
+    var _hiHtml = G._ftExposureHtml(_ceilP * 7);      // deep above the ceiling
+    var _inHtml = G._ftExposureHtml(_ceilP * 0.5);    // inside the range
+    check('the exposure card states the model\'s measured bias when above the ceiling',
+      /dose\u2013response|dose-response/.test(_hiHtml) && /upper bound/.test(_hiHtml),
+      _hiHtml.slice(0, 160));
+    // Inside the reference range the projection is not the thing under doubt, and the
+    // caveat would be noise on every normal reading.
+    check('  …and stays quiet inside the healthy range',
+      !/upper bound/.test(_inHtml));
+    // The ratio is measured on TOTAL T at the trough; free T is convex in total T, so
+    // printing this headline divided by it would be arithmetic the data cannot support.
+    // The caveat states the disagreement; it must not quote a second level.
+    var _biasLine = (_hiHtml.match(/border-left:2px solid[^>]*>([^<]*)</) || ['',''])[1];
+    check('  …without printing a second, "corrected" pmol/L figure',
+      _biasLine.length > 0 && !/pmol/i.test(_biasLine), _biasLine.slice(0, 120));
+    // Same rule as the Dose Finder: live measurement, never a written-down constant.
+    var _idxHtml = require('fs').readFileSync(
+      require('path').join(__dirname, '../index.html'), 'utf8');
+    var _expStart = _idxHtml.indexOf('function _ftExposureHtml');
+    var _expEnd = _idxHtml.indexOf('function openAllReferences', _expStart);
+    var _expFn = _idxHtml.slice(_expStart, _expEnd > 0 ? _expEnd : _expStart + 6000);
+    var _expCode = _expFn.split('\n').filter(function(l){ return !/^\s*(\/\/|\*|\/\*)/.test(l); }).join('\n');
+    check('  …computed from _tdModelBias, not a hardcoded factor',
+      /_tdModelBias/.test(_expCode) && !/mean\s*[:=]\s*1\.5|bias\s*[:=]\s*1\.5/.test(_expCode),
+      'len=' + _expCode.length);
+    // It must degrade to silence, not to a stale figure, when nothing is served.
+    var _svDr3 = G._tcDoseResponse;
+    G._tcDoseResponse = null; G._tdBiasCache = null;
+    check('  …and says nothing at all when the backend has not answered',
+      !/upper bound/.test(G._ftExposureHtml(_ceilP * 7)));
+    G._tcDoseResponse = _svDr3; G._tdBiasCache = null;
+  }
+  G._FT_REF = _svFtRef;
   // No local copy of the published data — a table in each frontend is how two
   // apps start quoting different numbers for the same study.
   check('  …with no local copy of that data in the tab',

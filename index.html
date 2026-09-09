@@ -567,6 +567,32 @@ function _ftExposureHtml(pmol){
     headline=lvl+' pmol/L — about '+(mult<1?'1':(mult%1===0?mult.toFixed(0):mult.toFixed(1)))+'× the top of the healthy young-male range';
     body=_FT_REF.above_ceiling_note||'';
   }
+  // ── SAY HOW FAR THIS MODEL IS FROM THE MEASURED DOSE-RESPONSE ──
+  // The free-T model runs high against Bhasin 2001 — about 1.5x, compared trough to
+  // nadir. That gap is real, sourced on BOTH sides, and deliberately left open rather
+  // than closed with a correction factor (see doc 17 in the backend). A headline that
+  // states a level to the pmol/L without saying that is claiming a precision the
+  // pharmacology does not have, which is how a projected number becomes a target.
+  //
+  // ⚠️ MEASURED AGAINST THE LIVE MODEL, NEVER HARDCODED. _tdModelBias runs the current
+  // model at the published doses and compares, so if the pharmacology is ever corrected
+  // this narrows by itself instead of quietly becoming a lie. Same function the Dose
+  // Finder uses — one number, one source.
+  //
+  // NO CORRECTED FIGURE IS PRINTED. The ratio is measured on TOTAL T at the trough;
+  // free T is convex in total T, so dividing this headline by it would be arithmetic
+  // the data does not support. The honest statement is the direction and the size of
+  // the disagreement, not a second number that looks more precise than the first.
+  var _bias=null;
+  try{ _bias=(typeof _tdModelBias==='function')?_tdModelBias():null; }catch(e){ _bias=null; }
+  var biasNote='';
+  if(_bias && _bias.mean>1.1 && pmol>ceil){
+    var _bm=Math.round(_bias.mean*10)/10;
+    biasNote='Against the only published dose\u2013response this model reads about '+_bm
+      +'\u00d7 high at matched dose (its trough vs that study\u2019s nadir, n='+_bias.n
+      +' doses), so read this as an upper bound, not a point estimate. The disagreement '
+      +'is between two published figures and is unresolved \u2014 it is not corrected here.';
+  }
   var cites=(typeof _citeChips==='function')
     ? _citeChips((_FT_REF.cite||[]).concat(_FT_REF.caveat_cite||[]),'Range from')
     : '';
@@ -575,6 +601,7 @@ function _ftExposureHtml(pmol){
     +'<span style="font-size:9px;font-weight:800;letter-spacing:0.7px;color:'+col+';text-transform:uppercase">Exposure</span>'
     +'<span style="font-size:12px;font-weight:700;color:var(--text)">'+_esc(headline)+'</span></div>'
     +(body?'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-top:3px">'+_esc(body)+'</div>':'')
+    +(biasNote?'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-top:5px;padding-left:7px;border-left:2px solid '+col+'66">'+_esc(biasNote)+'</div>':'')
     +'<div style="font-size:10px;color:var(--muted2);opacity:0.8;line-height:1.45;margin-top:4px">'+_esc(_FT_REF.caveat||'')+'</div>'
     +cites+'</div>';
 }
