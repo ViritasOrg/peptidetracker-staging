@@ -10534,6 +10534,25 @@ function _isProdCheckout(dir) {
   return !!r && !/-(staging|stage)$/.test(r);
 }
 
+// ── A TEST MUST NOT REACH FOR A BARE `localStorage` ────────────────────────
+// This file runs in Node and drives the app inside a vm sandbox. The app's storage is
+// sandbox.localStorage (aliased G.localStorage); the bare name does not exist out here.
+// Written bare it throws ReferenceError, and every such call in this file is wrapped in
+// `try { ... } catch(e){}` — so it fails silently and the test around it quietly stops
+// testing anything. Four calls in the steady-state-average block did exactly that: the
+// "shown by default" check passed only because nothing earlier happened to set the key,
+// and the restore at the end never ran, leaking that block's value into the rest of the
+// suite. A silent no-op is the worst failure mode a test can have, so it is asserted
+// structurally rather than left to review.
+{
+  var _lsSrc = require('fs').readFileSync(__filename, 'utf8');
+  // Skip the bootstrap: it legitimately defines the sandbox's localStorage binding.
+  var _lsBody = _lsSrc.slice(_lsSrc.indexOf('const G = sandbox;'));
+  var _lsBare = (_lsBody.match(/(^|[^.\w'"`])localStorage\s*\./g) || []).length;
+  check('no test reaches for a bare localStorage instead of G.localStorage',
+    _lsBare === 0, _lsBare + ' bare use(s)');
+}
+
 // ── A TEST THAT READS A NON-PROMOTED FILE MUST BE SCOPED TO STAGING ─────────
 // promote-to-prod.yml copies index.html, the modules index.html loads, ci.yml,
 // css/ and `cp -r ../staging/tests .` — the whole test directory — into prod.
@@ -10550,9 +10569,17 @@ function _isProdCheckout(dir) {
   ['../CLAUDE.md', 'promote-to-prod.yml'].forEach(function (f) {
     var idx = -1, unguarded = [];
     while ((idx = _selfSrc.indexOf(f, idx + 1)) !== -1) {
-      // Only actual reads count; the name appears in prose and in this list too.
+      // Only actual reads count; the name appears in prose, and in this scanner's own
+      // list. The discriminator is whether the occurrence sits INSIDE a readFileSync
+      // call's arguments — a statement boundary between the call and the name means it
+      // is something else (this list is preceded by `readFileSync(__filename, 'utf8');`).
+      // The old test was "readFileSync somewhere in the preceding 300 chars", which
+      // matched this list too and only passed because _isProdCheckout(dir) happened to
+      // fall inside the 1200-char lookback — until a block was inserted above and pushed
+      // it out. A heuristic that breaks when unrelated code moves is not a guard.
       var before = _selfSrc.slice(Math.max(0, idx - 1200), idx);
-      if (!/readFileSync[\s\S]*$/.test(before.slice(-300))) continue;
+      var _call = before.lastIndexOf('readFileSync(');
+      if (_call < 0 || before.slice(_call).indexOf(';') >= 0) continue;
       if (!/_isProdCheckout\(dir\)/.test(before)) unguarded.push(idx);
     }
     check('reads of ' + f + ' are scoped to a staging checkout',
@@ -11794,16 +11821,21 @@ if (typeof G._tcFreeTSeries === 'function') {
 // ── Steady-state AVERAGE line: toggle + the pharmacology it communicates ──
 console.log('\n── T-calc: steady-state average line ──');
 if (typeof G._tcShowAvg === 'function' && typeof G._tcToggleAvgLine === 'function') {
-  var _avSaved = null; try { _avSaved = localStorage.getItem('tc-avg-line'); } catch(e){}
+  // G.localStorage, not a bare localStorage: this file runs in Node, where the bare
+  // name is undefined and every one of these calls threw straight into its own catch.
+  // The block then tested nothing — "shown by default" passed only because no earlier
+  // test happened to have set the key, and the restore at the end never ran, so the
+  // value this block wrote leaked into everything after it.
+  var _avSaved = null; try { _avSaved = G.localStorage.getItem('tc-avg-line'); } catch(e){}
   var _avSaveTp = G._tcp; G._tcp = { manualLog: [] };   // make the toggle's redraw a no-op
-  try { localStorage.removeItem('tc-avg-line'); } catch(e){}
+  try { G.localStorage.removeItem('tc-avg-line'); } catch(e){}
   check('avg line: shown by default', G._tcShowAvg() === true);
   G._tcToggleAvgLine({ checked: false });
   check('avg line: hiding it persists (survives getData\'s ||-default trap)', G._tcShowAvg() === false);
   G._tcToggleAvgLine({ checked: true });
   check('avg line: re-showing it persists', G._tcShowAvg() === true);
   G._tcp = _avSaveTp;
-  try { if (_avSaved === null) localStorage.removeItem('tc-avg-line'); else localStorage.setItem('tc-avg-line', _avSaved); } catch(e){}
+  try { if (_avSaved === null) G.localStorage.removeItem('tc-avg-line'); else G.localStorage.setItem('tc-avg-line', _avSaved); } catch(e){}
 }
 
 // The line's premise: at steady state the MEAN is set by mg/day (dose ÷ interval),
@@ -11839,7 +11871,7 @@ if (typeof G._tcDrawManualChart === 'function' && typeof G._tcFreeTSeries === 'f
   G._tcBwEntries = [{date:'2026-06-20', free_t:500}]; G._tcGhStack = [];
   var _awS = G._tcFreeTSeries(_awLog.slice(), {});
   function _awWinMean(a,b){ var s=0,n=0; for(var t=a;t<=b;t++){ s+=_awS.total[t]*(_awS.calFT_arr?_awS.calFT_arr[t]:_awS.scale); n++; } return n?s/n:0; }
-  try { localStorage.removeItem('tc-avg-line'); } catch(e){}
+  try { G.localStorage.removeItem('tc-avg-line'); } catch(e){}
   var _awThrew=false, _awWhole=null, _awMonth=null;
   try {
     _awCap=null; G._tcDrawManualChart('tc-main-chart', _awLog, 'whole'); _awWhole=_awCap;
