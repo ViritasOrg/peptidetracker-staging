@@ -112,6 +112,65 @@ function _macrosPerMealProtein(age){
 // "Yes but make it visible so user can choose to ignore" — so it is ON by default and
 // carries a visible toggle. It used to be excluded silently, which made the real deficit
 // on a training day 300 + the burn rather than the 300 the code intended.
+// ── HOW THE PHASE OFFSET IS EXPRESSED ────────────────────────────────────────
+// Henrik, 2026-09-09: "Give user a choice between % or standard numbers. If you want
+// to loose 1kg fat per month the absolute number is probably more correct and
+// consistent." Exactly right, and it is why ABSOLUTE is the default: a fixed kcal/day
+// gap is a fixed rate of fat loss, which is the thing being aimed at. A percentage
+// re-scales with maintenance, so it holds the deficit constant in RELATIVE terms and
+// lets the rate drift as bodyweight falls.
+//
+// Percentage figures: a 10–20% deficit is the band the physique-athlete literature
+// works in for lean-mass preservation, so the midpoint is used; the surplus is small
+// on purpose ("chase the dry look, not the scale" — the app's own recomp guidance).
+var _MACROS_DEFICIT_MODES=['absolute','percent'];
+var MACROS_PCT_CUT    = 0.15;
+var MACROS_PCT_SURPLUS= 0.05;
+// Energy per kg of body fat, for turning a deficit into an expected rate. 7700 kcal/kg
+// is the standard PLANNING figure (Wishnofsky's 3500 kcal/lb). It is known to
+// overestimate long-term loss because maintenance falls as bodyweight does — so the
+// UI states it as an estimate at the current weight, never as a promise.
+var MACROS_KCAL_PER_KG_FAT = 7700;
+
+function _macrosDeficitMode(){
+  try{
+    var v=(typeof getData==='function')?getData('macros-deficit-mode',''):'';
+    return (_MACROS_DEFICIT_MODES.indexOf(v)>=0)?v:'absolute';
+  }catch(e){ return 'absolute'; }
+}
+function setMacrosDeficitMode(m){
+  if(_MACROS_DEFICIT_MODES.indexOf(m)<0) return _macrosDeficitMode();
+  if(typeof setData==='function') setData('macros-deficit-mode',m);
+  if(typeof pushPepSettingsToAgent==='function') pushPepSettingsToAgent({'macros-deficit-mode':m});
+  if(typeof loadMacros==='function') loadMacros();
+  return m;
+}
+// The offset itself, in kcal/day, for a given maintenance. One function so the two
+// modes cannot drift apart and so the tests can hold them to the same contract.
+function macrosPhaseOffset(phase,tdee,mode){
+  if(phase==='reset') return 0;
+  if(mode==='percent'){
+    if(!(tdee>0)) return 0;
+    // Round the MAGNITUDE then apply the sign. Math.round(-412.5) is -412, not -413 —
+    // JS rounds a .5 toward +Infinity, so rounding the signed value makes a cut one
+    // kcal shallower than the same percentage of a surplus. Trivial, and exactly the
+    // kind of asymmetry that makes a number fail to reconcile with its own stated rule.
+    return phase==='cut' ? -Math.round(tdee*MACROS_PCT_CUT) : Math.round(tdee*MACROS_PCT_SURPLUS);
+  }
+  return phase==='cut' ? -300 : 100;
+}
+// A deficit is only meaningful as a rate. Reported for both modes so the choice can be
+// made on the thing the user actually cares about.
+function macrosRate(offsetKcal,bw){
+  if(!offsetKcal) return null;
+  var kgPerMonth=(offsetKcal/MACROS_KCAL_PER_KG_FAT)*30.44;
+  var pctBwPerWeek=(bw>0)?(Math.abs(kgPerMonth)/(30.44/7)/bw*100):0;
+  return {kgPerMonth:kgPerMonth, pctBwPerWeek:pctBwPerWeek,
+          // Helms 2014: 0.5–1% of bodyweight per week is the band that preserves lean
+          // mass in trained lean athletes. Faster is where lean tissue starts going.
+          tooFast: pctBwPerWeek>1.0};
+}
+
 function _macrosIncludeTraining(){
   try{ return localStorage.getItem('macros-include-training')!=='false'; }catch(e){ return true; }
 }
@@ -135,6 +194,7 @@ function macrosEnergyAvailability(kcal,trainKcal,ffm){
 
 function calcMacros(bw,phase,onAndrogens,opts){
   opts=opts||{};
+  var mode=(_MACROS_DEFICIT_MODES.indexOf(opts.deficitMode)>=0)?opts.deficitMode:'absolute';
   var prof={
     bw: bw>0?bw:0,
     heightCm: (opts.heightCm!=null)?opts.heightCm:0,
@@ -162,11 +222,8 @@ function calcMacros(bw,phase,onAndrogens,opts){
   var includeTraining=(opts.includeTraining!=null)?!!opts.includeTraining:true;
   var kcal=null, tdee=null;
   if(bmr){
-    tdee=bmr.kcal*MACROS_PAL_BASE+(includeTraining?trainKcal:0);
-    // Phase adjustment is an absolute offset on maintenance, unchanged from before —
-    // only the maintenance figure it is applied to has been re-sourced.
-    kcal=Math.round(phase==='cut'?tdee-300:phase==='reset'?tdee:tdee+100);
-    tdee=Math.round(tdee);
+    tdee=Math.round(bmr.kcal*MACROS_PAL_BASE+(includeTraining?trainKcal:0));
+    kcal=tdee+macrosPhaseOffset(phase,tdee,mode);
   }
   // On exogenous androgens the endogenous-T-protection reason for higher fat is moot
   // (Whittaker 2021), so fat can run down to a ~0.5–0.6 g/kg essential-fat floor;
@@ -180,6 +237,8 @@ function calcMacros(bw,phase,onAndrogens,opts){
           proteinPerKg:proteinPerKg, proteinFloorBound:proteinFloorBound,
           perMealProteinPerKg:perMeal, ffm:ffm,
           ea:macrosEnergyAvailability(kcal,trainKcal,ffm),
+          deficitMode:mode, phaseOffset:(kcal==null?null:kcal-tdee),
+          rate:(kcal==null?null:macrosRate(kcal-tdee,bw)),
           // What the user must supply before a calorie target can exist at all.
           missing:bmr?[]:(prof.bw>0?['body fat %','or height and age']:['body weight'])};
 }
@@ -190,7 +249,8 @@ function macrosForUser(phase,onAndrogens){
   var p=_macrosProfile();
   return calcMacros(p.bw,phase,onAndrogens,{
     heightCm:p.heightCm, age:p.age, sex:p.sex, bodyFatPct:p.bodyFatPct,
-    trainKcal:_macrosTrainKcal, includeTraining:_macrosIncludeTraining()
+    trainKcal:_macrosTrainKcal, includeTraining:_macrosIncludeTraining(),
+    deficitMode:_macrosDeficitMode()
   });
 }
 // A standalone card showing the estimated training burn from logged workouts. It is
@@ -227,10 +287,35 @@ function _macrosEnergyCard(m){
             ['\u00d7 PAL '+MACROS_PAL_BASE.toFixed(2)+' (non-training)',Math.round(m.bmr*MACROS_PAL_BASE)+' kcal'],
             ['Training (14-day avg)',(m.includeTraining?'+':'excl. ')+m.trainKcal+' kcal'],
             ['Maintenance',m.tdee+' kcal'],
-            ['Phase ('+_macrosPhase+')',(m.kcal-m.tdee>=0?'+':'')+(m.kcal-m.tdee)+' kcal']];
+            ['Phase ('+_macrosPhase+', '+(m.deficitMode==='percent'
+               ?((_macrosPhase==='cut'?'\u2212'+Math.round(MACROS_PCT_CUT*100):'+'+Math.round(MACROS_PCT_SURPLUS*100))+'%')
+               :'fixed')+')',(m.phaseOffset>=0?'+':'')+m.phaseOffset+' kcal']];
   var h='<div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">ENERGY</div></div><span style="font-size:11px;color:var(--muted2)">'+(m.bmrMethod==='katch'?'Katch-McArdle':'Mifflin-St Jeor')+'</span></div><div class="card-body">';
   rows.forEach(function(r){ h+='<div class="info-row"><span class="info-label">'+r[0]+'</span><span class="info-val">'+r[1]+'</span></div>'; });
   h+='<div class="info-row" style="font-weight:800"><span class="info-label" style="color:var(--text)">Target</span><span class="info-val" style="color:var(--accent)">'+m.kcal+' kcal</span></div>';
+  // A deficit only means something as a RATE — this is the number the choice of mode
+  // is actually about, so it is shown next to the target rather than left implicit.
+  if(m.rate){
+    var _dir=m.rate.kgPerMonth<0?'loss':'gain';
+    var _rc=m.rate.tooFast?'var(--accent4)':'var(--muted2)';
+    h+='<div class="info-row"><span class="info-label">Expected rate</span><span class="info-val" style="color:'+_rc+'">'
+      +Math.abs(m.rate.kgPerMonth).toFixed(2)+' kg/month '+_dir+' \u00b7 '+m.rate.pctBwPerWeek.toFixed(2)+'%/wk</span></div>';
+    h+='<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:4px">At 7700 kcal per kg of fat, estimated at your current weight \u2014 maintenance falls as you do, so the real rate tapers.'
+      +(m.rate.tooFast?' <b>Above 1%/week</b>, which is where lean tissue starts going with the fat (Helms 2014 puts the preserving band at 0.5\u20131%/wk).':'')+'</div>';
+  }
+  // The mode choice itself. Absolute is the default and the reason is on screen.
+  h+='<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">';
+  h+='<div style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:7px">Phase offset</div>';
+  h+='<div style="display:flex;gap:6px">';
+  [{id:'absolute',label:'Fixed kcal'},{id:'percent',label:'% of maintenance'}].forEach(function(o){
+    var sel=m.deficitMode===o.id;
+    h+='<button onclick="setMacrosDeficitMode(\''+o.id+'\')" style="flex:1;background:'+(sel?'var(--accent)':'var(--surface2)')+';color:'+(sel?'#000':'var(--muted2)')+';border:1px solid '+(sel?'var(--accent)':'var(--border)')+';border-radius:20px;padding:7px 4px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">'+o.label+'</button>';
+  });
+  h+='</div>';
+  h+='<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:7px">'
+    +'<b>Fixed kcal</b> holds the RATE steady \u2014 a constant gap is a constant kg/month, which is what you aim at when the goal is \u201close 1 kg of fat a month\u201d. '
+    +'<b>% of maintenance</b> holds the deficit steady in relative terms ('+Math.round(MACROS_PCT_CUT*100)+'% cut, +'+Math.round(MACROS_PCT_SURPLUS*100)+'% surplus \u2014 the midpoint of the 10\u201320% band used for lean-mass preservation), so it re-scales with you and the rate drifts.</div>';
+  h+='</div>';
   h+='<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:8px">'+how+' PAL 1.40 is the bottom of FAO/WHO/UNU\u2019s sedentary/light-activity band \u2014 the bottom because measured training is added separately.</div>';
   if(m.ea){
     var col=m.ea.tier==='low'?'var(--danger,#ff3c3c)':m.ea.tier==='suboptimal'?'var(--accent4)':'var(--accent3)';
