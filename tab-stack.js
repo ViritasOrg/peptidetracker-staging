@@ -4688,12 +4688,24 @@ function wizStepNutrition(body,footer){
   }
   var phases=[{id:'reset',label:'Reset'},{id:'cut',label:'Cut'},{id:'recomp',label:'Recomp'}];
   html+='<div style="display:flex;gap:6px;margin-bottom:12px">'+phases.map(function(p){var s=_macrosPhase===p.id;return'<button onclick="wizSetMacroPhase(\''+p.id+'\')" style="flex:1;background:'+(s?'var(--accent)':'var(--surface2)')+';color:'+(s?'#000':'var(--muted2)')+';border:1px solid '+(s?'var(--accent)':'var(--border)')+';border-radius:20px;padding:8px 4px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">'+p.label+'</button>';}).join('')+'</div>';
-  var m=calcMacros(bw,_macrosPhase,onAndrogens);
-  var mi=[{l:'Calories',v:m.kcal,u:'kcal'},{l:'Protein',v:m.protein,u:'g'},{l:'Carbs',v:m.carbs,u:'g'},{l:'Fat',v:m.fat,u:'g'}];
+  // macrosForUser, not calcMacros: ONE source for the numbers, so this step and the
+  // Macros tab cannot show different targets for the same protocol.
+  var m=(typeof macrosForUser==='function')?macrosForUser(_macrosPhase,onAndrogens):calcMacros(bw,_macrosPhase,onAndrogens);
+  var _wdash='\u2014';
+  var mi=[{l:'Calories',v:(m.kcal==null?_wdash:m.kcal),u:'kcal'},{l:'Protein',v:m.protein,u:'g'},{l:'Carbs',v:(m.carbs==null?_wdash:m.carbs),u:'g'},{l:'Fat',v:m.fat,u:'g'}];
   html+='<div style="display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:12px">'+mi.map(function(x,i){return'<div style="padding:14px 6px;text-align:center'+(i<3?';border-right:1px solid var(--border)':'')+'"><div style="font-family:var(--font-mono);font-size:22px;line-height:1;color:var(--text)">'+x.v+'</div><div style="font-size:9px;color:var(--muted2);text-transform:uppercase;margin-top:3px">'+x.u+'</div><div style="font-size:9px;color:var(--muted2)">'+x.l+'</div></div>';}).join('')+'</div>';
-  html+='<div style="background:rgba(60,255,160,0.06);border-left:3px solid var(--accent3);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--muted2);line-height:1.6">'+_macrosFatNote(onAndrogens,_macrosPhase)+'</div>';
-  // Training burn shown separately (not folded into the target above).
-  if(typeof _macrosTrainKcal!=='undefined'){ var _tb=Math.max(0,Math.round(_macrosTrainKcal||0)); if(_tb>0)html+='<div style="background:rgba(60,255,160,0.05);border-left:3px solid var(--accent2);border-radius:8px;padding:11px 14px;font-size:11px;color:var(--muted2);line-height:1.6;margin-top:10px">Your logged training burns about <b>+'+_tb+' kcal/day</b> (14-day avg, from the workout tracker) — shown separately, <b>not</b> added to the target above.</div>'; }
+  html+='<div style="background:rgba(60,255,160,0.06);border-left:3px solid var(--accent3);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--muted2);line-height:1.6">'+_macrosFatNote(onAndrogens,_macrosPhase,m)+'</div>';
+  // No calorie target without the profile to compute one. Say what is missing rather
+  // than filling the gap with a constant — that is what this model replaced.
+  if(m.kcal==null){
+    html+='<div style="background:rgba(232,255,60,0.06);border-left:3px solid var(--accent);border-radius:8px;padding:11px 14px;font-size:11px;color:var(--muted2);line-height:1.6;margin-top:10px">No calorie target yet — it needs <b>'+m.missing.join(' ')+'</b>. Add a body-fat reading in the <b>Body</b> tab, or your height and age.</div>';
+  } else {
+    html+='<div style="background:rgba(232,255,60,0.05);border-left:3px solid var(--accent);border-radius:8px;padding:11px 14px;font-size:11px;color:var(--muted2);line-height:1.6;margin-top:10px">Maintenance <b>'+m.tdee+' kcal</b> from '+(m.bmrMethod==='katch'?'Katch-McArdle':'Mifflin-St Jeor')+' \u00d7 PAL '+MACROS_PAL_BASE.toFixed(2)+(m.includeTraining&&m.trainKcal>0?(' + '+m.trainKcal+' kcal training'):'')+'.'
+      +(m.ea?(' Energy availability <b>'+m.ea.value.toFixed(0)+' kcal/kg FFM</b>'+(m.ea.tier==='low'?' \u2014 <b>low</b>, below the threshold where lean mass and endocrine function start paying for it.':m.ea.tier==='suboptimal'?' \u2014 suboptimal band (30\u201345); fine for a short cut, not a long push.':' \u2014 adequate.')):'')
+      +'</div>';
+  }
+  // Training burn: counted by default now, with the toggle living on the Macros tab.
+  if(typeof _macrosTrainKcal!=='undefined'){ var _tb=Math.max(0,Math.round(_macrosTrainKcal||0)); if(_tb>0)html+='<div style="background:rgba(60,255,160,0.05);border-left:3px solid var(--accent2);border-radius:8px;padding:11px 14px;font-size:11px;color:var(--muted2);line-height:1.6;margin-top:10px">Your logged training burns about <b>+'+_tb+' kcal/day</b> (14-day avg, from the workout tracker) \u2014 '+(m.includeTraining?'<b>included</b> in the target above':'<b>not</b> included; untick lives on the Macros tab')+'.</div>'; }
   body.innerHTML=html;
   // Pull the user's measured training burn once available; re-render only if it changed
   // (self-limiting — avoids a fetch/render loop).
