@@ -3304,6 +3304,72 @@ if (typeof G._tdValidateAgainstBase === 'function') {
     /mg\/week testosterone base/.test(_tdV));
 }
 
+// ── DAILY IS SUPPORTED FOR EVERY ESTER ──────────────────────────────────────
+// Henrik, 2026-09-09: "Daily injections must be supported for all esters." The
+// cadence list offered only every-2-days and longer, which for a fast ester
+// cannot answer the question at all: propionate ripples ~90% at every-2-days on
+// this model and ~0% daily.
+console.log('\n── Dose Finder: daily cadence, every ester ──────────────────');
+if (typeof G._tdSolveWeekly === 'function' && Array.isArray(G._TC_CADENCES)) {
+  const _svD = {bw:G._tcBwEntries, tp:G._tcp, gh:G._tcGhStack};
+  G._tcBwEntries = [{date:'2026-06-26', free_t:217, shbg:45, total_t:17}];
+  G._tcp = Object.assign({}, G._tcp||{}, {measuredFT:'217', shbg:'45',
+                                          totalT:'17', birthYear:'1980'});
+  G._tcGhStack = [];
+  const _cD = k => G._TC_CADENCES.find(c => c.key === k);
+
+  check('a daily cadence is offered at all', !!_cD('daily'));
+  check('  …at seven injections a week', _cD('daily').perWeek === 7);
+  // ONE LIST, BOTH SURFACES. A second copy for the Dose Finder is how two
+  // screens start offering different schedules for the same drug.
+  const _tdD = require('fs').readFileSync(
+    require('path').join(__dirname, '../tab-tdose.js'), 'utf8');
+  const _tdDc = _tdD.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  check('  …from the shared list, not a copy in the tab',
+    /_TC_CADENCES/.test(_tdDc) && !/key:\s*'daily'/.test(_tdDc));
+
+  // EVERY ester, not just the convenient ones — that is the whole instruction.
+  const _esters = ['propionate','phenylpropionate','enanthate','testoviron',
+                   'cypionate','sustanon','nebido','topical'];
+  const _run = (e, k) => G._tdSolveWeekly({targetPmol:1000, esterId:e, cadence:_cD(k),
+    startDate:'2026-09-10', concMgPerMl:250, stepMl:0.05});
+  const _failed = _esters.filter(e => { const r = _run(e,'daily'); return !r.ok || !(r.mgPerWeek>0); });
+  check('daily solves for every ester in the catalogue', _failed.length === 0,
+    'failed: ' + _failed.join(','));
+
+  // ⚠️ THE REASON DAILY MATTERS. Ripple is interval / half-life, so for a short
+  // ester the cadence is the whole answer and every-2-days cannot hold a level.
+  const _rip = r => (r.peak - r.trough) / r.achieved;
+  const _pDaily = _run('propionate','daily'), _pE2d = _run('propionate','e2d');
+  check('  …and on a short ester it is dramatically steadier than every-2-days',
+    _rip(_pDaily) < 0.10 && _rip(_pE2d) > 0.50,
+    'daily ' + Math.round(_rip(_pDaily)*100) + '% vs e2d ' + Math.round(_rip(_pE2d)*100) + '%');
+  // A long depot is flat at any interval, so daily buys nothing there — which is
+  // exactly why the transition solver must not RECOMMEND it. Supported, not urged.
+  check('  …while on a 56-day depot it is no steadier, so it wins nothing',
+    Math.abs(_rip(_run('nebido','daily')) - _rip(_run('nebido','e2d'))) < 0.05);
+
+  // ⚠️ AT A SHORT INTERVAL THE SYRINGE SETS THE ERROR, NOT THE MODEL.
+  // A step is a fixed mg, so the finer the cadence the bigger a fraction of each
+  // injection it is: 12.5 mg is 7% of a weekly 175 mg shot and 50% of a daily 25
+  // mg one. The card has to say the vial is the lever, or the number just looks
+  // wrong.
+  check('the card warns when the vial, not the schedule, sets the error',
+    /That step is/.test(_tdD) && /The vial is the limit here/.test(_tdD));
+  check('  …only when the miss is real AND the step is a big share of the dose',
+    /_miss > 0\.10 && r\.stepMg > r\.mgPerInjection\*0\.2/.test(_tdD));
+  // And the advice must actually work: a thinner vial has to close the gap.
+  const _coarse = G._tdSolveWeekly({targetPmol:1000, esterId:'enanthate', cadence:_cD('daily'),
+    startDate:'2026-09-10', concMgPerMl:250, stepMl:0.05});
+  const _fine = G._tdSolveWeekly({targetPmol:1000, esterId:'enanthate', cadence:_cD('daily'),
+    startDate:'2026-09-10', concMgPerMl:50, stepMl:0.05});
+  check('  …and the thinner vial it suggests genuinely lands closer',
+    Math.abs(_fine.achieved-1000) < Math.abs(_coarse.achieved-1000),
+    Math.round(_fine.achieved) + ' vs ' + Math.round(_coarse.achieved));
+
+  G._tcBwEntries = _svD.bw; G._tcp = _svD.tp; G._tcGhStack = _svD.gh;
+}
+
 // ── EXPOSURE reports the DOSING window, never the washout tail ───────────────
 // Reported 2026-08-14: "The text in the green box says I am at 309pmol/l but graph
 // shows me at 894?" The steady-state window was Math.floor(totalDays/2), and totalDays
