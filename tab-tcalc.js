@@ -605,6 +605,65 @@ function _tcEndogAt(drugRateMgd, p0) {
 // ENDOGENOUS_T_PRODUCTION carries the full citation; keep the two in step.
 var TCALC_ENDOG_T_MGD = 5;
 
+// ── DOSE -> TOTAL T. THE SLOPE IS POPULATION DATA. THE OFFSET IS THE PERSON. ──
+// nmol/L of serum total testosterone per (mg testosterone/day) of appearance rate.
+//
+//     TT(t) = slope * total[t] + offset,   offset = TT_at_draw - slope * total[anchorDay]
+//
+// CHANGED 2026-09-09 at Henrik's explicit instruction, replacing
+//     TT(t) = TT_base * total[t] / P0
+// which took the SLOPE of the dose->level line from the user's own baseline draw.
+//
+// ⚠️ WHY, AND IT IS NOT "THE TRIAL SAYS SO". The old form makes an error in the anchor
+// propagate MULTIPLICATIVELY through the whole dose-response; this one makes it
+// propagate ADDITIVELY. On the reproduction case, letting the true baseline range over
+// 17.0-24.3 nmol/L moves the projected peak by 3523 pmol/L under the old form and by
+// 294 under this one — the old architecture is 12x more sensitive to a wrong baseline.
+//
+// That mattered concretely. The user's single calibrating draw (2026-06-26) was later
+// disclosed to have been DELIBERATELY DEPRESSED — sleep deprivation, alcohol and a
+// one-off opioid, taken to obtain a higher prescribed dose. A personal-slope model
+// anchored on it scales its entire dose-response off a number chosen to be low. The
+// whole justification for personal anchoring is that the user's own datapoint describes
+// them better than a population average; when the datapoint is engineered, it does not.
+// A model must degrade gracefully when its one input is wrong, and this one does.
+//
+// THE VALUE. Bhasin et al., "Testosterone dose-response relationships in healthy young
+// men", Am J Physiol Endocrinol Metab 281:E1172 (2001), PMID 11701431. 61 eugonadal men,
+// GnRH agonist to suppress endogenous production, then 25/50/125/300/600 mg/week
+// testosterone enanthate for 20 weeks. Mean NADIR total T: 253, 306, 542, 1345, 2370 ng/dL.
+//
+// Those are troughs on WEEKLY dosing and this model is driven by mean appearance rate,
+// so they are converted to steady-state means (mean/nadir 1.517 at t1/2 4.5 d, tmax
+// 2.25 d, tau 7 d) before fitting. Least squares over the 50-600 mg/wk arms gives 1.947
+// (fit vs actual: 16.2/16.1, 31.2/28.5, 66.3/70.8, 126.4/124.7). Close to LINEAR once
+// that correction is made — the apparent flattening in the raw nadirs is a peak-to-trough
+// artifact of once-weekly injection, not saturable clearance. Do not "restore" a
+// saturating term on the strength of the raw trough figures.
+//
+// ONE SLOPE FOR ALL TESTOSTERONE. Endogenous and injected testosterone are the same
+// molecule cleared the same way, and total[] carries both. An earlier attempt gave the
+// two halves separate slopes and the curve DIPPED below baseline at low doses, implying
+// a mg from the testes raises serum further than a mg from a depot. It cannot.
+//
+// ⚠️ KEEP IN STEP WITH THE BACKEND, which is the source of truth: this is the offline
+// fallback. /systemic-interactions serves testosteroneDoseResponse.mean_slope_nmol_per_mgd
+// with the full derivation, and _tcTtPerMgd() prefers it.
+//
+// ⚠️ THE GAP THIS DOES NOT CLOSE. docs/enhanced-bodybuilding/17-the-model-vs-measured-gap.md
+// records that the model still disagrees with these data, that BOTH sides are sourced, and
+// that the disagreement is dose-dependent. This change does not resolve that and must not
+// be described as having done so. It changes WHICH quantity is personalised, not whether
+// the pharmacology is right.
+var TCALC_TT_PER_MGD = 1.947;
+
+// The slope actually used: backend-served when available, the constant above otherwise.
+function _tcTtPerMgd() {
+  var d = (typeof _tcDoseResponse !== 'undefined') ? _tcDoseResponse : null;
+  var v = d ? parseDec(d.mean_slope_nmol_per_mgd) : 0;
+  return (v > 0) ? v : TCALC_TT_PER_MGD;
+}
+
 // ── Vermeulen free-T calculator ───────────────────────────────────────────────
 
 // ── Vermeulen binding: the SATURABLE quadratic, not a linearisation ──
@@ -2445,11 +2504,19 @@ function _tcFreeTSeries(sorted, hooks) {
   if (_bwTT > 0 && !(_bwFT > 0)) _ttAtDraw = _bwTT;
   if (!(_ttAtDraw > 0) && _mftNum > 0 && _shbgForInv > 0) _ttAtDraw = _tcInvVermeulenTT(_mftNum, _shbgForInv);
   if (!(_ttAtDraw > 0) && _ttMeas0 > 0) _ttAtDraw = _ttMeas0;
-  var _ttBase = (_ttAtDraw > 0 && _endogP > 0) ? (_ttAtDraw * _endogP / _anchRate) : 0;
+  // THE SLOPE IS THE SCIENCE; THE OFFSET IS THE PERSON. See TCALC_TT_PER_MGD above for
+  // why the slope is no longer taken from the user's own baseline.
+  var _ttSlope  = _tcTtPerMgd();
+  var _ttOffset = (_ttAtDraw > 0) ? (_ttAtDraw - _ttSlope * _anchRate) : 0;
+  // Total T at any time. The single place the conversion lives. Monotonic in appearance
+  // rate by construction, and floored at 0 so a large negative offset cannot go through.
+  var _ttAt = function(t) { return Math.max(0, _ttSlope * total[t] + _ttOffset); };
 
   // calFT is retained ONLY as "is the curve expressed in pmol/L" for existing callers and
   // for the unit label. It is no longer a fitted scale factor and nothing multiplies by it.
-  calFT = (_ttBase > 0) ? 1 : null;
+  // Keyed on HAVING a dated measurement: the curve is computable in pmol/L whenever the
+  // anchor exists, whatever level it solves to.
+  calFT = (_ttAtDraw > 0) ? 1 : null;
   var _calFTPkLo = calFT, _calFTPkHi = calFT;
   if (hooks.calFT) hooks.calFT(calFT);
   var scale     = calFT || 1;
@@ -2616,7 +2683,7 @@ function _tcFreeTSeries(sorted, hooks) {
         for (var t = 0; t <= totalDays; t++) {
           var _tf = _useBeta ? _tFactor(t, beta) : 1;
           var _shbgT = Math.max(1, _shbgBase * _ghProd(t) * _tf);
-          var _ttT = (_endogP > 0) ? _ttBase * total[t] / _endogP : _ttBase;
+          var _ttT = _ttAt(t);
           var _vermT = _tcVermeulenFT(_ttT, _shbgT);
           arr[t] = (total[t] > 0 && _vermT > 0) ? _vermT / total[t] : 0;
         }
@@ -2665,7 +2732,7 @@ function _tcFreeTSeries(sorted, hooks) {
   // baseline). Free T is still COMPUTED — Vermeulen at a fixed SHBG — never left as the
   // raw appearance rate. Before this, callers that read total[t]*calFT_arr[t] fell back to
   // scale=1 and plotted mg/day as if it were pmol/L (the Blood-Levels free-T line read 6.5).
-  if (!calFT_arr && _ttBase > 0 && _endogP > 0) {
+  if (!calFT_arr && _ttAtDraw > 0 && _endogP > 0) {
     var _fbShbg = _shbgMeas0 > 0 ? _shbgMeas0 : _tcShbgBaselineForAge(
       (parseInt(_tcp.birthYear, 10) > 0) ? (new Date().getFullYear() - parseInt(_tcp.birthYear, 10)) : 0);
     if (!(_fbShbg > 0)) _fbShbg = 35;
@@ -2674,7 +2741,7 @@ function _tcFreeTSeries(sorted, hooks) {
     _calFTlo  = new Float64Array(totalDays + 1);
     _calFThi  = new Float64Array(totalDays + 1);
     for (var _et = 0; _et <= totalDays; _et++) {
-      var _fbT = _tcVermeulenFT(_ttBase * total[_et] / _endogP, _fbShbg);
+      var _fbT = _tcVermeulenFT(_ttAt(_et), _fbShbg);
       var _fbA = (total[_et] > 0 && _fbT > 0) ? _fbT / total[_et] : 0;
       calFT_arr[_et] = _fbA;
       _calFTlo[_et]  = _fbA * (1 - _estFrac);

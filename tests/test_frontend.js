@@ -10271,12 +10271,13 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcVermeulenFT === 'funct
   var _amS={tp:G._tcp,bw:G._tcBwEntries,gh:G._tcGhStack};
   function _amIso(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
   // 100 mg TU every 2 days — the real protocol that exposed this.
-  function _amRun(startStr,n){
+  function _amRun(startStr,n,opt){
+    var _ft=(opt&&opt.ft>0)?opt.ft:217;          // baseline free T for this run
     var st=new Date(startStr+'T12:00:00');
     var log=[]; var t=new Date(st.getTime());
     for(var i=0;i<n;i++){log.push({compId:'nebido',doseMg:'100',date:_amIso(t)});t=new Date(t.getTime()+2*86400000);}
-    G._tcp={measuredFT:'217',currentDoseMgWk:'0',totalT:'',shbg:'45',birthYear:'1985',manualLog:log};
-    G._tcBwEntries=[{date:_amIso(new Date(st.getTime()-86400000)),free_t:217,shbg:45}];
+    G._tcp={measuredFT:String(_ft),currentDoseMgWk:'0',totalT:'',shbg:'45',birthYear:'1985',manualLog:log};
+    G._tcBwEntries=[{date:_amIso(new Date(st.getTime()-86400000)),free_t:_ft,shbg:45}];
     G._tcGhStack=[];
     var s=G._tcFreeTSeries(log.slice(),{});
     var ft=function(i){return s.total[i]*(s.calFT_arr?s.calFT_arr[i]:s.scale);};
@@ -10316,15 +10317,58 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcVermeulenFT === 'funct
   check('absolute model: plateau does NOT depend on how far into the protocol you are',
     _amSpread < 1.05,
     'peaks '+_amA.peak.toFixed(0)+' / '+_amB.peak.toFixed(0)+' / '+_amC.peak.toFixed(0)+' spread='+_amSpread.toFixed(3));
-  // 5. The plateau matches first principles: TT scales as (rate+P)/P, then Vermeulen.
+  // 5. The plateau matches first principles: TT is LINEAR in appearance rate with the
+  // population slope (TCALC_TT_PER_MGD, Bhasin 2001), offset so the line passes through
+  // this user's own dated draw, then Vermeulen.
+  // Before 2026-09-09 this read TT_base*(rate+P)/P0, taking the SLOPE from the user's own
+  // baseline. Changed on Henrik's instruction after that baseline was disclosed to have
+  // been deliberately depressed — see TCALC_TT_PER_MGD and doc 17.
   // No measured total T in this scenario -> 'partial' tier -> the beta power-law is OFF,
-  // so SHBG stays at the measured 45. (Applying beta here would be testing a different
-  // tier than the one the scenario configures.)
-  var _amTT0=G._tcInvVermeulenTT(217,45), _amMult=(_amRate+_amPsup)/G.TCALC_ENDOG_T_MGD;
-  var _amWant=G._tcVermeulenFT(_amTT0*_amMult, 45);
-  check('absolute model: plateau matches (rate+P_suppressed)/P0 then Vermeulen, within 5%',
+  // so SHBG stays at the measured 45.
+  var _amTT0=G._tcInvVermeulenTT(217,45);
+  var _amSlope=(typeof G._tcTtPerMgd==='function')?G._tcTtPerMgd():G.TCALC_TT_PER_MGD;
+  var _amOff=_amTT0 - _amSlope*G.TCALC_ENDOG_T_MGD;      // pre-cycle draw: total == P0
+  var _amWant=G._tcVermeulenFT(_amSlope*(_amRate+_amPsup)+_amOff, 45);
+  check('absolute model: plateau is the trial slope * rate + personal offset, within 5%',
     Math.abs(_amA.peak-_amWant)/_amWant < 0.05,
     'model '+_amA.peak.toFixed(0)+' vs first-principles '+_amWant.toFixed(0));
+
+  // 5b. THE REASON FOR THE CHANGE: a wrong anchor must propagate ADDITIVELY, not
+  // multiplicatively. The calibrating draw can be wrong — this user's was engineered —
+  // so doubling-ish the baseline must shift the curve, not rescale the dose-response.
+  var _amHi=_amRun('2026-06-26',900,{ft:400});
+  if (_amHi && _amHi.peak > 0) {
+    var _amRatioIn  = 400/217;
+    var _amRatioOut = _amHi.peak/_amA.peak;
+    check('absolute model: a wrong baseline shifts the curve, it does not rescale it',
+      _amRatioOut < 1 + (_amRatioIn-1)*0.5,
+      'baseline x'+_amRatioIn.toFixed(2)+' -> peak x'+_amRatioOut.toFixed(2));
+  }
+
+  // 5c. THE CONSTANT IS THE TRIAL. TCALC_TT_PER_MGD must keep reproducing Bhasin 2001's
+  // dose arms, or it has drifted from the evidence it claims to encode. Nadir figures
+  // converted to steady-state means with the 1.517 ratio, then to nmol/L. The 25 mg arm
+  // is excluded from the fit (residual production under incomplete suppression dominates
+  // it) but is checked to sit ABOVE the line.
+  var _bhDose=[50,125,300,600], _bhNadir=[306,542,1345,2370], _bhOff=6.19, _bhWorst=0;
+  for (var _bi=0; _bi<_bhDose.length; _bi++) {
+    var _bhRate=_bhDose[_bi]*G._TC_T_FRACTION.enanthate/7;
+    var _bhObs=_bhNadir[_bi]*1.517/28.84;
+    _bhWorst=Math.max(_bhWorst, Math.abs((_amSlope*_bhRate+_bhOff)-_bhObs)/_bhObs);
+  }
+  check('dose->total-T slope still reproduces Bhasin 2001 (50-600 mg/wk), within 10%',
+    _bhWorst < 0.10, 'worst arm off by '+(_bhWorst*100).toFixed(1)+'%');
+  check('  …and the 25 mg/wk arm sits above the fitted line (residual production)',
+    (253*1.517/28.84) > (_amSlope*(25*G._TC_T_FRACTION.enanthate/7)+_bhOff));
+  // Served value wins over the local fallback — one number, one source.
+  var _svSlope=G._tcDoseResponse;
+  G._tcDoseResponse={mean_slope_nmol_per_mgd:2.5};
+  check('  …and a backend-served slope overrides the offline constant',
+    Math.abs(G._tcTtPerMgd()-2.5)<1e-9, 'got '+G._tcTtPerMgd());
+  G._tcDoseResponse=null;
+  check('  …falling back to the documented constant when nothing is served',
+    Math.abs(G._tcTtPerMgd()-G.TCALC_TT_PER_MGD)<1e-9);
+  G._tcDoseResponse=_svSlope;
   // 6. Binding must stay SATURABLE. A linearised form pins the free fraction at a
   //    constant, which under-reports free T by ~51% at supraphysiological total T —
   //    the direction that invites dose escalation. Independently verified 2026-08-01.
