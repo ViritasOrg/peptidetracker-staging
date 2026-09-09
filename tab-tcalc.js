@@ -1896,6 +1896,88 @@ function _tcSettleDay(valueAt, totalDays, floorDay) {
   return totalDays;
 }
 
+// ── PER-ESTER ATTRIBUTION ───────────────────────────────────────────────────
+// Henrik, 2026-09-09: "T-calc curve needs to show attribution from different esters
+// when more than one is used for the total free T curve."
+//
+// Contrasting palette, deliberately NOT each compound's own `dot`. Two testosterone
+// esters are the same class of drug and carry near-identical dots — fine on a list
+// row, useless for telling two overlaid lines apart on one chart, and the ask was
+// explicitly for contrasting colours.
+var _TC_ATTR_COLORS = ['#6ea8fe', '#ff7eb6', '#c77dff', '#ffd166', '#7ee0c0', '#f4845f'];
+var _TC_ATTR_ENDOG_ID = '__endog__';
+var _TC_ATTR_ENDOG_COLOR = '#8891a5';   // recessive grey: own production is context, not a dose
+
+function _tcAttrKey(id) { return 'tc-attr-' + id; }
+function _tcAttrVisible(id) {
+  try { return localStorage.getItem(_tcAttrKey(id)) !== 'false'; } catch (e) { return true; }
+}
+function _tcToggleAttr(id, el) {
+  var v = el ? !!el.checked : !_tcAttrVisible(id);
+  setData(_tcAttrKey(id), v);
+  if (typeof pushPepSettingsToAgent === 'function') {
+    var _pp = {}; _pp[_tcAttrKey(id)] = v; pushPepSettingsToAgent(_pp);
+  }
+  _tcDrawManualChart('tc-main-chart', _tcCurveLog(), _tcChartZoom);
+}
+
+// The compounds the attribution will split the curve into, in the order they first
+// appear in the log. Derived from the LOG, not from a run of the model, so the legend
+// and the chart cannot list different esters — but it is the same set _tcFreeTSeries
+// keys byComp by, and a test holds those two in step.
+// Fewer than two compounds → no attribution: with one ester its line is the total
+// curve less a flat baseline, which says nothing and just clutters the plot.
+function _tcAttrCompIds(log) {
+  var seen = {}, ids = [];
+  (log || []).slice().sort(function(a, b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; })
+    .forEach(function(e) {
+      if (!e || !e.compId || seen[e.compId]) return;
+      seen[e.compId] = 1; ids.push(e.compId);
+    });
+  return ids.length >= 2 ? ids : [];
+}
+
+// Legend rows: one per compound, plus own production. Own production is included
+// because without it the lines visibly fail to sum to the total curve — one chart
+// showing two irreconcilable accounts of the same quantity, which is the thing
+// CLAUDE.md's ONE NUMBER, ONE SOURCE rule exists to prevent.
+function _tcAttrRows(log) {
+  var ids = _tcAttrCompIds(log);
+  if (!ids.length) return [];
+  var rows = ids.map(function(id, i) {
+    return { id: id, label: (_tcCompInfo(id).name || id),
+             color: _TC_ATTR_COLORS[i % _TC_ATTR_COLORS.length] };
+  });
+  if (TCALC_ENDOG_T_MGD > 0) {
+    rows.push({ id: _TC_ATTR_ENDOG_ID, label: 'Own production', color: _TC_ATTR_ENDOG_COLOR });
+  }
+  return rows;
+}
+
+// Split the PLOTTED free-T curve into one line per component.
+//
+// EXACT, not an approximation. At each day the model turns a single appearance rate
+// into pmol/L with one factor — calFT_arr[t] — so multiplying each component's share
+// of that rate by the SAME factor gives lines that sum to the total curve at every
+// point, by construction.
+//
+// WHAT IT IS NOT: "what this ester would give you on its own". That factor is set by
+// everything on board (SHBG suppression, the solved baseline, HPTA suppression of own
+// production), so dropping one ester would move the others' lines. Each line is that
+// ester's share of the level you actually have, in this stack.
+function _tcAttrSeries(S, log) {
+  if (!S || !S.byComp) return [];
+  var rows = _tcAttrRows(log || S.sorted);
+  if (!rows.length) return [];
+  var out = [];
+  rows.forEach(function(r) {
+    var arr = (r.id === _TC_ATTR_ENDOG_ID) ? S.endog : S.byComp[r.id];
+    if (!arr) return;
+    out.push({ id: r.id, label: r.label, color: r.color, rate: arr });
+  });
+  return out;
+}
+
 function _tcShowAvg() {
   try { return localStorage.getItem('tc-avg-line') !== 'false'; } catch (e) { return true; }
 }
@@ -2062,6 +2144,14 @@ function _tcFreeTSeries(sorted, hooks) {
   var totalLo = new Float64Array(totalDays + 1);
   var totalHi = new Float64Array(totalDays + 1);
   var hasPkBand = false;
+  // PER-COMPOUND APPEARANCE RATE, same mg/day units as total[], one array per compound.
+  // Summed with endog[] below it reconstructs total[] exactly — this is a decomposition of
+  // the curve that is already drawn, never a second model. See _tcAttrSeries for how the
+  // shares become pmol/L.
+  var byComp = {};
+  function _bcArr(id) {
+    return byComp[id] || (byComp[id] = new Float64Array(totalDays + 1));
+  }
 
   sorted.forEach(function(e) {
     var cd    = _tcCompInfo(e.compId);
@@ -2077,9 +2167,12 @@ function _tcFreeTSeries(sorted, hooks) {
     // it is a real error the moment two esters are compared or one is switched for
     // another (enanthate vs undecanoate is 14%).
     var absorbed  = parseDec(e.doseMg) * bioav * (cd.testosteroneFraction || 1);
-    var series = [[hl, total], [hlLo, totalLo], [hlHi, totalHi]];
+    // The third slot is the compound's own accumulator, filled from the CENTRAL series
+    // only: the PK band is an envelope of the half-life range, not a component of the
+    // total, so splitting it per compound would not add up to anything.
+    var series = [[hl, total, _bcArr(e.compId)], [hlLo, totalLo, null], [hlHi, totalHi, null]];
     for (var si = 0; si < series.length; si++) {
-      var _hl = series[si][0], arr = series[si][1];
+      var _hl = series[si][0], arr = series[si][1], cArr = series[si][2];
       var ke  = Math.LN2 / _hl;
       var ka  = _tcKa(_hl, cd.tmaxDays);
       for (var t = injectDay; t <= totalDays; t++) {
@@ -2088,7 +2181,9 @@ function _tcFreeTSeries(sorted, hooks) {
         // injected testosterone mass: every mg eventually appears, nothing invented.
         // This is what lets the whole curve be computed from physiology instead of
         // being scaled to fit one lab value. See the model note above _tcFreeTSeries.
-        arr[t] += ke * _tcPkConc(absorbed, ka, ke, t - injectDay);
+        var _inc = ke * _tcPkConc(absorbed, ka, ke, t - injectDay);
+        arr[t] += _inc;
+        if (cArr) cArr[t] += _inc;
       }
     }
   });
@@ -2257,8 +2352,13 @@ function _tcFreeTSeries(sorted, hooks) {
         var wsLookback   = Math.ceil(wsHl * 10 / wsIv);
         for (var _wsk = 1; _wsk <= wsLookback; _wsk++) {
           var _wsDt = _wsk * wsIv;
+          var _wsArr = _bcArr(wsId);
           for (var _wst = 0; _wst <= totalDays; _wst++) {
-            total[_wst] += wsKe * _tcPkConc(wsDosePerInj, wsKa, wsKe, _wst + _wsDt);
+            // The residual is THIS compound still appearing from before the log began,
+            // so it is attributed to it rather than left as an unexplained remainder.
+            var _wsInc = wsKe * _tcPkConc(wsDosePerInj, wsKa, wsKe, _wst + _wsDt);
+            total[_wst] += _wsInc;
+            _wsArr[_wst] += _wsInc;
           }
         }
       });
@@ -2270,9 +2370,13 @@ function _tcFreeTSeries(sorted, hooks) {
   // itself (its peak/trough mean, or total[today]) and therefore had no physical meaning
   // while setting the entire multiplier. total[] is now drug + own production throughout.
   var _endogP = TCALC_ENDOG_T_MGD > 0 ? TCALC_ENDOG_T_MGD : 0;
+  var endog = new Float64Array(totalDays + 1);
   if (_endogP > 0) {
     for (var _ep = 0; _ep <= totalDays; _ep++) {
-      total[_ep] += _tcEndogAt(total[_ep], _endogP);
+      // Kept, not just added: without it the per-compound lines would not sum to the
+      // total and the chart would contradict itself.
+      endog[_ep] = _tcEndogAt(total[_ep], _endogP);
+      total[_ep] += endog[_ep];
       if (hasPkBand) {
         totalLo[_ep] += _tcEndogAt(totalLo[_ep], _endogP);
         totalHi[_ep] += _tcEndogAt(totalHi[_ep], _endogP);
@@ -2591,6 +2695,7 @@ function _tcFreeTSeries(sorted, hooks) {
            totalLo: totalLo, totalHi: totalHi, hasPkBand: hasPkBand,
            calFTPkLo: _calFTPkLo, calFTPkHi: _calFTPkHi,
            calFT_arr: calFT_arr, calFTlo: _calFTlo, calFThi: _calFThi, unitLabel: unitLabel,
+           byComp: byComp, endog: endog,
            measuredFT: _mftNum, ghAnnot: _ghAnnot, betaAnnot: _betaAnnot, bfAnnot: _bfAnnot, tier: _tier, sorted: sorted };
 }
 
@@ -4044,6 +4149,30 @@ function _tcDrawManualChart(canvasId, log, zoom3) {
   ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
   ctx.setLineDash([]);
 
+  // ── PER-ESTER ATTRIBUTION LINES ────────────────────────────────────────────
+  // Drawn ON TOP of the total, not under it: they sit below it by construction and
+  // the gradient fill under the total curve would otherwise wash them out. Thinner
+  // than the total (1.5 vs 2) so the headline curve still reads as the headline.
+  // Only when more than one compound is in play — see _tcAttrCompIds.
+  var _attr = _tcAttrSeries(_S, sorted);
+  if (calFT && _attr.length) {
+    if (canvas._testAttrHook) canvas._testAttrHook(_attr);
+    _attr.forEach(function(_c) {
+      if (!_tcAttrVisible(_c.id)) return;
+      // SAME per-day conversion factor as the total curve. This is what makes the
+      // lines sum to it rather than being a second, disagreeing model.
+      var _cv = function(t) {
+        var v = _c.rate[t] * (calFT_arr ? calFT_arr[t] : scale);
+        return (isFinite(v) && v > 0) ? v : 0;
+      };
+      ctx.beginPath();
+      ctx.moveTo(xOf(xStart), yOf(_cv(xStart)));
+      for (var _ct = xStart + 1; _ct <= xEnd; _ct++) ctx.lineTo(xOf(_ct), yOf(_cv(_ct)));
+      ctx.strokeStyle = _c.color; ctx.lineWidth = 1.5; ctx.lineJoin = 'round';
+      ctx.stroke();
+    });
+  }
+
   // AVERAGE reference line (teal, toggleable) — the mean level over the CURRENTLY
   // VISIBLE window, so it tracks the zoom (day/week/month/whole) instead of sitting at
   // one global value. In Whole it reads the whole-cycle average; zoom in and it reports
@@ -5230,6 +5359,27 @@ function buildTCalc() {
       '<input type="checkbox" ' + (_tcShowAvg() ? 'checked' : '') + ' onchange="_tcToggleAvgLine(this)" style="accent-color:#5ad1b0;width:13px;height:13px;cursor:pointer;margin:0"> ' +
       '<span style="color:#5ad1b0">■</span> STEADY-STATE AVERAGE' +
       '</label>';
+    // ── ATTRIBUTION LEGEND ───────────────────────────────────────────────────
+    // Only appears when more than one compound feeds the curve; with a single ester
+    // there is nothing to attribute. Rows come from _tcAttrRows, the same helper the
+    // chart splits by, so the legend cannot name a line the chart does not draw.
+    var _attrRows = _tcAttrRows(validLog);
+    if (_attrRows.length) {
+      html += '<div style="display:flex;flex-wrap:wrap;gap:6px 12px;margin-bottom:8px">';
+      _attrRows.forEach(function(r) {
+        html += '<label style="display:flex;align-items:center;gap:5px;font-size:9px;font-weight:700;letter-spacing:0.6px;color:var(--muted2);cursor:pointer;user-select:none">' +
+          '<input type="checkbox" ' + (_tcAttrVisible(r.id) ? 'checked' : '') +
+          ' onchange="_tcToggleAttr(\'' + _esc(String(r.id).replace(/'/g, "\\'")) + '\', this)" style="accent-color:' + r.color + ';width:13px;height:13px;cursor:pointer;margin:0"> ' +
+          '<span style="color:' + r.color + '">■</span> ' + _esc(String(r.label).toUpperCase()) +
+          '</label>';
+      });
+      html += '</div>';
+      // The caveat has to be on the chart, not in a doc: a component line is that
+      // ester's share of the level you actually have, not what it would give alone.
+      html += '<div style="font-size:9px;color:var(--muted2);opacity:0.7;line-height:1.5;margin:-4px 0 8px">' +
+        'Each line is that compound\'s share of the total at that moment. They add up to the curve \u2014 ' +
+        'they are not what one compound would give on its own.</div>';
+    }
     html += '<canvas id="tc-main-chart" style="width:100%;display:block;"></canvas>';
     if (mftNum > 0) {
       html += '<button id="tc-hist-save" onclick="tcUpdateSavedHistory(\'tc-hist-save\')" style="width:100%;margin-top:10px;background:none;border:1px solid var(--border);border-radius:10px;color:var(--muted2);font-size:12px;font-weight:600;padding:9px;cursor:pointer">Update saved history</button>';

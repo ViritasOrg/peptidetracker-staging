@@ -16870,3 +16870,212 @@ console.log('\n── zoom strip: offered levels are styled levels ──');
     try { G._tcSetChartZoom(_zsSaveZoom || 'whole'); } catch (e) {}
   }
 }
+
+// ── PER-ESTER ATTRIBUTION ON THE T-CALC CURVE ───────────────────────────────
+// Henrik, 2026-09-09: "T-calc curve needs to show attribution from different esters
+// when more than one is used for the total free T curve ... in contrasting colors and
+// with a legend with checkboxes to show hide them."
+//
+// The thing that can go wrong here is not "does a line appear". It is the lines saying
+// something different from the curve they sit under — ONE NUMBER, ONE SOURCE. So the
+// load-bearing assertions are the two reconciliations: the components sum to the total
+// appearance rate, and the drawn component lines sum to the drawn curve in pmol/L.
+console.log('\n── T-calc: per-ester attribution ───────────────────────────');
+if (typeof G._tcFreeTSeries === 'function' && typeof G._tcAttrSeries === 'function') {
+  var _atSaveTp = G._tcp, _atSaveBw = G._tcBwEntries, _atSaveGh = G._tcGhStack;
+  var _atSaveGE = G.document.getElementById;
+
+  function _atDay(base, i, step) {
+    var d = new Date(new Date(base).getTime() + i * step * 86400000);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  // Henrik's actual shape: a long-ester depot alongside a short ester.
+  var _atLog = [];
+  for (var _ai = 0; _ai < 4; _ai++)  _atLog.push({compId:'nebido',    doseMg:'1000', date:_atDay('2026-01-05', _ai, 84)});
+  for (var _aj = 0; _aj < 30; _aj++) _atLog.push({compId:'enanthate', doseMg:'100',  date:_atDay('2026-02-01', _aj, 3.5)});
+  G._tcp = {measuredFT:'500', currentDoseMgWk:'', totalT:'', shbg:'', birthYear:'1985', manualLog:_atLog};
+  G._tcBwEntries = [{date:'2026-06-20', free_t:500}]; G._tcGhStack = [];
+  var _atSorted = _atLog.slice().sort(function(a,b){ return a.date < b.date ? -1 : 1; });
+  var _atS = G._tcFreeTSeries(_atSorted, {});
+
+  check('the series carries a per-compound split', !!_atS.byComp && Object.keys(_atS.byComp).length === 2,
+    'keys=' + Object.keys(_atS.byComp || {}).join(','));
+  check('  …one array per ester actually injected',
+    !!(_atS.byComp && _atS.byComp.nebido && _atS.byComp.enanthate));
+  check('  …and own production is kept as its own component, not folded away',
+    !!_atS.endog && _atS.endog[10] > 0);
+
+  // ⚠️ THE RECONCILIATION. If this drifts, the chart shows two accounts of one number.
+  var _atWorst = 0, _atWorstDay = -1;
+  for (var _ad = 0; _ad <= _atS.totalDays; _ad++) {
+    var _asum = _atS.endog[_ad];
+    Object.keys(_atS.byComp).forEach(function(k){ _asum += _atS.byComp[k][_ad]; });
+    var _adiff = Math.abs(_asum - _atS.total[_ad]);
+    var _arel  = _atS.total[_ad] > 0 ? _adiff / _atS.total[_ad] : _adiff;
+    if (_arel > _atWorst) { _atWorst = _arel; _atWorstDay = _ad; }
+  }
+  check('the components sum to the total appearance rate at EVERY day',
+    _atWorst < 1e-9, 'worst rel err ' + _atWorst.toExponential(2) + ' at day ' + _atWorstDay);
+
+  // Attribution is for more than one ester. With one there is nothing to attribute.
+  var _atSolo = _atLog.filter(function(e){ return e.compId === 'enanthate'; });
+  check('one ester → no attribution offered', G._tcAttrCompIds(_atSolo).length === 0);
+  check('  …two esters → both, in the order they first appear',
+    G._tcAttrCompIds(_atLog).join(',') === 'nebido,enanthate',
+    G._tcAttrCompIds(_atLog).join(','));
+
+  // The legend is built from the log at render time and the chart splits the model's
+  // byComp. Those are two code paths; if they disagree the legend names a line that is
+  // not drawn, or misses one that is.
+  var _atRows = G._tcAttrRows(_atLog);
+  var _atRowIds = _atRows.map(function(r){ return r.id; }).filter(function(id){ return id !== '__endog__'; });
+  check('the legend lists exactly the compounds the model split by',
+    _atRowIds.slice().sort().join(',') === Object.keys(_atS.byComp).sort().join(','),
+    'legend=[' + _atRowIds.join(',') + '] model=[' + Object.keys(_atS.byComp).join(',') + ']');
+  check('  …and a row for own production, so the lines reconcile with the curve',
+    _atRows.some(function(r){ return r.id === '__endog__'; }));
+  check('  …each row named, not left as a raw id',
+    _atRows.every(function(r){ return r.label && r.label !== r.id; }),
+    _atRows.map(function(r){ return r.id + '→' + r.label; }).join(' '));
+  // "In contrasting colors" was the request. Distinct is the testable part of it.
+  check('  …in colours that are distinct from one another',
+    (function(){ var seen = {}; return _atRows.every(function(r){
+      if (!r.color || seen[r.color]) return false; seen[r.color] = 1; return true; }); })(),
+    _atRows.map(function(r){ return r.color; }).join(' '));
+
+  // The drawn lines. Capture what the chart actually strokes.
+  var _atStrokes = [];
+  var _atCtx = { scale:noop,beginPath:noop,arc:noop,fill:noop,fillText:noop,closePath:noop,save:noop,restore:noop,
+                 fillRect:noop,setLineDash:noop,strokeRect:noop,translate:noop,rotate:noop,moveTo:noop,lineTo:noop,
+                 measureText:function(){return{width:0};},createLinearGradient:function(){return{addColorStop:noop};},
+                 stroke:function(){ _atStrokes.push(this.strokeStyle); } };
+  var _atSeen = null;
+  G.document.getElementById = function(id){
+    return id === 'tc-main-chart'
+      ? { style:{}, classList:{add:noop,remove:noop,contains:function(){return false;}},
+          offsetWidth:350, offsetHeight:250,
+          _testAttrHook:function(a){ _atSeen = a; }, getContext:function(){ return _atCtx; } }
+      : _atSaveGE(id);
+  };
+  function _atDraw(){
+    _atStrokes = []; _atSeen = null;
+    var threw = false;
+    try { G._tcDrawManualChart('tc-main-chart', _atLog, 'whole'); } catch(e){ threw = e.message; }
+    return threw;
+  }
+  ['nebido','enanthate','__endog__'].forEach(function(id){ try { G.localStorage.removeItem('tc-attr-' + id); } catch(e){} });
+  var _atThrew = _atDraw();
+  check('the chart draws without throwing with attribution on', _atThrew === false, String(_atThrew));
+  check('  …and reports the components it drew', !!_atSeen && _atSeen.length === _atRows.length,
+    _atSeen ? String(_atSeen.length) : 'null');
+  if (_atSeen) {
+    // THE SECOND RECONCILIATION — in the unit the user reads off the axis.
+    var _atPmolWorst = 0;
+    for (var _pd = 0; _pd <= _atS.totalDays; _pd += 7) {
+      var _fac = _atS.calFT_arr ? _atS.calFT_arr[_pd] : _atS.scale;
+      var _psum = 0;
+      _atSeen.forEach(function(c){ _psum += c.rate[_pd] * _fac; });
+      var _ptot = _atS.total[_pd] * _fac;
+      var _pe = _ptot > 0 ? Math.abs(_psum - _ptot) / _ptot : 0;
+      if (_pe > _atPmolWorst) _atPmolWorst = _pe;
+    }
+    check('  …whose pmol/L lines sum to the plotted curve', _atPmolWorst < 1e-9,
+      'worst rel err ' + _atPmolWorst.toExponential(2));
+    var _atColors = _atSeen.map(function(c){ return c.color; });
+    check('  …each stroked in its legend colour',
+      _atColors.every(function(c){ return _atStrokes.indexOf(c) >= 0; }),
+      'missing: ' + _atColors.filter(function(c){ return _atStrokes.indexOf(c) < 0; }).join(','));
+  }
+
+  // The checkboxes have to actually hide a line, not just uncheck.
+  var _atNebColor = (_atRows.filter(function(r){ return r.id === 'nebido'; })[0] || {}).color;
+  var _atEnaColor = (_atRows.filter(function(r){ return r.id === 'enanthate'; })[0] || {}).color;
+  try { G.localStorage.setItem('tc-attr-nebido', 'false'); } catch(e){}
+  _atDraw();
+  check('unchecking a compound removes its line from the chart',
+    _atStrokes.indexOf(_atNebColor) < 0, 'still stroked ' + _atNebColor);
+  check('  …and leaves the others drawn', _atStrokes.indexOf(_atEnaColor) >= 0);
+  try { G.localStorage.setItem('tc-attr-nebido', 'true'); } catch(e){}
+  _atDraw();
+  check('  …re-checking brings it back', _atStrokes.indexOf(_atNebColor) >= 0);
+  ['nebido','enanthate','__endog__'].forEach(function(id){ try { G.localStorage.removeItem('tc-attr-' + id); } catch(e){} });
+
+  // A single-ester user must see no legend and no extra lines — the feature is scoped
+  // to "when more than one is used", not "always".
+  var _atSoloRows = G._tcAttrRows(_atSolo);
+  check('a single-ester log offers no legend at all', _atSoloRows.length === 0);
+  _atStrokes = []; _atSeen = null;
+  var _atSoloThrew = false;
+  try { G._tcDrawManualChart('tc-main-chart', _atSolo, 'whole'); } catch(e){ _atSoloThrew = true; }
+  check('  …and its chart still draws, with no component lines',
+    !_atSoloThrew && _atSeen === null);
+
+  // ── THE LEGEND ITSELF ────────────────────────────────────────────────────
+  // Everything above tests the split and the lines. This renders the tab and reads
+  // the markup, because a legend that lists the right rows in a helper and emits
+  // broken HTML is still a broken legend.
+  if (typeof G.buildTCalc === 'function' && typeof G._tcCurveLog === 'function') {
+    var _lgHtml = '', _lgEl = { innerHTML: '', style:{}, scrollTop:0,
+      classList:{add:noop,remove:noop,contains:function(){return false;}},
+      querySelectorAll:function(){return [];}, appendChild:noop };
+    var _lgSaveCurve = G._tcCurveLog, _lgSaveReady = G._tcInputsReady;
+    // ⚠️ RENDERING THE TAB MUST NOT LEAVE NETWORK WORK IN FLIGHT.
+    // buildTCalc loads the profile and pushes settings on its first call. Those
+    // promises resolve long after this synchronous block, land in the middle of the
+    // async inj-writer suite at the end of the file — which swaps the shared fetch
+    // between awaits — and take its remaining checks down with them. Silently: the
+    // count just drops. So the profile is marked loaded and fetch is neutralised for
+    // the duration of the render, then both are put back.
+    var _lgSaveFetch = G.fetch, _lgSaveLoaded = G._tcpSessionLoaded, _lgSavePush = G.pushPepSettingsToAgent;
+    var _lgSaveHist = G._tcFetchHistory, _lgSaveHistState = G._tcHistoryState;
+    G._tcpSessionLoaded = true;
+    G.fetch = async function(){ return {ok:true, status:200, json:async function(){ return {}; }}; };
+    G.pushPepSettingsToAgent = noop;
+    // buildTCalc kicks off the injection-history fetch. Leaving that promise in flight is
+    // what took the async inj-writer suite down: its continuation lands between that
+    // block's awaits, and that block swaps the shared fetch around each one.
+    G._tcFetchHistory = function(){ return Promise.resolve(); };
+    G._tcCurveLog   = function(){ return _atLog.slice(); };
+    G._tcInputsReady = function(){ return true; };
+    G.document.getElementById = function(id){
+      return id === 'tcalc-body' ? _lgEl
+           : id === 'tc-main-chart' ? { style:{}, classList:{add:noop,remove:noop,contains:function(){return false;}},
+               offsetWidth:350, offsetHeight:250, getContext:function(){ return _atCtx; } }
+           : _atSaveGE(id);
+    };
+    var _lgThrew = false;
+    try { G.buildTCalc(); _lgHtml = _lgEl.innerHTML || ''; } catch(e){ _lgThrew = e.message; }
+    G._tcCurveLog = _lgSaveCurve; G._tcInputsReady = _lgSaveReady;
+    check('the T-Calc tab renders with a two-ester log', _lgThrew === false, String(_lgThrew));
+    if (!_lgThrew) {
+      var _lgRows = G._tcAttrRows(_atLog);
+      _lgRows.forEach(function(r){
+        check('legend: a checkbox for ' + r.label,
+          _lgHtml.indexOf('_tcToggleAttr(\'' + r.id + '\'') >= 0 &&
+          _lgHtml.indexOf(r.color) >= 0);
+      });
+      check('legend: every checkbox is wired to the toggle, none left inert',
+        (_lgHtml.match(/_tcToggleAttr\(/g) || []).length === _lgRows.length,
+        String((_lgHtml.match(/_tcToggleAttr\(/g) || []).length));
+      // The caveat is the honest part of the feature: a component line is a SHARE of
+      // the level, not what that ester would give alone. It has to be on screen.
+      check('legend: says the lines add up to the curve, not what one ester gives alone',
+        /add up to the curve/.test(_lgHtml) && /on its own/.test(_lgHtml));
+    }
+    // A single-ester user must get no legend markup at all.
+    G._tcCurveLog = function(){ return _atSolo.slice(); };
+    G._tcInputsReady = function(){ return true; };
+    _lgEl.innerHTML = '';
+    var _lgSoloThrew = false;
+    try { G.buildTCalc(); } catch(e){ _lgSoloThrew = true; }
+    check('legend: a single-ester tab renders no attribution markup',
+      !_lgSoloThrew && (_lgEl.innerHTML || '').indexOf('_tcToggleAttr(') < 0);
+    G._tcCurveLog = _lgSaveCurve; G._tcInputsReady = _lgSaveReady;
+    G.fetch = _lgSaveFetch; G._tcpSessionLoaded = _lgSaveLoaded;
+    G.pushPepSettingsToAgent = _lgSavePush;
+    G._tcFetchHistory = _lgSaveHist; G._tcHistoryState = _lgSaveHistState;
+  }
+
+  G.document.getElementById = _atSaveGE;
+  G._tcp = _atSaveTp; G._tcBwEntries = _atSaveBw; G._tcGhStack = _atSaveGh;
+}
