@@ -1849,7 +1849,18 @@ function buildStackStore(){
     return;
   }
   var SLOTS=4;
-  var html='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">';
+  // ⚠️ minmax(0,1fr), NOT 1fr — A LONG PROTOCOL NAME MUST NOT RESIZE THE GRID.
+  // A `1fr` track's minimum is `auto`, which resolves to min-content, so the
+  // track grows to fit the widest unbreakable thing inside it. .stack-card-name
+  // has had ellipsis truncation all along and it never fired, because the column
+  // simply widened to accommodate the name instead of the name being clipped to
+  // the column. Reported 2026-09-09: "Protocol 4 TRT-HGH-Mast-Reta/GLOW" took
+  // most of the row, squeezing the card beside it to a sliver.
+  //
+  // minmax(0,1fr) floors the track at 0 so it can shrink below its content, at
+  // which point the ellipsis does its job. Paired with min-width:0 on .stack-card
+  // in main.css — the track can only shrink if the item inside it can too.
+  var html='<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;">';
   for(var i=0;i<Math.min(_userStacks.length,SLOTS);i++){
     var st=_userStacks[i];
     var isActive=_isActiveStack(i);
