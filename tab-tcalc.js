@@ -2628,7 +2628,26 @@ var _TC_SOLVE_DAMPING   = 0.5;   // see the note in the iteration loop  // upper
 
 // Candidate cadences, in the shape _genInjBatches actually schedules.
 // days[] for weekday-based dosing, freqVal/freqUnit for interval-based.
+//
+// ⚠️ DAILY IS SUPPORTED FOR EVERY ESTER — Henrik, 2026-09-09: "Daily injections
+// must be supported for all esters." It is the shortest interval a user can
+// actually choose, and for a fast ester it is the only one that holds a level:
+// propionate at every-2-days ripples 82% on this model, and daily is what fixes
+// that. Excluding it made the Dose Finder unable to answer the question at all
+// for short esters.
+//
+// ONE LIST, BOTH SURFACES. The Dose Finder's dropdown and tcSolveTransition's
+// candidate set are the same array on purpose — a second copy is how two screens
+// start offering different schedules for the same drug.
+//
+// That does mean the transition solver now scores daily too, and for a long
+// depot it should never WIN: the ranking's third key is fewer injections
+// precisely so a flat-ripple ester cannot be handed 56 jabs to achieve what 4
+// achieve (see the note there). Supporting a cadence the user picks and
+// recommending it unprompted are different things, and only the first changes
+// here.
 var _TC_CADENCES = [
+  {key:'daily', label:'Daily',                  freqVal:1, freqUnit:'days', perWeek:7},
   {key:'e2d',  label:'Every 2 days',            freqVal:2, freqUnit:'days', perWeek:3.5},
   {key:'e3d',  label:'Every 3 days',            freqVal:3, freqUnit:'days', perWeek:7/3},
   {key:'2xwk', label:'Twice weekly (Mon/Thu)',  days:[1,4],                 perWeek:2},

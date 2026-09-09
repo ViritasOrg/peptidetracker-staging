@@ -690,6 +690,24 @@ function _tdResultCardHtml(){
       +  'Snapped to '+_esc(String(s.stepMl))+' ml steps at '+_esc(String(s.concMgPerMl))+' mg/ml — '
       +  Math.round(r.stepMg*10)/10+' mg per step. The figures above are the snapped schedule, '
       +  'not the exact solution ('+(Math.round(r.exactMg*10)/10)+' mg).</div>';
+
+    // ⚠️ AT A SHORT INTERVAL THE SYRINGE, NOT THE MODEL, SETS THE ERROR.
+    // A step is a fixed number of mg, so the finer the cadence the larger a
+    // fraction of each injection it is: 12.5 mg at 250 mg/ml is 7% of a weekly
+    // 175 mg shot and 50% of the daily 25 mg one. The solver already picks the
+    // nearer attainable LEVEL, so when it still lands far from target the cause
+    // is granularity and the lever is the vial, not the dose. Saying so is the
+    // difference between a number that looks wrong and one the user can act on.
+    var _miss = Math.abs(r.achieved - r.target) / r.target;
+    if(_miss > 0.10 && r.stepMg > r.mgPerInjection*0.2){
+      var _finer = Math.max(1, Math.round(parseDec(s.concMgPerMl)/2));
+      h += '<div style="font-size:11px;color:#f59e0b;line-height:1.65;margin-top:6px;">'
+        +  '⚠ That step is '+Math.round(r.stepMg/r.mgPerInjection*100)+'% of each injection, '
+        +  'so the nearest dose you can actually draw is '+Math.round(_miss*100)+'% off the target. '
+        +  'The vial is the limit here, not the schedule — a thinner one (around '
+        +  _finer+' mg/ml) makes each step '+Math.round(r.stepMg/2*10)/10+' mg and lets the dose land closer.'
+        +  '</div>';
+    }
   }
   h += '<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:6px;">'
     +  'Measured over the last dosing week of a '+r.weeks+'-week run — long enough for '
