@@ -2959,6 +2959,19 @@ console.log('\n── A delete reaches every injection cache, T-Calc included �
 // that specific moment" clause was the crack any plausible argument could
 // widen, so it is gone and this asserts it stays gone.
 {
+  // CLAUDE.md IS A STAGING-REPO FILE. The promotion copies index.html, tab-*.js,
+  // ci.yml and tests/ into prod, but not CLAUDE.md — prod's copy states prod's own
+  // rules and legitimately differs. Unguarded, these four rode the promotion into
+  // prod and failed its CI: that is 4 of the 7 failures on prod PR #362 (2026-09-09),
+  // and the same shape as the 2026-08-02 promote-workflow breakage documented at the
+  // bottom of this file, which pinned prod at v1.271. Any test that reads a file the
+  // promotion does not copy needs this guard.
+  //
+  // Scoped to the repo they are about, not weakened: on staging, or a checkout that
+  // cannot be identified at all, they run in full and still fail loudly.
+  if (_isProdCheckout(dir)) {
+    console.log('  – skipped on ' + _repoName(dir) + ' (staging-only CLAUDE.md)');
+  } else {
   const _md = require('fs').readFileSync(require('path').join(__dirname, '../CLAUDE.md'), 'utf8');
   check('CLAUDE.md states the stage-then-ping workflow up front',
     /STAGE, THEN PING\. NEVER PROD/.test(_md) && _md.indexOf('STAGE, THEN PING') < 2000);
@@ -2969,6 +2982,7 @@ console.log('\n── A delete reaches every injection cache, T-Calc included �
   check('the prod prohibition carries no go-ahead exception any more',
     /no "explicit go-ahead" exception any more/.test(_md) &&
     !/without Henrik's explicit go-ahead in that specific moment/.test(_md));
+  }
 }
 
 // ── A live protocol's OTHER spelling ────────────────────────────────────────
@@ -3214,6 +3228,11 @@ if (typeof G._tdModelBias === 'function') {
 
 // ── One number, one source — the standing rule ──────────────────────────────
 {
+  // Staging-only for the same reason as the block above: CLAUDE.md is not promoted.
+  // These three were the other 3 of the 7 failures on prod PR #362.
+  if (_isProdCheckout(dir)) {
+    console.log('  – skipped on ' + _repoName(dir) + ' (staging-only CLAUDE.md)');
+  } else {
   const _mdR = require('fs').readFileSync(
     require('path').join(__dirname, '../CLAUDE.md'), 'utf8');
   check('CLAUDE.md forbids two surfaces disagreeing about the same quantity',
@@ -3222,6 +3241,7 @@ if (typeof G._tdModelBias === 'function') {
     /_tcFreeTSeries/.test(_mdR) && /_renderEnhancedGuide/.test(_mdR));
   check('  …and requiring the fix at the source, not the display',
     /never at the display/.test(_mdR));
+  }
 }
 
 // ── EVERY RECOMMENDATION IS CHECKED AGAINST THE SOLVED TEST DOSE ────────────
@@ -10512,6 +10532,33 @@ function _repoName(dir) {
 function _isProdCheckout(dir) {
   var r = _repoName(dir);
   return !!r && !/-(staging|stage)$/.test(r);
+}
+
+// ── A TEST THAT READS A NON-PROMOTED FILE MUST BE SCOPED TO STAGING ─────────
+// promote-to-prod.yml copies index.html, the modules index.html loads, ci.yml,
+// css/ and `cp -r ../staging/tests .` — the whole test directory — into prod.
+// It does NOT copy CLAUDE.md or promote-to-prod.yml itself. So a test that reads
+// one of those rides the promotion into a repo where that file legitimately
+// differs, fails prod's CI, and blocks the promotion until someone digs the
+// reason out of a job log. That has now happened twice: 2026-08-02 (the
+// promote-workflow tests, which pinned prod at v1.271 while promote PRs piled
+// up) and 2026-09-09 (the CLAUDE.md tests — all 7 failures on prod PR #362).
+// Twice is a pattern, so this asserts the guard structurally instead of trusting
+// whoever adds the next one to remember.
+{
+  const _selfSrc = require('fs').readFileSync(__filename, 'utf8');
+  ['../CLAUDE.md', 'promote-to-prod.yml'].forEach(function (f) {
+    var idx = -1, unguarded = [];
+    while ((idx = _selfSrc.indexOf(f, idx + 1)) !== -1) {
+      // Only actual reads count; the name appears in prose and in this list too.
+      var before = _selfSrc.slice(Math.max(0, idx - 1200), idx);
+      if (!/readFileSync[\s\S]*$/.test(before.slice(-300))) continue;
+      if (!/_isProdCheckout\(dir\)/.test(before)) unguarded.push(idx);
+    }
+    check('reads of ' + f + ' are scoped to a staging checkout',
+      unguarded.length === 0,
+      'unguarded read at offset ' + unguarded.join(', '));
+  });
 }
 
 {
