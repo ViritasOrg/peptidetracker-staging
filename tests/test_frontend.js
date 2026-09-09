@@ -14160,6 +14160,55 @@ if(typeof G.calcMacros==='function'){
   check('  …and is not reported at all without a measured FFM, never estimated',
     G.calcMacros(90,'cut',false,{heightCm:180,age:45}).ea===null);
 
+  // ── THE PHASE OFFSET: FIXED kcal OR % OF MAINTENANCE ─────────────────────
+  // Henrik, 2026-09-09: "Give user a choice between % or standard numbers. If you want
+  // to loose 1kg fat per month the absolute number is probably more correct and
+  // consistent." Absolute stays the default for exactly that reason — a constant gap
+  // is a constant RATE, which is the thing being aimed at.
+  var _dmAbs={bodyFatPct:18, trainKcal:0, includeTraining:true, deficitMode:'absolute'};
+  var _dmPct={bodyFatPct:18, trainKcal:0, includeTraining:true, deficitMode:'percent'};
+  var _dmA=G.calcMacros(90,'cut',false,_dmAbs), _dmP=G.calcMacros(90,'cut',false,_dmPct);
+  check('absolute mode is the default when none is asked for',
+    G.calcMacros(90,'cut',false,{bodyFatPct:18}).deficitMode==='absolute');
+  check('  …and takes a flat 300 off maintenance whatever the maintenance is',
+    _dmA.phaseOffset===-300 && G.calcMacros(70,'cut',false,_dmAbs).phaseOffset===-300);
+  check('percent mode takes 15% of maintenance instead',
+    _dmP.phaseOffset===-Math.round(_dmP.tdee*G.MACROS_PCT_CUT), _dmP.phaseOffset+' of '+_dmP.tdee);
+  check('  …so it scales with the person and absolute does not',
+    G.calcMacros(70,'cut',false,_dmPct).phaseOffset !== _dmP.phaseOffset);
+  check('  …surplus is the small one, and reset is neither',
+    G.calcMacros(90,'recomp',false,_dmPct).phaseOffset===Math.round(_dmP.tdee*G.MACROS_PCT_SURPLUS) &&
+    G.calcMacros(90,'reset',false,_dmPct).phaseOffset===0 &&
+    G.calcMacros(90,'reset',false,_dmAbs).phaseOffset===0);
+  check('  …recomp is still +100 in absolute mode',
+    G.calcMacros(90,'recomp',false,_dmAbs).phaseOffset===100);
+
+  // THE RATE IS THE POINT. A deficit means nothing until it is kg per month.
+  check('the offset is reported as an expected rate of fat change',
+    _dmA.rate && Math.abs(_dmA.rate.kgPerMonth-(-300/G.MACROS_KCAL_PER_KG_FAT*30.44))<1e-9,
+    _dmA.rate?_dmA.rate.kgPerMonth.toFixed(3):'null');
+  check('  …a fixed 300 kcal/day is ~1.19 kg/month, near the 1 kg/month it is aimed at',
+    Math.abs(Math.abs(_dmA.rate.kgPerMonth)-1.186)<0.01, Math.abs(_dmA.rate.kgPerMonth).toFixed(3));
+  check('  …and the SAME absolute offset gives the SAME rate at any bodyweight',
+    Math.abs(G.calcMacros(70,'cut',false,_dmAbs).rate.kgPerMonth-_dmA.rate.kgPerMonth)<1e-9);
+  check('  …which percent mode does not — that is the trade-off the choice is about',
+    Math.abs(G.calcMacros(70,'cut',false,_dmPct).rate.kgPerMonth-_dmP.rate.kgPerMonth)>0.05);
+  check('  …reset has no rate at all', G.calcMacros(90,'reset',false,_dmAbs).rate===null);
+  // Helms 2014: 0.5–1% bodyweight per week preserves lean mass; past that it does not.
+  check('a rate past 1% of bodyweight per week is flagged, not silently served',
+    G.macrosRate(-1200,60).tooFast===true && G.macrosRate(-300,90).tooFast===false,
+    G.macrosRate(-1200,60).pctBwPerWeek.toFixed(2)+'%/wk vs '+G.macrosRate(-300,90).pctBwPerWeek.toFixed(2)+'%/wk');
+
+  if(typeof G._macrosEnergyCard==='function'){
+    var _ecP=G._macrosEnergyCard(_dmP), _ecA=G._macrosEnergyCard(_dmA);
+    check('the energy card offers both modes and marks the active one',
+      /setMacrosDeficitMode\('absolute'\)/.test(_ecA) && /setMacrosDeficitMode\('percent'\)/.test(_ecA));
+    check('  …shows the expected kg/month next to the target',
+      /Expected rate/.test(_ecA) && /kg\/month/.test(_ecA));
+    check('  …and labels the offset as fixed or as a percentage',
+      /fixed/.test(_ecA) && /15%/.test(_ecP));
+  }
+
   // Training burn card: driven by _macrosTrainKcal, and now says whether it counts.
   if(typeof G._macrosBurnCard==='function'){
     G._macrosTrainKcal=270;
