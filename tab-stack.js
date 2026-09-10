@@ -1109,12 +1109,37 @@ function trtSolveApply(scope,id,which){
       _offW=Math.round((_sd-_cs)/604800000);
     if(!(_offW>0))_offW=0;
   }
-  comp.dose_phases=phases.map(function(p){
+  var _mapped=phases.map(function(p){
     var e={w:(p.w||0)+_offW,d:p.d,u:p.u};
     if(p.iv>0)e.iv=p.iv;      // per-phase interval survives the round trip
     if(p.pattern&&p.pattern.length)e.pattern=p.pattern.slice();   // and the day pattern
     return e;
   });
+  // ── A CONSTANT DOSE IS NOT A RAMP ────────────────────────────────────────────
+  // Reported 2026-09-10 (prod v1.318): "Protocol 5 has Test E at 100mg e2d. If I drop it
+  // to 50mg e2d the curve doesn't change at all" — and then, decisively: "It's on but I
+  // never flipped it on."
+  //
+  // He did not. The phase builder in _tcSolveSchedule emits a phase wherever the dose
+  // CHANGES, and its loop always pushes week 0 (prev===null). A plain maintenance solve
+  // with no outgoing ester tail never changes dose, so it yields EXACTLY ONE phase — and
+  // this wrote it to dose_phases regardless. That single phase carries no ramp
+  // information at all: it is the flat dose under another name. What it does carry is
+  // consequences — the Dose ramp toggle reads as ON (hasRamp is length-based), and the
+  // generator resolves through _effectiveDoseAt, so the Dose field goes permanently
+  // inert. Editing 100 -> 50 then changes nothing, and survives a restart because the
+  // written injections genuinely still hold the old mg.
+  //
+  // So: one phase means set the flat dose and leave the ramp OFF. Multi-phase output is
+  // untouched — a real ester transition is what the ramp is for, and clearing that would
+  // break the feature the solver exists to provide.
+  //
+  // A per-phase interval or day pattern is the exception. Those are CADENCE, not dose,
+  // and the compound has nowhere else to keep them, so a lone phase carrying either must
+  // stay a ramp or the solved schedule silently loses its cadence.
+  var _lone=_mapped.length===1&&!(_mapped[0].iv>0)&&!(_mapped[0].pattern&&_mapped[0].pattern.length);
+  if(_lone)delete comp.dose_phases;   // also clears a stale ramp from an earlier solve
+  else comp.dose_phases=_mapped;
   comp.unit='mg';
   // Keep the flat dose in step with the maintenance dose, so turning the ramp OFF
   // later lands on the held dose rather than whatever was in the box beforehand.

@@ -1186,6 +1186,44 @@ function _slotLabel(t){return TIME_LABELS[t]||t||'';}
 function _slotKey(t){return String(t||'AM').toLowerCase();}
 function _canonUnit(u){return (u==='mcg')?'µg':(u||'');}
 function _doseLabel(pepId,doseVal,unit){var d=parseDec(doseVal);unit=_canonUnit(unit);var du=unit;if(!pepId||!doseVal||isNaN(d)||d<=0)return(doseVal||'')+(du||'');if(unit==='IU'||unit==='µg'||unit==='%')return doseVal+(du||'');var rec=RECON_DB[pepId];if(!rec||rec.unit==='IU')return doseVal+(du||'');var vi=rec.defaultVi!==undefined?rec.defaultVi:0;var wi=rec.defaultWi!==undefined?rec.defaultWi:0;var conc=(rec.vials||[])[vi]/((rec.water||[])[wi]);if(!conc||isNaN(conc))return doseVal+(du||'');var extra='';if(unit==='mg'){var iu=Math.round(d/conc*100);if(iu>0)extra=' ('+iu+' IU)';}else if(unit==='ml'){var mg=Math.round(d*conc);var iu=Math.round(d*100);var p=[];if(mg>0)p.push(mg+'mg');if(iu>0)p.push(iu+' IU');if(p.length)extra=' ('+p.join(' · ')+')';}return doseVal+(du||'')+extra;}
+// ── HEAL A ONE-PHASE "RAMP" THAT WAS NEVER A RAMP (2026-09-10) ───────────────
+// trtSolveApply used to write dose_phases for ANY solver result, and a plain maintenance
+// solve produces exactly one phase (the phase builder emits a step only where the dose
+// changes, and always pushes week 0). One phase carries no ramp information — it is the
+// flat dose under another name — but it switches the Dose ramp toggle on and makes the
+// Dose field inert, because the generator resolves through _effectiveDoseAt. Henrik hit
+// this on Protocol 5: "It's on but I never flipped it on", and dose edits did nothing,
+// across restarts, because the written injections genuinely held the old mg.
+//
+// The writer is fixed; protocols already carrying such a phase are collapsed here.
+//
+// ⚠️ DOSE-PRESERVING, DELIBERATELY. The phase is copied INTO the flat dose before the ramp
+// is dropped, so what is scheduled after this runs is exactly what was scheduled before —
+// the toggle goes off and the Dose field goes live, and nothing else moves. Simply
+// deleting dose_phases would have silently re-dosed anyone whose flat field had drifted
+// from the phase, which is precisely Henrik's state (phase 100, field 50) and is not a
+// change an app may make to a testosterone protocol on its own.
+//
+// A lone phase carrying a per-phase interval or day pattern is left alone: that is
+// CADENCE, and the compound has nowhere else to keep it.
+function _healSinglePhaseRamps(stacks){
+  var healed=false;
+  (stacks||[]).forEach(function(stack){
+    if(!stack)return;
+    [].concat((stack.trt&&stack.trt.compounds)||[],
+              (stack.enhanced&&stack.enhanced.compounds)||[]).forEach(function(c){
+      if(!c||!c.dose_phases||c.dose_phases.length!==1)return;
+      var ph=c.dose_phases[0];
+      if(!ph||ph.iv>0||(ph.pattern&&ph.pattern.length))return;
+      if(!(parseDec(ph.d)>0))return;      // an empty phase is a half-built ramp, not this
+      c.dose=String(ph.d);
+      if(ph.u)c.unit=ph.u;
+      delete c.dose_phases;
+      healed=true;
+    });
+  });
+  return healed;
+}
 // Returns {dose, unit, phaseIdx, totalPhases} for today based on dose_phases + cycle_start, or null if no ramp
 function _effectiveDose(p,cycleStart){if(!p||!p.dose_phases||!p.dose_phases.length||!cycleStart)return null;var sd=parseLocalDate(cycleStart);var wk=Math.floor((NOW-sd)/604800000);if(wk<0)wk=0;var phases=p.dose_phases.slice().sort(function(a,b){return a.w-b.w;});var cur=phases[0];var curIdx=0;for(var i=1;i<phases.length;i++){if(wk>=phases[i].w){cur=phases[i];curIdx=i;}}return cur?{dose:cur.d,unit:cur.u,phaseIdx:curIdx,totalPhases:phases.length}:null;}
 // ── User protocol state ──────────────────────────────────────────────────────
@@ -1297,6 +1335,7 @@ async function loadUserStacks(){
   if(!_userStacks.length)_activeStackIndices=[];
   _normalizeActiveStack();
   var _needIdSave=_userStacks.some(function(s){return s&&!s.id;});
+  var _rampHealed=_healSinglePhaseRamps(_userStacks);
   _userStacks.forEach(function(stack){
     _ensureStackId(stack);
     if(stack.cycle_start){var _csp=stack.cycle_start.split('-');stack.cycle_start=_csp[0]+'-'+(_csp[1]||'1').padStart(2,'0')+'-'+(_csp[2]||'1').padStart(2,'0');}
@@ -1320,7 +1359,7 @@ async function loadUserStacks(){
     });
   });
   // Persist any freshly-assigned stable stack ids (one-time backfill, idempotent).
-  if(_needIdSave&&typeof saveStacksToBackend==='function'){try{saveStacksToBackend();}catch(_e){}}
+  if((_needIdSave||_rampHealed)&&typeof saveStacksToBackend==='function'){try{saveStacksToBackend();}catch(_e){}}
   updateWEEKLY();
     _stacksNormalized=true;
   }catch(_e){_stacksNormalized=false;_logErr('loadStacks:normalize',_e);}
