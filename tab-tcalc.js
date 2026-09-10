@@ -621,12 +621,12 @@ var TCALC_ENDOG_T_MGD = 5;
 // 294 under this one — the old architecture is 12x more sensitive to a wrong baseline.
 //
 // That mattered concretely. The user's single calibrating draw (2026-06-26) was later
-// disclosed to have been DELIBERATELY DEPRESSED — sleep deprivation, alcohol and a
-// one-off opioid, taken to obtain a higher prescribed dose. A personal-slope model
-// anchored on it scales its entire dose-response off a number chosen to be low. The
-// whole justification for personal anchoring is that the user's own datapoint describes
-// them better than a population average; when the datapoint is engineered, it does not.
-// A model must degrade gracefully when its one input is wrong, and this one does.
+// established as UNRELIABLE: taken under acute conditions that depress testosterone, so
+// it understates the true baseline by an unknown amount. A personal-slope model anchored
+// on it scales its entire dose-response off that number. The whole justification for
+// personal anchoring is that the user's own datapoint describes them better than a
+// population average does; when the datapoint is unreliable, it does not. A model must
+// degrade gracefully when its one input is wrong, and this one does.
 //
 // THE VALUE. Bhasin et al., "Testosterone dose-response relationships in healthy young
 // men", Am J Physiol Endocrinol Metab 281:E1172 (2001), PMID 11701431. 61 eugonadal men,
