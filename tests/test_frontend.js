@@ -5366,6 +5366,72 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     G.editToggleTRTRamp('enanthate');
     check('  …toggling off removes the ramp entirely',
       G._editBuf.trt.compounds[0].dose_phases===undefined);
+    // ── A CONSTANT DOSE IS NOT A RAMP (2026-09-10, prod v1.318) ──────────────
+    // "If I drop it to 50mg e2d the curve doesn't change at all" — then, decisively,
+    // "It's on but I never flipped it on." trtSolveApply wrote dose_phases for ANY
+    // solver result, and a plain maintenance solve yields exactly ONE phase (a step is
+    // emitted only where the dose changes, and week 0 is always pushed). That phase is
+    // the flat dose under another name, but it turns the ramp toggle on and makes the
+    // Dose field inert, because the generator resolves through _effectiveDoseAt.
+    //
+    // Driven through the REAL trtSolveApply, not a copy of its logic: a test that
+    // re-implements the branch it is guarding passes whatever the shipped code does.
+    const _applySolve = (phases) => {
+      G._editBuf = {id:'sv', cycle_start:'2026-09-15',
+        trt:{enabled:true, compounds:[{id:'enanthate', name:'Test E', dose:'0', unit:'mg'}]}};
+      G._trtSolveState = G._trtSolveState || {};
+      G._trtSolveState['enanthate'] = {target:'', conc:'', step:'0.05', weeks:12,
+        running:false, error:'', result:{
+          best:{cadence:{freqVal:2, freqUnit:'days'}, phases:[]},
+          alternatives:[], dose_phases:phases}};
+      G.trtSolveApply('edit','enanthate','best');
+      return G._editBuf.trt.compounds[0];
+    };
+    const _one = _applySolve([{w:0,d:'100',u:'mg'}]);
+    check('solve · a single-phase result leaves the ramp OFF',
+      _one.dose_phases===undefined,
+      'one phase carries no ramp information — it must not deaden the Dose field');
+    check('solve · …and the flat dose carries the solved amount so nothing is lost',
+      _one.dose==='100', 'dose was ' + _one.dose);
+    check('solve · a real multi-phase transition still writes a ramp',
+      (_applySolve([{w:0,d:'80',u:'mg'},{w:4,d:'100',u:'mg'}]).dose_phases||[]).length===2,
+      'clearing this would break the feature the solver exists to provide');
+    check('solve · a lone phase carrying a cadence stays a ramp',
+      (_applySolve([{w:0,d:'100',u:'mg',iv:3}]).dose_phases||[]).length===1,
+      'iv/pattern are cadence, and the compound has nowhere else to keep them');
+
+    // The other half: protocols ALREADY carrying such a phase must heal on load, or
+    // Henrik's Protocol 5 stays stuck no matter what the writer does now.
+    const _heal = (comp) => {
+      const stacks=[{id:'p5', cycle_start:'2026-09-15',
+                     trt:{enabled:true, compounds:[comp]}}];
+      const changed=G._healSinglePhaseRamps(stacks);
+      return {c:stacks[0].trt.compounds[0], changed:changed};
+    };
+    // Henrik's exact state: the phase says 100, the field he edited says 50.
+    const _h = _heal({id:'enanthate', name:'Test E', dose:'50', unit:'mg',
+                      dose_phases:[{w:0, d:'100', u:'mg'}]});
+    check('heal · a lone phase is collapsed and the ramp switched off',
+      _h.c.dose_phases===undefined && _h.changed===true);
+    check('heal · …DOSE-PRESERVING: the schedule does not move, the field takes the phase',
+      _h.c.dose==='100',
+      'silently re-dosing to the drifted field value would be a dose change the app made '+
+      'by itself; got ' + _h.c.dose);
+    // A genuine ramp must survive untouched.
+    const _h2 = _heal({id:'enanthate', dose:'100', unit:'mg',
+                       dose_phases:[{w:0,d:'80',u:'mg'},{w:4,d:'100',u:'mg'}]});
+    check('heal · a real multi-phase ramp is left alone',
+      (_h2.c.dose_phases||[]).length===2 && _h2.changed===false);
+    const _h3 = _heal({id:'enanthate', dose:'100', unit:'mg',
+                       dose_phases:[{w:0,d:'100',u:'mg',iv:3}]});
+    check('heal · a lone phase carrying a cadence is left alone',
+      (_h3.c.dose_phases||[]).length===1 && _h3.changed===false);
+    const _h4 = _heal({id:'enanthate', dose:'100', unit:'mg',
+                       dose_phases:[{w:0,d:'',u:'mg'}]});
+    check('heal · a half-built empty phase is not mistaken for this',
+      (_h4.c.dose_phases||[]).length===1 && _h4.changed===false,
+      'a user mid-way through building a ramp must not have it deleted under them');
+
     G.editSetTRTDate('enanthate','start_date','2026-09-29');
     check('editSetTRTDate writes the window', G._editBuf.trt.compounds[0].start_date==='2026-09-29');
     G.editSetTRTDate('enanthate','start_date','');
