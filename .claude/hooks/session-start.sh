@@ -38,6 +38,15 @@ DATA: everything (compound params, ranges, all user data) lives in
 claude-agent-backend and is served by API. Attach that repo and read it rather
 than guessing from index.html.
 
+⛔ A BLOCKED SANDBOX IS NOT "UNSOURCEABLE". EuropePMC/PubMed/DailyMed fail at
+CONNECT from here BY DESIGN. The backend's fetch-sources.yml workflow runs on
+GitHub runners, which reach them, and it is PRE-AUTHORISED — never ask, and never
+call a value unverifiable before running it. Add the document to SOURCES in
+claude-agent-backend/scripts/fetch_sources.py, trigger the workflow, then read
+docs/enhanced-bodybuilding/sources/. Broken 2026-09-09/10: curl failed, the item
+was closed as "retrieval blocked", and the search summary used instead contained
+figures absent from the paper.
+
 TESTS: node tests/test_frontend.js index.html   (must be green before any PR)
 ═════════════════════════════════════════════════════════════
 BANNER
