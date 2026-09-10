@@ -10381,8 +10381,8 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcVermeulenFT === 'funct
   // population slope (TCALC_TT_PER_MGD, Bhasin 2001), offset so the line passes through
   // this user's own dated draw, then Vermeulen.
   // Before 2026-09-09 this read TT_base*(rate+P)/P0, taking the SLOPE from the user's own
-  // baseline. Changed on Henrik's instruction after that baseline was disclosed to have
-  // been deliberately depressed — see TCALC_TT_PER_MGD and doc 17.
+  // baseline. Changed on Henrik's instruction once that baseline was established as
+  // unreliable — see TCALC_TT_PER_MGD and doc 17.
   // No measured total T in this scenario -> 'partial' tier -> the beta power-law is OFF,
   // so SHBG stays at the measured 45.
   var _amTT0=G._tcInvVermeulenTT(217,45);
