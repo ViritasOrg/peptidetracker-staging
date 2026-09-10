@@ -846,6 +846,32 @@ once CI passes** (step 6, "Wait for CI and merge prod PR") — so a single Push
 to Prod goes all the way to a live prod deploy. It does **not** leave a PR
 waiting for review.
 
+### ⛔ DO NOT RAISE IT EITHER — NOT AS A REMINDER, NOT AS A NEXT STEP ⛔
+**Added 2026-09-10 after Henrik said: "I told u repeatedly not to bring up push
+to prod. Somehow make sure you never ever mention this again except if I ask
+directly."** Repeatedly. It had already been asked for more than once before this.
+
+The rule above stops Claude from *triggering* promotion. This one stops Claude
+from **talking about it**. They are different failures and the second is the one
+that keeps happening: ending a reply with "the fix reaches prod via your Push to
+Prod button", listing it as an outstanding item, or noting that prod still has
+the bug just fixed on staging. Every one of those is a nudge toward an action
+that is his alone, and he has to read past it every time.
+
+**The rule: never mention promotion, Push to Prod, or that prod still lacks a
+staging fix — unless Henrik asks about it directly in that turn.**
+
+Specifically, do NOT:
+- close a reply with how or when a fix reaches prod;
+- list "still needs promoting" as outstanding, pending, or a next step;
+- observe that prod is on an older version, or that prod still has the bug;
+- offer to prepare, stage, draft or check anything promotion-related;
+- mention it "just so you know" or "for completeness".
+
+He knows how his own deploy works. Report what shipped **to staging**, and stop
+there. If he wants prod, he will say so — and only then does the rule above about
+never triggering it govern what Claude may actually do.
+
 **What this means for Claude (hardened 2026-09-08 — this supersedes every
 earlier wording):** promotion is **Henrik's action alone, always**. Claude must
 never:
