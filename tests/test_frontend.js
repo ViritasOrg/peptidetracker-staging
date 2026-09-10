@@ -3204,6 +3204,55 @@ if (typeof G._tdModelBias === 'function') {
   // visibly rather than settling in as a frontend constant.
   check('  …naming the study it checked against, from the served payload',
     /Bhasin/.test(_b.source) && /nadir/.test(_b.measure));
+
+  // ── THE EXPOSURE CARD MUST CARRY THE SAME UNCERTAINTY ──
+  // A headline that states a level to the pmol/L without saying the model runs ~1.5x
+  // high against the measured dose-response claims a precision the pharmacology does
+  // not have. That is how a projected number becomes a target.
+  // _FT_REF arrives from /lab-markers at runtime, so seed the backend's shape here.
+  var _svFtRef = G._FT_REF;
+  G._FT_REF = G._FT_REF || {
+    floor_pmol_l:243, median_pmol_l:492, ceiling_pmol_l:796, round_to:0.5,
+    cite:['bhasin-2011'], caveat_cite:['goldman-2017'],
+    caveat:'Free T here is calculated, not measured.',
+    above_ceiling_note:'Above the top of the healthy young-male range.'
+  };
+  if (typeof G._ftExposureHtml === 'function' && G._FT_REF && G._FT_REF.ceiling_pmol_l) {
+    G._tdBiasCache = null;
+    var _ceilP = G._FT_REF.ceiling_pmol_l;
+    var _hiHtml = G._ftExposureHtml(_ceilP * 7);      // deep above the ceiling
+    var _inHtml = G._ftExposureHtml(_ceilP * 0.5);    // inside the range
+    check('the exposure card states the model\'s measured bias when above the ceiling',
+      /dose\u2013response|dose-response/.test(_hiHtml) && /upper bound/.test(_hiHtml),
+      _hiHtml.slice(0, 160));
+    // Inside the reference range the projection is not the thing under doubt, and the
+    // caveat would be noise on every normal reading.
+    check('  …and stays quiet inside the healthy range',
+      !/upper bound/.test(_inHtml));
+    // The ratio is measured on TOTAL T at the trough; free T is convex in total T, so
+    // printing this headline divided by it would be arithmetic the data cannot support.
+    // The caveat states the disagreement; it must not quote a second level.
+    var _biasLine = (_hiHtml.match(/border-left:2px solid[^>]*>([^<]*)</) || ['',''])[1];
+    check('  …without printing a second, "corrected" pmol/L figure',
+      _biasLine.length > 0 && !/pmol/i.test(_biasLine), _biasLine.slice(0, 120));
+    // Same rule as the Dose Finder: live measurement, never a written-down constant.
+    var _idxHtml = require('fs').readFileSync(
+      require('path').join(__dirname, '../index.html'), 'utf8');
+    var _expStart = _idxHtml.indexOf('function _ftExposureHtml');
+    var _expEnd = _idxHtml.indexOf('function openAllReferences', _expStart);
+    var _expFn = _idxHtml.slice(_expStart, _expEnd > 0 ? _expEnd : _expStart + 6000);
+    var _expCode = _expFn.split('\n').filter(function(l){ return !/^\s*(\/\/|\*|\/\*)/.test(l); }).join('\n');
+    check('  …computed from _tdModelBias, not a hardcoded factor',
+      /_tdModelBias/.test(_expCode) && !/mean\s*[:=]\s*1\.5|bias\s*[:=]\s*1\.5/.test(_expCode),
+      'len=' + _expCode.length);
+    // It must degrade to silence, not to a stale figure, when nothing is served.
+    var _svDr3 = G._tcDoseResponse;
+    G._tcDoseResponse = null; G._tdBiasCache = null;
+    check('  …and says nothing at all when the backend has not answered',
+      !/upper bound/.test(G._ftExposureHtml(_ceilP * 7)));
+    G._tcDoseResponse = _svDr3; G._tdBiasCache = null;
+  }
+  G._FT_REF = _svFtRef;
   // No local copy of the published data — a table in each frontend is how two
   // apps start quoting different numbers for the same study.
   check('  …with no local copy of that data in the tab',
@@ -7526,6 +7575,66 @@ console.log('\n── dose dedup migration ────────────�
     /_activeStackIndices=\[idx\];[\s\S]{0,120}?var det=_detectStackConflicts\(idx\);/.test(rawScript));
   check('_resolveConflict defined in index.html',rawScript.includes('async function _resolveConflict('));
 
+// ── AUTO-ACTIVATE THE NEXT PROTOCOL (opt-in) ────────────────────────────────
+// A protocol that has not started yet is invisible: T-Calc draws what an ACTIVE
+// protocol schedules, and Today lists its injections. This chains the next one in so
+// the curve and the upcoming doses show up before it begins.
+console.log('\n── Protocols: auto-activate the next one ──────────────────');
+if (typeof G._chainFromActive === 'function') {
+  const _anSv = {st:G._userStacks, ai:G._activeStackIndices};
+  const _mk=(name,start,weeks)=>({name:name,cycle_start:start,cycle_length:weeks,peptides:[]});
+  // P0 26 Aug + 2wk -> 9 Sep. P1 starts 11 Sep (after). P2 starts 1 Sep (OVERLAPS P0).
+  G._userStacks=[_mk('P0','2026-08-26',2), _mk('P1','2026-09-11',1), _mk('P2','2026-09-01',1)];
+
+  G.setData('proto-auto-next', false);
+  check('off by default-ish: the chain is just the chosen protocol',
+    JSON.stringify(G._chainFromActive(0))==='[0]', JSON.stringify(G._chainFromActive(0)));
+
+  G.setData('proto-auto-next', true);
+  const _ch = G._chainFromActive(0);
+  check('on: the protocol starting after the active one ends is chained in',
+    _ch.indexOf(1)>=0, JSON.stringify(_ch));
+  // THE SAFETY PROPERTY. Two protocols live on the same day could schedule the same
+  // compound twice and the curve would count both. Only non-overlapping ones chain.
+  check('  …and an OVERLAPPING protocol is never chained',
+    _ch.indexOf(2)===-1, JSON.stringify(_ch));
+  check('  …with the user-chosen protocol still first',
+    _ch[0]===0, JSON.stringify(_ch));
+
+  // A run of back-to-back protocols should all light up, not just the next one.
+  G._userStacks=[_mk('A','2026-08-01',1), _mk('B','2026-08-08',1), _mk('C','2026-08-15',1)];
+  check('a run of consecutive protocols chains all the way through',
+    JSON.stringify(G._chainFromActive(0))==='[0,1,2]', JSON.stringify(G._chainFromActive(0)));
+
+  // "Ongoing" has no point after which nothing can overlap it, so it chains nothing.
+  G._userStacks=[_mk('Ongoing','2026-08-01',0), _mk('Later','2026-12-01',1)];
+  check('an ongoing protocol (no end date) chains nothing after it',
+    JSON.stringify(G._chainFromActive(0))==='[0]', JSON.stringify(G._chainFromActive(0)));
+
+  // Turning the option off must collapse to the chosen protocol with nothing to clean up.
+  G._userStacks=[_mk('P0','2026-08-26',2), _mk('P1','2026-09-11',1)];
+  G._activeStackIndices=[0];
+  G.setData('proto-auto-next', true);  G._normalizeActiveStack();
+  const _onLen=G._activeStackIndices.length;
+  G.setData('proto-auto-next', false); G._normalizeActiveStack();
+  check('turning the option off collapses back to the chosen protocol alone',
+    _onLen===2 && G._activeStackIndices.length===1 && G._activeStackIndices[0]===0,
+    'on='+_onLen+' off='+JSON.stringify(G._activeStackIndices));
+
+  // The setting is a real setting: persisted and pushed like every other one.
+  check('the option is persisted and synced, not session-only',
+    /proto-auto-next/.test(rawScript) && /pushPepSettingsToAgent\(\{'proto-auto-next'/.test(rawScript));
+  check('  …and is read back from the backend on sync',
+    /if\(s\['proto-auto-next'\]!==undefined\)/.test(rawScript));
+  // Chained protocols are derived, so the card must not claim the user picked them.
+  check('a chained card reads "Active · next", not plain Active',
+    /Active · next/.test(rawScript));
+
+  G._userStacks=_anSv.st; G._activeStackIndices=_anSv.ai; G.setData('proto-auto-next',false);
+} else {
+  check('_chainFromActive defined', false);
+}
+
   // "Keep the first entry only" drops the later copy and leaves everything else
   if(typeof G._resolveConflict==='function'){
     const _sv={save:G.saveStacksToBackend,ws:G.buildWeekStrip,t:G.buildToday,s:G.buildSchedule,ss:G.buildStackStore,uw:G.updateWEEKLY,gid:G.document.getElementById};
@@ -10222,12 +10331,13 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcVermeulenFT === 'funct
   var _amS={tp:G._tcp,bw:G._tcBwEntries,gh:G._tcGhStack};
   function _amIso(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
   // 100 mg TU every 2 days — the real protocol that exposed this.
-  function _amRun(startStr,n){
+  function _amRun(startStr,n,opt){
+    var _ft=(opt&&opt.ft>0)?opt.ft:217;          // baseline free T for this run
     var st=new Date(startStr+'T12:00:00');
     var log=[]; var t=new Date(st.getTime());
     for(var i=0;i<n;i++){log.push({compId:'nebido',doseMg:'100',date:_amIso(t)});t=new Date(t.getTime()+2*86400000);}
-    G._tcp={measuredFT:'217',currentDoseMgWk:'0',totalT:'',shbg:'45',birthYear:'1985',manualLog:log};
-    G._tcBwEntries=[{date:_amIso(new Date(st.getTime()-86400000)),free_t:217,shbg:45}];
+    G._tcp={measuredFT:String(_ft),currentDoseMgWk:'0',totalT:'',shbg:'45',birthYear:'1985',manualLog:log};
+    G._tcBwEntries=[{date:_amIso(new Date(st.getTime()-86400000)),free_t:_ft,shbg:45}];
     G._tcGhStack=[];
     var s=G._tcFreeTSeries(log.slice(),{});
     var ft=function(i){return s.total[i]*(s.calFT_arr?s.calFT_arr[i]:s.scale);};
@@ -10267,15 +10377,58 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcVermeulenFT === 'funct
   check('absolute model: plateau does NOT depend on how far into the protocol you are',
     _amSpread < 1.05,
     'peaks '+_amA.peak.toFixed(0)+' / '+_amB.peak.toFixed(0)+' / '+_amC.peak.toFixed(0)+' spread='+_amSpread.toFixed(3));
-  // 5. The plateau matches first principles: TT scales as (rate+P)/P, then Vermeulen.
+  // 5. The plateau matches first principles: TT is LINEAR in appearance rate with the
+  // population slope (TCALC_TT_PER_MGD, Bhasin 2001), offset so the line passes through
+  // this user's own dated draw, then Vermeulen.
+  // Before 2026-09-09 this read TT_base*(rate+P)/P0, taking the SLOPE from the user's own
+  // baseline. Changed on Henrik's instruction after that baseline was disclosed to have
+  // been deliberately depressed — see TCALC_TT_PER_MGD and doc 17.
   // No measured total T in this scenario -> 'partial' tier -> the beta power-law is OFF,
-  // so SHBG stays at the measured 45. (Applying beta here would be testing a different
-  // tier than the one the scenario configures.)
-  var _amTT0=G._tcInvVermeulenTT(217,45), _amMult=(_amRate+_amPsup)/G.TCALC_ENDOG_T_MGD;
-  var _amWant=G._tcVermeulenFT(_amTT0*_amMult, 45);
-  check('absolute model: plateau matches (rate+P_suppressed)/P0 then Vermeulen, within 5%',
+  // so SHBG stays at the measured 45.
+  var _amTT0=G._tcInvVermeulenTT(217,45);
+  var _amSlope=(typeof G._tcTtPerMgd==='function')?G._tcTtPerMgd():G.TCALC_TT_PER_MGD;
+  var _amOff=_amTT0 - _amSlope*G.TCALC_ENDOG_T_MGD;      // pre-cycle draw: total == P0
+  var _amWant=G._tcVermeulenFT(_amSlope*(_amRate+_amPsup)+_amOff, 45);
+  check('absolute model: plateau is the trial slope * rate + personal offset, within 5%',
     Math.abs(_amA.peak-_amWant)/_amWant < 0.05,
     'model '+_amA.peak.toFixed(0)+' vs first-principles '+_amWant.toFixed(0));
+
+  // 5b. THE REASON FOR THE CHANGE: a wrong anchor must propagate ADDITIVELY, not
+  // multiplicatively. The calibrating draw can be wrong — this user's was engineered —
+  // so doubling-ish the baseline must shift the curve, not rescale the dose-response.
+  var _amHi=_amRun('2026-06-26',900,{ft:400});
+  if (_amHi && _amHi.peak > 0) {
+    var _amRatioIn  = 400/217;
+    var _amRatioOut = _amHi.peak/_amA.peak;
+    check('absolute model: a wrong baseline shifts the curve, it does not rescale it',
+      _amRatioOut < 1 + (_amRatioIn-1)*0.5,
+      'baseline x'+_amRatioIn.toFixed(2)+' -> peak x'+_amRatioOut.toFixed(2));
+  }
+
+  // 5c. THE CONSTANT IS THE TRIAL. TCALC_TT_PER_MGD must keep reproducing Bhasin 2001's
+  // dose arms, or it has drifted from the evidence it claims to encode. Nadir figures
+  // converted to steady-state means with the 1.517 ratio, then to nmol/L. The 25 mg arm
+  // is excluded from the fit (residual production under incomplete suppression dominates
+  // it) but is checked to sit ABOVE the line.
+  var _bhDose=[50,125,300,600], _bhNadir=[306,542,1345,2370], _bhOff=6.19, _bhWorst=0;
+  for (var _bi=0; _bi<_bhDose.length; _bi++) {
+    var _bhRate=_bhDose[_bi]*G._TC_T_FRACTION.enanthate/7;
+    var _bhObs=_bhNadir[_bi]*1.517/28.84;
+    _bhWorst=Math.max(_bhWorst, Math.abs((_amSlope*_bhRate+_bhOff)-_bhObs)/_bhObs);
+  }
+  check('dose->total-T slope still reproduces Bhasin 2001 (50-600 mg/wk), within 10%',
+    _bhWorst < 0.10, 'worst arm off by '+(_bhWorst*100).toFixed(1)+'%');
+  check('  …and the 25 mg/wk arm sits above the fitted line (residual production)',
+    (253*1.517/28.84) > (_amSlope*(25*G._TC_T_FRACTION.enanthate/7)+_bhOff));
+  // Served value wins over the local fallback — one number, one source.
+  var _svSlope=G._tcDoseResponse;
+  G._tcDoseResponse={mean_slope_nmol_per_mgd:2.5};
+  check('  …and a backend-served slope overrides the offline constant',
+    Math.abs(G._tcTtPerMgd()-2.5)<1e-9, 'got '+G._tcTtPerMgd());
+  G._tcDoseResponse=null;
+  check('  …falling back to the documented constant when nothing is served',
+    Math.abs(G._tcTtPerMgd()-G.TCALC_TT_PER_MGD)<1e-9);
+  G._tcDoseResponse=_svSlope;
   // 6. Binding must stay SATURABLE. A linearised form pins the free fraction at a
   //    constant, which under-reports free T by ~51% at supraphysiological total T —
   //    the direction that invites dose escalation. Independently verified 2026-08-01.

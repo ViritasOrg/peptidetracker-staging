@@ -79,6 +79,40 @@ and is served to the frontends via API at runtime. This is settled and permanent
 Henrik has stated this repeatedly. Treat it as a standing rule and act on it without
 re-confirming.
 
+## ⛔ THE FREE-T MODEL RUNS ~1.5× ABOVE MEASURED DOSE-RESPONSE — THIS IS KNOWN AND OPEN ⛔
+**Do NOT "fix" it. Read `docs/enhanced-bodybuilding/17-the-model-vs-measured-gap.md` in
+`claude-agent-backend` before forming an opinion about the free-T curve.**
+
+The model is `TT = TT_base × total/P` — serum testosterone proportional to appearance rate,
+anchored on the user's own baseline. Compared trough-to-nadir against Bhasin 2001
+(PMID 11701431), it sits about **1.5× high**. That is a **disagreement between two sourced
+published quantities**, not a bug:
+- the model side is clearance arithmetic that matches the literature MCR (1,240 L/day,
+  PMID 6025489) against a 3–10 mg/day production rate to within a few percent;
+- the measured side is Bhasin's five dose arms.
+
+The leading hypothesis is IM depot bioavailability, which **does not exist in retrievable
+form** (it needs an IV comparator these products never had). The gap is also
+**dose-dependent** (1.62× at 25 mg/wk → 1.37× at 300), so **no fixed factor reproduces it**.
+
+**What keeps being rediscovered as a good idea, and must not be shipped:**
+- Replacing the personal slope with a slope least-squares-fitted to Bhasin. Tried and
+  reverted 2026-09-09. That is *fitting, not sourcing*.
+- Setting a bioavailability F to whatever closes the gap.
+- Rewriting the failing first-principles test in `test_frontend.js` to match a new model.
+  A red model test means **revert the change**, not update the test.
+
+**If you think it is genuinely wrong: say so in your reply and let Henrik decide.**
+
+⚠️ **Always compare TROUGH to NADIR.** Bhasin reports mean *nadir* concentrations. Comparing
+a model's weekly *mean* against them overstates the disagreement by about a third — a mistake
+that has now been made twice (2026-09-08, and again 2026-09-09).
+
+**Known gap in the OPPOSITE direction:** `/systemic-interactions` carries SHBG effects for the
+GH-axis peptides and boron only — **no androgen at all**. Masteron/drostanolone, nandrolone
+and oxandrolone contribute nothing to modelled SHBG, so an AAS cycle's SHBG suppression on the
+chart is coming from HGH alone. Flagged, not fixed: closing it needs a retrieved source.
+
 ## ⚠️ NEVER SWITCH UNITS — pmol/L IS THE ONLY FREE-T UNIT ⚠️
 **The free-T / plasma curve is always in pmol/L. There is no second unit and there must
 never be one.** Missing or incomplete data changes the **confidence** of a number, never
