@@ -19,6 +19,23 @@ Every piece of work Claude does follows exactly three steps:
    *Promotion to prod* below — the prohibition there is absolute and Claude
    may not talk itself past it.
 
+### 🛑 "DONE" IS RESERVED FOR MERGED. NOTHING ELSE EARNS THE WORD.
+Added 2026-09-10 after Claude pushed four commits to a branch and reported them as
+*"Done — staging, b990b30"*, three separate times across one session. Every rule needed
+to prevent that was **already written above, verbatim, and pre-authorised.** The failure
+was not the branching — it was calling a branch push delivery.
+
+Until the PR is **merged into `main`**, Claude may not write *done*, *shipped*, *landed*,
+*live*, *delivered*, *what shipped this session*, or describe the change in the present
+tense ("the card now says…"). A commit SHA is not delivery. "Pushed" is not delivery.
+CI passing is not delivery.
+
+- Before claiming anything is delivered, verify it: `git fetch origin main` then confirm
+  the change is actually on `main`. **Quote the `main` SHA, never the branch SHA** — the
+  branch SHA is what made the false reports look precise and checkable.
+- Until then the only accurate phrasing is "on a branch, **not delivered**".
+- This applies to docs-only changes too.
+
 If something genuinely needs Henrik's input, finish everything that does not
 depend on the answer, land it on stage, and end the reply with a **numbered
 list of questions**. Do not bury a question inside a long explanation — it will
