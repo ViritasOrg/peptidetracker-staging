@@ -7575,6 +7575,66 @@ console.log('\n── dose dedup migration ────────────�
     /_activeStackIndices=\[idx\];[\s\S]{0,120}?var det=_detectStackConflicts\(idx\);/.test(rawScript));
   check('_resolveConflict defined in index.html',rawScript.includes('async function _resolveConflict('));
 
+// ── AUTO-ACTIVATE THE NEXT PROTOCOL (opt-in) ────────────────────────────────
+// A protocol that has not started yet is invisible: T-Calc draws what an ACTIVE
+// protocol schedules, and Today lists its injections. This chains the next one in so
+// the curve and the upcoming doses show up before it begins.
+console.log('\n── Protocols: auto-activate the next one ──────────────────');
+if (typeof G._chainFromActive === 'function') {
+  const _anSv = {st:G._userStacks, ai:G._activeStackIndices};
+  const _mk=(name,start,weeks)=>({name:name,cycle_start:start,cycle_length:weeks,peptides:[]});
+  // P0 26 Aug + 2wk -> 9 Sep. P1 starts 11 Sep (after). P2 starts 1 Sep (OVERLAPS P0).
+  G._userStacks=[_mk('P0','2026-08-26',2), _mk('P1','2026-09-11',1), _mk('P2','2026-09-01',1)];
+
+  G.setData('proto-auto-next', false);
+  check('off by default-ish: the chain is just the chosen protocol',
+    JSON.stringify(G._chainFromActive(0))==='[0]', JSON.stringify(G._chainFromActive(0)));
+
+  G.setData('proto-auto-next', true);
+  const _ch = G._chainFromActive(0);
+  check('on: the protocol starting after the active one ends is chained in',
+    _ch.indexOf(1)>=0, JSON.stringify(_ch));
+  // THE SAFETY PROPERTY. Two protocols live on the same day could schedule the same
+  // compound twice and the curve would count both. Only non-overlapping ones chain.
+  check('  …and an OVERLAPPING protocol is never chained',
+    _ch.indexOf(2)===-1, JSON.stringify(_ch));
+  check('  …with the user-chosen protocol still first',
+    _ch[0]===0, JSON.stringify(_ch));
+
+  // A run of back-to-back protocols should all light up, not just the next one.
+  G._userStacks=[_mk('A','2026-08-01',1), _mk('B','2026-08-08',1), _mk('C','2026-08-15',1)];
+  check('a run of consecutive protocols chains all the way through',
+    JSON.stringify(G._chainFromActive(0))==='[0,1,2]', JSON.stringify(G._chainFromActive(0)));
+
+  // "Ongoing" has no point after which nothing can overlap it, so it chains nothing.
+  G._userStacks=[_mk('Ongoing','2026-08-01',0), _mk('Later','2026-12-01',1)];
+  check('an ongoing protocol (no end date) chains nothing after it',
+    JSON.stringify(G._chainFromActive(0))==='[0]', JSON.stringify(G._chainFromActive(0)));
+
+  // Turning the option off must collapse to the chosen protocol with nothing to clean up.
+  G._userStacks=[_mk('P0','2026-08-26',2), _mk('P1','2026-09-11',1)];
+  G._activeStackIndices=[0];
+  G.setData('proto-auto-next', true);  G._normalizeActiveStack();
+  const _onLen=G._activeStackIndices.length;
+  G.setData('proto-auto-next', false); G._normalizeActiveStack();
+  check('turning the option off collapses back to the chosen protocol alone',
+    _onLen===2 && G._activeStackIndices.length===1 && G._activeStackIndices[0]===0,
+    'on='+_onLen+' off='+JSON.stringify(G._activeStackIndices));
+
+  // The setting is a real setting: persisted and pushed like every other one.
+  check('the option is persisted and synced, not session-only',
+    /proto-auto-next/.test(rawScript) && /pushPepSettingsToAgent\(\{'proto-auto-next'/.test(rawScript));
+  check('  …and is read back from the backend on sync',
+    /if\(s\['proto-auto-next'\]!==undefined\)/.test(rawScript));
+  // Chained protocols are derived, so the card must not claim the user picked them.
+  check('a chained card reads "Active · next", not plain Active',
+    /Active · next/.test(rawScript));
+
+  G._userStacks=_anSv.st; G._activeStackIndices=_anSv.ai; G.setData('proto-auto-next',false);
+} else {
+  check('_chainFromActive defined', false);
+}
+
   // "Keep the first entry only" drops the later copy and leaves everything else
   if(typeof G._resolveConflict==='function'){
     const _sv={save:G.saveStacksToBackend,ws:G.buildWeekStrip,t:G.buildToday,s:G.buildSchedule,ss:G.buildStackStore,uw:G.updateWEEKLY,gid:G.document.getElementById};

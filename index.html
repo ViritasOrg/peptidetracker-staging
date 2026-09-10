@@ -336,11 +336,67 @@ function _isActiveStack(i){return _activeStackIndices.indexOf(i)>=0;}
 // (the backend payload, the cache and every reader still use that shape) but is
 // clamped to at most one valid index. Stored data from before this rule can carry
 // several — the first still-valid one wins, the rest are dropped on load.
+// ── AUTO-ACTIVATE THE NEXT PROTOCOL (opt-in) ────────────────────────────────
+// Henrik, 2026-09-10: "Add an option to auto activate a new protocol if it is starting
+// after the current active protocol ends... Basically having both active at the same
+// time." The point is to SEE the future: the T-Calc curve draws what is scheduled by an
+// active protocol, and Today lists its upcoming injections, so a protocol that has not
+// started yet is invisible until the day it begins.
+//
+// ⚠️ WHY THE NON-OVERLAP TEST IS THE WHOLE SAFETY ARGUMENT. One protocol at a time is
+// not arbitrary — two active protocols that overlap IN TIME can schedule the same
+// compound on the same day, and the curve would then count both. Chaining only ever adds
+// a protocol that starts ON OR AFTER the previous one ENDS, so on any given day exactly
+// one protocol in the chain is live and nothing can be dosed twice. That is what makes
+// this safe, and it is why a protocol with no end date chains nothing after it: "ongoing"
+// has no point after which another protocol cannot overlap it.
+function _autoNextEnabled(){return getData('proto-auto-next',false)===true;}
+// End of a protocol as a YYYY-MM-DD string, '' when it is ongoing or has no start.
+// _cycleEndDateStr is the authority (END DATE WINS over the rounded-up cycle_length —
+// see the protocol card); this only adds the no-start case.
+function _stackEndStr(st){
+  if(!st||!st.cycle_start)return '';
+  return (typeof _cycleEndDateStr==='function')?(_cycleEndDateStr(st)||''):'';
+}
+// Given the primary active index, return it plus every protocol that chains after it:
+// the earliest not-yet-included protocol starting on or after the running chain end,
+// repeatedly, so a run of three back-to-back protocols all light up.
+function _chainFromActive(primary){
+  var out=[primary];
+  if(!_autoNextEnabled())return out;
+  var endStr=_stackEndStr(_userStacks[primary]);
+  var guard=0;
+  while(endStr&&guard++<20){
+    var best=-1,bestStart='';
+    for(var i=0;i<_userStacks.length;i++){
+      if(out.indexOf(i)>=0)continue;
+      var st=_userStacks[i];
+      if(!st||!st.cycle_start)continue;
+      if(st.cycle_start<endStr)continue;               // overlaps the chain — never chain it
+      if(best===-1||st.cycle_start<bestStart){best=i;bestStart=st.cycle_start;}
+    }
+    if(best===-1)break;
+    out.push(best);
+    endStr=_stackEndStr(_userStacks[best]);            // '' (ongoing) stops the chain
+  }
+  return out;
+}
+// One protocol is active BY CHOICE; the rest of the chain is derived, never stored as a
+// separate user decision. _activeStackIndices[0] is always the one the user picked, so
+// turning the option off collapses straight back to it with nothing to clean up.
 function _normalizeActiveStack(){
   if(!Array.isArray(_activeStackIndices))_activeStackIndices=[];
   var keep=_activeStackIndices.filter(function(i){return typeof i==='number'&&i>=0&&i<_userStacks.length;});
-  _activeStackIndices=keep.length?[keep[0]]:[];
+  _activeStackIndices=keep.length?_chainFromActive(keep[0]):[];
   return _activeStackIndices;
+}
+async function toggleAutoNext(){
+  var v=!_autoNextEnabled();
+  setData('proto-auto-next',v);
+  if(typeof pushPepSettingsToAgent==='function')pushPepSettingsToAgent({'proto-auto-next':v});
+  _normalizeActiveStack();
+  await _afterActiveStackChange(false);
+  if(typeof buildStackStore==='function')buildStackStore();
 }
 let _stackViewTab='peptides';let _editInnerTab='peptides';
 let _reconStackIdx=0;let _reconStackPicked=false;let _reconState={};
@@ -1697,6 +1753,9 @@ async function toggleStack(idx){
   } else {
     _activeStackIndices=[];
   }
+  // After conflicts are settled, not before: chaining is derived state, and a protocol
+  // whose activation the user is still being asked about must not drag others in with it.
+  _normalizeActiveStack();
   await _afterActiveStackChange(_activeStackIndices.length>0);
 }
 // ── Activate a single stack exclusively (used from detail view header) ───────
@@ -1704,6 +1763,7 @@ async function useStack(idx){
   if(idx>=0&&idx<_userStacks.length){
     _activeStackIndices=[idx];
     _ensureCycleStart(idx);
+    _normalizeActiveStack();
     await _afterActiveStackChange(true);
   }
 }
@@ -1887,7 +1947,17 @@ function buildStackStore(){
   // minmax(0,1fr) floors the track at 0 so it can shrink below its content, at
   // which point the ellipsis does its job. Paired with min-width:0 on .stack-card
   // in main.css — the track can only shrink if the item inside it can too.
-  var html='<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;">';
+  // The option itself. Shown only when there is something it could chain — with one
+  // protocol it is a control with no possible effect, which is just noise.
+  var _anOn=_autoNextEnabled();
+  var html='';
+  if(_userStacks.length>1){
+    html+='<div onclick="toggleAutoNext()" style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:9px 11px;margin-bottom:10px;background:var(--surface);border:1px solid '+(_anOn?'var(--accent)':'var(--border)')+';border-radius:10px;">'
+      +'<div style="width:34px;height:18px;border-radius:9px;background:'+(_anOn?'var(--accent)':'rgba(255,255,255,0.15)')+';position:relative;flex-shrink:0;"><div style="position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:2px;left:'+(_anOn?'18px':'2px')+';box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div></div>'
+      +'<div style="min-width:0"><div style="font-size:12px;font-weight:700;color:var(--text)">Show the next protocol too</div>'
+      +'<div style="font-size:10px;color:var(--muted2);line-height:1.4;margin-top:1px">A protocol that starts on or after the active one ends also counts as active, so its curve and its injections show up before it begins. Protocols that overlap in time are never chained.</div></div></div>';
+  }
+  html+='<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;">';
   for(var i=0;i<Math.min(_userStacks.length,SLOTS);i++){
     var st=_userStacks[i];
     var isActive=_isActiveStack(i);
@@ -1896,7 +1966,7 @@ function buildStackStore(){
     html+='<div class="stack-card'+(isActive?' active':'')+'" onclick="viewStack('+i+')">';
     html+='<div class="stack-card-header">';
     html+='<div style="flex:1;min-width:0;">';
-    html+='<div onclick="event.stopPropagation();toggleStack('+i+')" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin-bottom:5px;"><div style="width:34px;height:18px;border-radius:9px;background:'+(isActive?'var(--accent)':'rgba(255,255,255,0.15)')+';position:relative;flex-shrink:0;"><div style="position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:2px;left:'+(isActive?'18px':'2px')+';box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div></div><span style="font-size:10px;font-weight:600;color:'+(isActive?'var(--accent)':'var(--muted2)')+';letter-spacing:0.3px;">'+(isActive?'Active':'Inactive')+'</span></div>';
+    html+='<div onclick="event.stopPropagation();toggleStack('+i+')" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin-bottom:5px;"><div style="width:34px;height:18px;border-radius:9px;background:'+(isActive?'var(--accent)':'rgba(255,255,255,0.15)')+';position:relative;flex-shrink:0;"><div style="position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:2px;left:'+(isActive?'18px':'2px')+';box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div></div><span style="font-size:10px;font-weight:600;color:'+(isActive?'var(--accent)':'var(--muted2)')+';letter-spacing:0.3px;">'+(isActive?(_activeStackIndices[0]===i?'Active':'Active · next'):'Inactive')+'</span></div>';
     html+='<div class="stack-card-name">'+_esc(st.name||'Protocol '+(i+1))+'</div>';
     var _csDisp=st.cycle_start||'';
     if(_csDisp){var _csdD=parseLocalDate(_csDisp);
@@ -2662,7 +2732,7 @@ async function copyDataToStage(){
   }
 }
 function wipeLocalCache(){if(!confirm('Clear all locally cached data? The app will reload and re-fetch everything from the backend. You will stay signed in.'))return;var _t=window.localStorage.getItem('google_token');var _e=window.localStorage.getItem('google_email');var _s=window.localStorage.getItem('session_token');window.localStorage.clear();if(_t)window.localStorage.setItem('google_token',_t);if(_e)window.localStorage.setItem('google_email',_e);if(_s)window.localStorage.setItem('session_token',_s);window.location.reload();}
-async function syncPepSettingsFromAgent(){try{const r=await fetch(AGENT_URL+'/user-settings',{headers:authHeaders()});if(!r.ok){_logHttp('syncPepSettings',r.status,'/user-settings');return;}const s=await r.json();if(!s)return;if(s['proto-tab-vis']){_tabVis=Object.assign({},TAB_DEFAULTS,s['proto-tab-vis']);setData('proto-tab-vis',s['proto-tab-vis']);applyTabVis();buildTabsSettingsCard();}if(s['user_sex'])setBioSex(s['user_sex']);if(s['user_height']){localStorage.setItem('user_height',String(s['user_height']));const hi=document.getElementById('bc-height-in');if(hi)hi.value=s['user_height'];}if(s['user_weight']){localStorage.setItem('user_weight',String(s['user_weight']));const wi=document.getElementById('bc-weight-in');if(wi)wi.value=s['user_weight'];}if(s['user_age']){localStorage.setItem('user_age',String(s['user_age']));const ai=document.getElementById('bc-age-in');if(ai)ai.value=s['user_age'];}if(s['pep-profile']&&typeof s['pep-profile']==='object')setData('pep-profile',Object.assign({},getData('pep-profile',{}),s['pep-profile']));if(s['proto-blood-hidden'])setData('proto-blood-hidden',s['proto-blood-hidden']);if(s['tc-avg-line']!==undefined)setData('tc-avg-line',s['tc-avg-line']);if(s['pep-theme']&&getData('pep-theme',null)!==s['pep-theme'])applyTheme(s['pep-theme']);if(s['pep-density']){setData('pep-density',s['pep-density']);if(typeof buildAppearanceCard==='function')buildAppearanceCard();}if(s['macros-phase']&&typeof _MACROS_PHASES!=='undefined'&&_MACROS_PHASES.indexOf(s['macros-phase'])>=0){_macrosPhase=s['macros-phase'];setData('macros-phase',s['macros-phase']);}if(s['macros-train-time'])localStorage.setItem('macros-train-time',s['macros-train-time']);if(s['macros-train-dur'])localStorage.setItem('macros-train-dur',String(s['macros-train-dur']));if(s['macros-include-training']!==undefined)setData('macros-include-training',s['macros-include-training']);if(s['macros-deficit-mode']&&typeof _MACROS_DEFICIT_MODES!=='undefined'&&_MACROS_DEFICIT_MODES.indexOf(s['macros-deficit-mode'])>=0)setData('macros-deficit-mode',s['macros-deficit-mode']);}catch(e){_logErr('syncPepSettings',e);}}
+async function syncPepSettingsFromAgent(){try{const r=await fetch(AGENT_URL+'/user-settings',{headers:authHeaders()});if(!r.ok){_logHttp('syncPepSettings',r.status,'/user-settings');return;}const s=await r.json();if(!s)return;if(s['proto-tab-vis']){_tabVis=Object.assign({},TAB_DEFAULTS,s['proto-tab-vis']);setData('proto-tab-vis',s['proto-tab-vis']);applyTabVis();buildTabsSettingsCard();}if(s['user_sex'])setBioSex(s['user_sex']);if(s['user_height']){localStorage.setItem('user_height',String(s['user_height']));const hi=document.getElementById('bc-height-in');if(hi)hi.value=s['user_height'];}if(s['user_weight']){localStorage.setItem('user_weight',String(s['user_weight']));const wi=document.getElementById('bc-weight-in');if(wi)wi.value=s['user_weight'];}if(s['user_age']){localStorage.setItem('user_age',String(s['user_age']));const ai=document.getElementById('bc-age-in');if(ai)ai.value=s['user_age'];}if(s['pep-profile']&&typeof s['pep-profile']==='object')setData('pep-profile',Object.assign({},getData('pep-profile',{}),s['pep-profile']));if(s['proto-blood-hidden'])setData('proto-blood-hidden',s['proto-blood-hidden']);if(s['tc-avg-line']!==undefined)setData('tc-avg-line',s['tc-avg-line']);if(s['proto-auto-next']!==undefined){setData('proto-auto-next',s['proto-auto-next']===true);if(typeof _normalizeActiveStack==='function')_normalizeActiveStack();}if(s['pep-theme']&&getData('pep-theme',null)!==s['pep-theme'])applyTheme(s['pep-theme']);if(s['pep-density']){setData('pep-density',s['pep-density']);if(typeof buildAppearanceCard==='function')buildAppearanceCard();}if(s['macros-phase']&&typeof _MACROS_PHASES!=='undefined'&&_MACROS_PHASES.indexOf(s['macros-phase'])>=0){_macrosPhase=s['macros-phase'];setData('macros-phase',s['macros-phase']);}if(s['macros-train-time'])localStorage.setItem('macros-train-time',s['macros-train-time']);if(s['macros-train-dur'])localStorage.setItem('macros-train-dur',String(s['macros-train-dur']));if(s['macros-include-training']!==undefined)setData('macros-include-training',s['macros-include-training']);if(s['macros-deficit-mode']&&typeof _MACROS_DEFICIT_MODES!=='undefined'&&_MACROS_DEFICIT_MODES.indexOf(s['macros-deficit-mode'])>=0)setData('macros-deficit-mode',s['macros-deficit-mode']);}catch(e){_logErr('syncPepSettings',e);}}
 // A sub-tab is visible unless the user toggled it off. Settings is always on;
 // a tab absent from TAB_LABELS (e.g. Storage on prod) stays hidden as before.
 function _subVisible(id){if(id==='settings')return true;if(!(id in TAB_LABELS))return false;return _tabVis[id]!==false;}
