@@ -20,7 +20,9 @@ cat <<'BANNER'
 1. DELIVERY. "Done" means MERGED to main. Commit, push, open a PR against main,
    wait for CI, MERGE it. Pre-authorised and standing — do not stop to ask.
    A branch push is NOT delivery. Quote the main SHA, never the branch SHA.
-   Never push to prod. Ever.
+   Never push to prod. Ever. And never RAISE promotion either — no "reaches prod
+   via Push to Prod", no "prod still has this", no listing it as outstanding.
+   Report what shipped to staging and stop. Only if Henrik asks directly.
 
 2. SETTLED VALUES. Before changing any PK/dosing constant, check for a SETTLED
    block and the matching doc. A red test named *_is_settled_* or
