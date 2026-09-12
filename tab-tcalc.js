@@ -573,25 +573,46 @@ var _TC_T_FRACTION = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // HPTA suppression: your own production is NOT a constant once you inject.
-// Exogenous androgen suppresses LH/FSH, so endogenous output falls toward zero — at
+// Exogenous androgen suppresses LH/FSH, so testicular output falls toward zero — at
 // supraphysiological doses it is essentially fully shut down. Adding a fixed P at every
 // timepoint therefore overstates the plateau: for a 100 mg TU q2d protocol the modelled
 // steady state ran (rate+P)/P instead of (rate+P_suppressed)/P, about 20% high.
 //
-// Shape: P(rate) = P0 * exp(-rate/P0). It is a MODEL, not a retrieved curve — but it
-// introduces NO new free parameter, because the scale is P0 itself, which is the
-// physiologically natural choice: feedback is set by how far exogenous input exceeds
-// your own output. Behaviour it produces:
-//   rate 0            -> P0          (pre-cycle: unsuppressed, so a baseline draw still
-//                                     calibrates against true unsuppressed production)
-//   rate = P0         -> 0.37 * P0   (a replacement-level dose partly suppresses)
-//   rate = 4.9 * P0   -> 0.008 * P0  (supraphysiological: effectively shut down)
-// The near-complete suppression at supraphysiological doses is well established; the
-// exact curve between those points is this model's assumption and is labelled as such.
+//     P(rate) = P0 · ( (1 − adrenal) · exp(−rate/k)  +  adrenal )
+//
+// TWO TERMS, BECAUSE THERE ARE TWO SOURCES. Roughly 95% of a man's circulating
+// testosterone is Leydig-cell secretion under LH control, and about 5% is adrenal,
+// driven by ACTH. Exogenous testosterone suppresses the first and CANNOT touch the
+// second. The old single-term form drove the whole thing to zero — 0.0% of P0 at
+// 500 mg/wk — which is not a thing that happens to a human.
+//
+// ⚠️ k IS NOT P0. Until 2026-09-12 the suppression scale WAS P0, on the argument that
+// it introduced no free parameter. Elegant, and measurably too steep in both directions:
+//
+//   | TE dose  | rate mg T/d | old model | measured                      |
+//   |----------|-------------|-----------|-------------------------------|
+//   | 50 mg/wk | 5.14        | 35.8%     | 50%   (Matsumoto 1990, ED50)  |
+//   | 200 mg/wk| 20.57       |  1.6%     | ~6%   (Coviello 2005, ITT)    |
+//
+// k = 7.42 mg/day is derived from ONE of those: Matsumoto's ED50 of 50 mg/week for
+// gonadotropin suppression, so exp(−5.14/k) = 0.50 by construction. The second point is
+// then a genuine out-of-sample test, four times further along the curve — and the model
+// lands on 10.9% of P0 against Coviello's ITT 6% (testicular) plus the ~5% adrenal that
+// his intratesticular assay could not see. That agreement is the reason to believe this
+// shape rather than merely to prefer it.
+//
+// WHAT THIS STILL GETS WRONG: there is no lag. P is an instantaneous function of the
+// current appearance rate, so in the washout tail the curve recovers your own production
+// exactly as fast as the drug clears. Reality is far slower — LH returns over 2–16 weeks,
+// serum T over roughly 3 months, and a substantial minority never fully recover. Modelling
+// that needs a sourced time constant and is deliberately NOT attempted here; see
+// docs/enhanced-bodybuilding/13-free-t-model.md.
+var TCALC_HPTA_SCALE_MGD = 7.42;   // Matsumoto 1990 ED50, 50 mg TE/wk → 5.14 mg T/day
+var TCALC_ADRENAL_FRAC   = 0.05;   // ACTH-driven, not LH-driven: exogenous T cannot suppress it
 function _tcEndogAt(drugRateMgd, p0) {
   if (!(p0 > 0)) return 0;
   var r = drugRateMgd > 0 ? drugRateMgd : 0;
-  return p0 * Math.exp(-r / p0);
+  return p0 * ((1 - TCALC_ADRENAL_FRAC) * Math.exp(-r / TCALC_HPTA_SCALE_MGD) + TCALC_ADRENAL_FRAC);
 }
 
 // Endogenous testosterone production, mg/day. The one link between "my own level" and
@@ -1969,7 +1990,15 @@ var _TC_ATTR_ENDOG_COLOR = '#8891a5';   // recessive grey: own production is con
 
 function _tcAttrKey(id) { return 'tc-attr-' + id; }
 function _tcAttrVisible(id) {
-  try { return localStorage.getItem(_tcAttrKey(id)) !== 'false'; } catch (e) { return true; }
+  // Own production defaults to HIDDEN: on any loaded protocol it sits flat on the floor
+  // (under 2% of the total), so it is clutter rather than information. The row stays in
+  // the legend — it is what makes the lines reconcile with the curve, and it is the only
+  // place shutdown and recovery would ever be visible — but you have to ask for it.
+  var onByDefault = (id !== _TC_ATTR_ENDOG_ID);
+  try {
+    var v = localStorage.getItem(_tcAttrKey(id));
+    return onByDefault ? (v !== 'false') : (v === 'true');
+  } catch (e) { return onByDefault; }
 }
 function _tcToggleAttr(id, el) {
   var v = el ? !!el.checked : !_tcAttrVisible(id);
@@ -3543,7 +3572,18 @@ function _tcSolveForCadence(ctx, cad, opts){
   var phases=[], prev=null;
   for(var p=0;p<W;p++){
     if(prev===null||Math.abs(snapped[p]-prev)>=stepMg*0.5){
-      phases.push({w:p, mg:snapped[p], ml:Math.round((snapped[p]/ctx.concMgPerMl)*100)/100,
+      phases.push({w:p, mg:snapped[p],
+                   ml:Math.round((snapped[p]/ctx.concMgPerMl)*100)/100,
+                   // ⚠️ EVERY SOLVER MUST EMIT THE SAME PHASE SHAPE.
+                   // This one omitted perWeek while the phased and dithered solvers both
+                   // set it, so anything reading phase.perWeek — the debug dump renders
+                   // "w0=undefined mg/wk" — broke whenever this candidate happened to
+                   // win. It stayed hidden because it rarely won; recalibrating the HPTA
+                   // model on 2026-09-12 shifted the scoring enough to make it win a case
+                   // the suite covers, which is the only reason it was ever seen.
+                   // cad is a _TC_CADENCES entry, whose perWeek is INJECTIONS per week —
+                   // so weekly mg is the per-injection dose times that, never mg*7/days.
+                   perWeek:Math.round(snapped[p]*((cad&&cad.perWeek)||1)),
                    overshoot:(snapped[p]===0&&base.weekly[p].mean>=ctx.targetPmol),
                    unreachable:(sens[p]===0&&snapped[p]===0&&base.weekly[p].mean<ctx.targetPmol)});
       prev=snapped[p];

@@ -6193,13 +6193,29 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       mgOf(withSched) < mgOf(bare),
       'withSched='+Math.round(mgOf(withSched))+' bare='+Math.round(mgOf(bare)));
     // And the level it predicts actually holds the target, rather than stacking on top.
-    // Measured: once the incoming ester has loaded, every week sits inside ±5% of 1400.
     // Before the fix the same inputs plotted 1231-2315 with a 2326 peak.
+    //
+    // The band is EMPIRICAL — it was measured at ±5% against the pre-2026-09-12 HPTA
+    // model. Recalibrating that model (k = 7.42 from Matsumoto's ED50, plus the 5%
+    // adrenal term) raised the modelled plateau by ~1%, and the top settled week now
+    // lands at 1471 — 5.07% over. Re-measured to 6% rather than left failing, because
+    // the number it tracks is the model's output and the model changed for a sourced
+    // reason. The guarantee the test exists for is unchanged and asserted separately
+    // below: nowhere near the stacking failure it was written to catch.
     check('  …holding the target instead of stacking on top of the scheduled doses',
       (function(){
         const w=withSched.best.weekly.slice(withSched.best.settleWeeks).map(x=>x.mean);
-        return Math.max.apply(null,w) < 1400*1.05 && Math.min.apply(null,w) > 1400*0.95;
+        return Math.max.apply(null,w) < 1400*1.06 && Math.min.apply(null,w) > 1400*0.95;
       })(), withSched.best.weekly.map(x=>Math.round(x.mean)).join(' '));
+    // The bright line, deliberately coarse. The reported failure plotted weekly means to
+    // 2315 with a 2326 peak; this plan peaks at ~1650, and that peak is a settling-window
+    // transient the next two checks already police. 1900 sits well clear of both, so it
+    // separates "holding the target" from "stacking on doses that were never going to
+    // stop" without moving when the model is recalibrated by a percent or two — which is
+    // exactly what just happened to the ±5% band above.
+    check('  …and nowhere near the 2315 stacking failure it was written to catch',
+      Math.max.apply(null,withSched.best.weekly.map(x=>x.peak)) < 1900,
+      String(Math.round(Math.max.apply(null,withSched.best.weekly.map(x=>x.peak)))));
     // Scheduled rows are FUTURE-dated. Merging them into `history` would push the last
     // history date past the start date and the anchor guard would refuse every solve.
     check('  …and future scheduled rows do not trip the anchor guard',
@@ -10426,8 +10442,12 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcVermeulenFT === 'funct
   check('absolute model: steady-state rate == dose rate + SUPPRESSED endogenous (mass balance)',
     Math.abs(_amSS-(_amRate+_amPsup))/(_amRate+_amPsup) < 0.03,
     'got '+_amSS.toFixed(2)+' want '+(_amRate+_amPsup).toFixed(2));
+  // Down to the adrenal floor, not to zero: ~5% of a man's testosterone is ACTH-driven
+  // and exogenous testosterone cannot suppress it (see _tcEndogAt, 2026-09-12).
   check('absolute model: a supraphysiological dose shuts endogenous production down',
-    _amPsup < G.TCALC_ENDOG_T_MGD*0.05, 'P still '+_amPsup.toFixed(3)+' mg/d');
+    _amPsup < G.TCALC_ENDOG_T_MGD*0.08 &&
+    _amPsup >= G.TCALC_ENDOG_T_MGD*G.TCALC_ADRENAL_FRAC,
+    'P still '+_amPsup.toFixed(3)+' mg/d');
   check('absolute model: no dose leaves endogenous production untouched',
     Math.abs(G._tcEndogAt(0, G.TCALC_ENDOG_T_MGD) - G.TCALC_ENDOG_T_MGD) < 1e-9);
   check('absolute model: suppression is monotone in dose',
@@ -10866,9 +10886,42 @@ console.log('\n\u2500\u2500 T-calc: endogenous production constant \u2500\u2500'
   if (typeof G._tcEndogAt === 'function') {
     // unsuppressed: zero drug leaves production at P0 exactly
     check('zero drug leaves production at P0', Math.abs(G._tcEndogAt(0,5) - 5) < 1e-9);
-    // and suppression still scales to P0, not to the old constant
-    check('suppression scales to the new P0',
-      Math.abs(G._tcEndogAt(5,5) - 5*Math.exp(-1)) < 1e-9);
+
+    // ── THE SUPPRESSION CURVE IS CALIBRATED ON MEASUREMENTS, NOT ON P0 ────────
+    // Until 2026-09-12 the suppression scale WAS P0, on the grounds that it added no
+    // free parameter. It was measurably too steep in both directions, so the scale is
+    // now k = 7.42 mg/day, derived from ONE measured point — and checked against a
+    // second, four times further along the curve, which it was not fitted to.
+    var _F=0.7199;                                  // testosterone fraction of enanthate
+    var _rate=function(mgWk){ return mgWk*_F/7; };  // mg testosterone per day
+    var _frac=function(mgWk){ return G._tcEndogAt(_rate(mgWk),5)/5; };
+    check('suppression scale is k, not P0 (the old form is gone)',
+      Math.abs(G._tcEndogAt(5,5) - 5*Math.exp(-1)) > 1e-6 && G.TCALC_HPTA_SCALE_MGD === 7.42,
+      String(G.TCALC_HPTA_SCALE_MGD));
+    // ANCHOR 1 — Matsumoto 1990: ED50 for gonadotropin suppression is 50 mg TE/week.
+    // The TESTICULAR term is half at that rate by construction; the adrenal 5% rides on top.
+    check('  …half-suppression lands on Matsumoto\u2019s 50 mg/wk ED50',
+      Math.abs(_frac(50) - (0.95*0.5 + 0.05)) < 0.005, (_frac(50)*100).toFixed(1)+'%');
+    // ANCHOR 2 — Coviello 2005, NOT fitted: 200 mg TE/week gave intratesticular T at 6% of
+    // baseline (LH 5%, FSH 3%). Add the ~5% adrenal an intratesticular assay cannot see and
+    // the model should land near 11%. This is the check that earns the shape.
+    check('  …and independently predicts Coviello\u2019s ~6% testicular residual at 200 mg/wk',
+      Math.abs(_frac(200) - 0.109) < 0.01, (_frac(200)*100).toFixed(1)+'%');
+    check('  …where the old form said 1.6%, nearly 4x too suppressed',
+      Math.abs(5*Math.exp(-_rate(200)/5)/5 - 0.016) < 0.002);
+    // The floor. No dose drives a man to zero, because ~5% is not LH-driven at all.
+    check('  …and nothing drives it below the 5% adrenal floor',
+      _frac(1000) >= G.TCALC_ADRENAL_FRAC && _frac(5000) >= G.TCALC_ADRENAL_FRAC,
+      (_frac(1000)*100).toFixed(2)+'% / '+(_frac(5000)*100).toFixed(2)+'%');
+    check('  …while still falling monotonically with dose',
+      _frac(25)>_frac(50) && _frac(50)>_frac(100) && _frac(100)>_frac(200) && _frac(200)>_frac(400));
+    // The source comment has to travel with the constant, or the next reader re-derives it.
+    check('  …and the calibration carries its citations in the source',
+      /Matsumoto 1990/.test(_p0Src) && /Coviello 2005/.test(_p0Src) && /var TCALC_HPTA_SCALE_MGD = 7\.42;/.test(_p0Src));
+    // The lag is a KNOWN gap, deliberately not modelled. Say so in the source so nobody
+    // reads the washout tail's instant recovery as a claim.
+    check('  …and the missing recovery lag is recorded as a known gap, not left implicit',
+      /no lag/.test(_p0Src) && /2\u201316 weeks|2-16 weeks/.test(_p0Src));
   }
 }
 
@@ -17425,10 +17478,20 @@ if (typeof G._tcFreeTSeries === 'function' && typeof G._tcAttrSeries === 'functi
     }
     check('  …whose pmol/L lines sum to the plotted curve', _atPmolWorst < 1e-9,
       'worst rel err ' + _atPmolWorst.toExponential(2));
-    var _atColors = _atSeen.map(function(c){ return c.color; });
+    // Own production is hidden by default (2026-09-12): on a loaded protocol it sits flat
+    // on the floor, so it is clutter. Every OTHER component is stroked in its colour.
+    var _atColors = _atSeen.filter(function(c){ return c.id !== '__endog__'; })
+                           .map(function(c){ return c.color; });
     check('  …each stroked in its legend colour',
       _atColors.every(function(c){ return _atStrokes.indexOf(c) >= 0; }),
       'missing: ' + _atColors.filter(function(c){ return _atStrokes.indexOf(c) < 0; }).join(','));
+    var _atEndog = (_atSeen.filter(function(c){ return c.id === '__endog__'; })[0] || {}).color;
+    check('  …with own production off by default, but still offered',
+      _atStrokes.indexOf(_atEndog) < 0 && G._tcAttrVisible('__endog__') === false);
+    G.localStorage.setItem('tc-attr-__endog__', 'true');
+    _atDraw();
+    check('  …and drawn once it is ticked', _atStrokes.indexOf(_atEndog) >= 0);
+    G.localStorage.removeItem('tc-attr-__endog__');
   }
 
   // The checkboxes have to actually hide a line, not just uncheck.
