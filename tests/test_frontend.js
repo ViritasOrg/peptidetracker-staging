@@ -289,6 +289,60 @@ if (typeof G._dedupInjectionSlots === 'function') {
     _ddOrder.length === 2 && _ddOrder[0].compound_id === 'glow' && _ddOrder[1].compound_id === 'hgh');
   check('dedup slots: tolerates empty/null input',
     G._dedupInjectionSlots([]).length === 0 && G._dedupInjectionSlots(null).length === 0);
+
+  // ── AN EXTRA DOSE OF THE SAME COMPOUND IS NOT A DUPLICATE ────────────────
+  // Reported 2026-09-13: an extra 75 mg Nebido added by hand never appeared in Today.
+  // It was logged correctly in the backend — cycle_id "manual", source "manual",
+  // logged true — but the protocol's own 100 mg Nebido already held the key
+  // "nebido_AM", so the manual shot was dropped. The one screen that records what
+  // actually went into the user showed less than they had taken.
+  //
+  // These are the real rows from prod for 2026-09-13, shape and all.
+  var _ddToday = [
+    {compound_id:'glow',        time_of_day:'AM', dose:'0.09', logged:true,  cycle_id:'protocol_4_2026-09-11'},
+    {compound_id:'hgh',         time_of_day:'AM', dose:'3',    logged:true,  cycle_id:'protocol_4_2026-09-11'},
+    {compound_id:'hgh',         time_of_day:'AM', dose:'3',    logged:false, cycle_id:'protocol_4_2026-09-11'},
+    {compound_id:'mast_e',      time_of_day:'AM', dose:'100',  logged:false, cycle_id:'protocol_4_2026-09-11'},
+    {compound_id:'nebido',      time_of_day:'AM', dose:'100',  logged:true,  cycle_id:'protocol_4_2026-09-11'},
+    {compound_id:'nebido',      time_of_day:'AM', dose:'75',   logged:true,  cycle_id:'manual', source:'manual'},
+    {compound_id:'retatrutide', time_of_day:'AM', dose:'3',    logged:true,  cycle_id:'protocol_4_2026-09-11'}
+  ];
+  var _ddRes = G._dedupInjectionSlots(_ddToday);
+  var _ddNeb = _ddRes.filter(function(e){ return e.compound_id === 'nebido'; });
+  check('dedup slots: a manually-added extra dose survives alongside the protocol dose',
+    _ddNeb.length === 2, _ddNeb.map(function(e){return e.dose;}).join(' + ') || 'only ' + _ddNeb.length);
+  check('  …and it is the 75 mg manual one that was being eaten',
+    _ddNeb.some(function(e){ return e.dose === '75' && e.cycle_id === 'manual'; }));
+  // The doubling this function exists for is unchanged: same protocol, same compound,
+  // same slot — one row, and it is the logged one.
+  check('  …while the dose-edit doubling inside one protocol still collapses',
+    _ddRes.filter(function(e){ return e.compound_id === 'hgh'; }).length === 1 &&
+    _ddRes.filter(function(e){ return e.compound_id === 'hgh'; })[0].logged === true);
+  check('  …so the real day renders 6 rows, not 5', _ddRes.length === 6, String(_ddRes.length));
+
+  // THE INVARIANT HENRIK ASKED FOR: nothing taken is ever hidden.
+  // A logged row is the record of something that was administered. It may only be
+  // merged away by ANOTHER logged row of the same compound, slot AND origin.
+  check('dedup slots: no logged dose is ever dropped for a different-origin row',
+    (function(){
+      var seen = {};
+      _ddRes.forEach(function(e){ seen[e.compound_id+'|'+(e.time_of_day||'')+'|'+(e.cycle_id||'')] = e; });
+      return _ddToday.filter(function(e){ return e.logged; }).every(function(e){
+        var k = e.compound_id+'|'+(e.time_of_day||'')+'|'+(e.cycle_id||'');
+        return seen[k] && seen[k].logged;
+      });
+    })());
+  // A T-Calc testosterone plan and a protocol dose are different origins too.
+  check('dedup slots: a T-Calc dose is not merged into a protocol dose',
+    G._dedupInjectionSlots([
+      {compound_id:'enanthate', time_of_day:'AM', dose:'50',  cycle_id:'protocol_9'},
+      {compound_id:'enanthate', time_of_day:'AM', dose:'100', cycle_id:'tcalc'}
+    ]).length === 2);
+  check('dedup slots: two protocols dosing the same compound both show',
+    G._dedupInjectionSlots([
+      {compound_id:'nebido', time_of_day:'AM', dose:'100', cycle_id:'protocol_a'},
+      {compound_id:'nebido', time_of_day:'AM', dose:'100', cycle_id:'protocol_b'}
+    ]).length === 2);
 }
 
 // ── TRT tab: surface T-Calc-planned testosterone (the "two ways to plan TRT") ──

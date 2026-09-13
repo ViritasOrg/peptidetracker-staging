@@ -3,7 +3,23 @@
 // (the administered shot is kept and a new planned one was added); the backend now
 // prevents new duplicates, this also hides any created before that fix. Mirrors the
 // dedup buildSchedule already applies.
-function _dedupInjectionSlots(list){var m={},order=[];(list||[]).forEach(function(e){var k=e.compound_id+'_'+(e.time_of_day||'');var c=m[k];if(c===undefined){m[k]=e;order.push(k);}else if(e.logged&&!c.logged){m[k]=e;}});return order.map(function(k){return m[k];});}
+// ⚠️ THE KEY MUST INCLUDE THE ORIGIN, OR A REAL DOSE DISAPPEARS.
+// This collapses the dose-edit doubling: editing a dose leaves the old row and adds a
+// new one for the same compound and slot, so Today showed the compound twice. Keyed on
+// compound + slot alone, it ALSO collapsed two genuinely different administrations of
+// the same compound in the same slot — and kept only the first.
+//
+// Reported 2026-09-13: an extra 75 mg Nebido added by hand never appeared in Today. It
+// was logged correctly in the backend (cycle_id "manual", source "manual", logged true);
+// the protocol's own 100 mg Nebido was already occupying the key "nebido_AM", so the
+// manual shot was dropped on the floor. The one place that records what actually went
+// into the user silently showed less than they had taken.
+//
+// cycle_id is the discriminator. Two rows from the SAME protocol for the same compound
+// and slot are the doubling this exists to fix, and still collapse. A row from anywhere
+// else — a manual entry, a T-Calc plan, a second protocol — is a different
+// administration and is never merged away.
+function _dedupInjectionSlots(list){var m={},order=[];(list||[]).forEach(function(e){var k=e.compound_id+'_'+(e.time_of_day||'')+'_'+(e.cycle_id||'');var c=m[k];if(c===undefined){m[k]=e;order.push(k);}else if(e.logged&&!c.logged){m[k]=e;}});return order.map(function(k){return m[k];});}
 // SEVEN DAYS BACK. Briefly 365 (2026-08-17), reverted at Henrik's request on
 // 2026-08-19: "Restore the 7 days only carousel." A year of tiles is not how you reach
 // an old day — the calendar card at the head of the strip is, and it can go back
