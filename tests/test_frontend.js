@@ -17429,6 +17429,181 @@ if(typeof G.macrosForUser==='function'){
   G._macrosTrainKcal=_mfSave.tk;
 }
 
+// ── ONE DAY'S ROWS, TWO SCREENS, ONE ANSWER ─────────────────────────────────
+// Today and the T-Calc curve read the same stored rows through two different
+// de-duplicators, written months apart and for different reasons:
+//   _dedupInjectionSlots (Today)  — collapses the dose-edit doubling within a protocol
+//   _tcCurveLog          (curve)  — collapses one injection stored under two spellings
+// Nothing held them to the same answer, and on 2026-09-13 they disagreed in the same
+// direction on the same day: an extra 75 mg Nebido was dropped by BOTH, so Today showed
+// 6 doses where 7 were taken and the curve integrated 100 mg where 175 went in. Two
+// independent fixes, and still nothing asserting the two agree.
+//
+// This is the ONE NUMBER, ONE SOURCE rule made structural for the pair that matters
+// most: what the user ticked off, and what the model integrated.
+console.log('\n── T-calc: the curve and Today agree on one day ────────────');
+if (typeof G._dedupInjectionSlots === 'function' && typeof G._tcCurveLog === 'function') {
+  var _agSaveH = G._tcLoggedHistory, _agSaveP = G._tcProtocolInjections;
+  // One day, as the backend stores it: the protocol's own Nebido and an extra by hand.
+  var _agDay = '2026-09-13';
+  var _agStored = [
+    {compound_id:'nebido', time_of_day:'AM', dose:'100', logged:true,  active:true,
+     cycle_id:'protocol_4_2026-09-11', id:'row-a', tier:'trt'},
+    {compound_id:'nebido', time_of_day:'AM', dose:'75',  logged:true,  active:true,
+     cycle_id:'manual', source:'manual', id:'row-b', tier:'trt'}
+  ];
+  // Today's view of it.
+  var _agToday = G._dedupInjectionSlots(_agStored.map(function(e){
+    return Object.assign({}, e, {date:_agDay});
+  })).filter(function(e){ return e.compound_id === 'nebido'; });
+  // The curve's view of the same rows, in the shape _tcLoggedHistory produces.
+  G._tcLoggedHistory = function(){
+    return _agStored.map(function(e){
+      return {compId:e.compound_id, doseMg:e.dose, date:_agDay,
+              injId:e.id, cycleId:e.cycle_id, source:'logged'};
+    });
+  };
+  G._tcProtocolInjections = function(){ return []; };
+  var _agCurve = G._tcCurveLog().filter(function(e){ return e.compId === 'nebido'; });
+
+  check('the curve and Today count the same number of Nebido doses that day',
+    _agToday.length === _agCurve.length,
+    'Today ' + _agToday.length + ' vs curve ' + _agCurve.length);
+  var _agSum = function(rows, k){ return rows.reduce(function(a, r){ return a + parseFloat(r[k]); }, 0); };
+  check('  …and the same total mg — what was ticked is what gets integrated',
+    _agSum(_agToday, 'dose') === _agSum(_agCurve, 'doseMg'),
+    _agSum(_agToday, 'dose') + ' mg vs ' + _agSum(_agCurve, 'doseMg') + ' mg');
+  check('  …which is the 175 mg actually administered',
+    _agSum(_agCurve, 'doseMg') === 175, String(_agSum(_agCurve, 'doseMg')));
+
+  // The other direction: one administration stored under both tiers is ONE dose on
+  // both screens. Today keys on the origin, the curve on the amount — different rules,
+  // and they still have to land on the same count.
+  var _agDual = [
+    {compound_id:'nebido', time_of_day:'AM', dose:'100', logged:true, active:true,
+     cycle_id:'c1', id:'dual-a', tier:'trt'},
+    {compound_id:'test_u', time_of_day:'AM', dose:'100', logged:true, active:true,
+     cycle_id:'c1', id:'dual-b', tier:'enhanced'}
+  ];
+  G._tcLoggedHistory = function(){
+    return _agDual.map(function(e){
+      return {compId:e.compound_id, doseMg:e.dose, date:_agDay,
+              injId:e.id, cycleId:e.cycle_id, source:'logged'};
+    });
+  };
+  var _agDualCurve = G._tcCurveLog();
+  var _agDualToday = G._dedupInjectionSlots(_agDual.map(function(e){
+    return Object.assign({}, e, {date:_agDay});
+  }));
+  check('one injection stored under both tiers is one dose on the curve',
+    _agDualCurve.length === 1, String(_agDualCurve.length));
+  // Today keys on compound_id, which is NOT canonicalised — so it shows the two tier
+  // rows separately. That is a real divergence, recorded rather than asserted away:
+  // it is cosmetic (Today is a checklist, and each row is tickable) where the curve's
+  // would be arithmetic. Worth closing, but not by making the curve double-count.
+  check('  …and Today, which does not canonicalise, shows them as two tickable rows',
+    _agDualToday.length === 2,
+    'if this becomes 1, Today gained canonicalisation and this note is stale');
+
+  G._tcLoggedHistory = _agSaveH; G._tcProtocolInjections = _agSaveP;
+}
+
+// ── THE RECOMMENDATION MUST NOT SWING ON NOISE ──────────────────────────────
+// The solver scores several candidate schedules and presents the winner as THE answer.
+// Nothing asserted that the answer moves smoothly with its inputs — and it has to,
+// because the inputs are noisy by nature: the calibration anchor is a lab value the
+// user typed, and the model behind it has been recalibrated twice.
+//
+// WHAT THE SWEEP ACTUALLY SHOWS (measured across measuredFT 888-942, ±3% either side
+// of 915, with the outgoing ester still scheduled — the case that stresses it most):
+//
+//   anchor | cadence      | time-wtd mg/wk | settled level
+//      888 | e2d          |             74 | 1329-1391
+//      897 | daily-dither |             79 | 1382-1407
+//      906 | e2d          |             74 | 1348-1411
+//      915 | e2d          |             74 | 1358-1421
+//      924 | daily-dither |             73 | 1366-1397
+//      933 | daily-dither |             71 | 1402-1429
+//      942 | daily-dither |             68 | 1386-1417
+//
+// The CADENCE FAMILY flips — three times across a 6% sweep. That is real: the gap
+// between the top two straddles the _TIE band in the ranker, so below it "fewer
+// injections" picks every-2-days and above it "holds the target better" picks daily
+// dithering. Both are defensible plans; the ranking rule is sound.
+//
+// What must NOT move is the DOSE and the LEVEL, and they do not: the time-weighted
+// weekly load drifts 79 → 68 smoothly as the anchor rises, and every winner lands on
+// the target whichever family it comes from. That is what these assertions pin.
+//
+// ⚠️ DO NOT ASSERT THE PHASE-MEAN. An unweighted mean over phase entries is not a
+// weekly load — a plan with more ramp phases has more small early entries dragging it
+// down, so comparing two families on it manufactures a 27% "swing" that is an artefact
+// of the metric, not of the solver. Weight by how long each phase runs.
+console.log('\n── T-calc: the solve is stable under a noisy anchor ────────');
+if (typeof G.tcSolveTransition === 'function') {
+  var _ssSave = {bw:G._tcBwEntries, tp:G._tcp, by:G._tcp.birthYear, ft:G._tcp.measuredFT,
+                 sh:G._tcp.shbg, cd:G._tcp.currentDoseMgWk};
+  var _ssSeq = function(n, every, mg, first, back){
+    var o=[], F=new Date(first+'T12:00:00');
+    for(var i=0;i<n;i++){ var d=new Date(F.getTime()+(back?-1:1)*i*every*86400000);
+      o.push({compId:'nebido', doseMg:String(mg),
+              date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}); }
+    return o;
+  };
+  G._tcp.birthYear='1981'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+  var _ssHist = _ssSeq(33,2,100,'2026-08-26',true);
+  var _ssSolve = function(ft){
+    G._tcp.measuredFT = String(ft);
+    G._tcBwEntries = [{date:'2026-08-18', free_t:String(ft), total_t:'32', shbg:'25', unit:'pmol/L'}];
+    var r = G.tcSolveTransition({history:_ssHist, scheduled:_ssSeq(35,2,100,'2026-08-28',false),
+      incomingId:'enanthate', startDate:'2026-08-28', targetPmol:1400,
+      concMgPerMl:250, stepMl:0.05, weeks:16});
+    if (!r || !r.best) return null;
+    var ph = r.best.phases || [], W = 16, tw = 0, wk = 0;
+    ph.forEach(function(p, i){
+      var span = ((i+1 < ph.length ? ph[i+1].w : W) - p.w);
+      tw += span; wk += p.perWeek * span;
+    });
+    var weekly = r.best.weekly || [];
+    var tail = weekly.slice(r.best.settleWeeks || 0).map(function(x){ return x.mean; });
+    return {cad:(r.best.cadence||{}).key, load: tw ? wk/tw : 0,
+            lo: Math.min.apply(null, tail), hi: Math.max.apply(null, tail)};
+  };
+  var _ssRun = [888,897,906,915,924,933,942].map(_ssSolve);
+  check('every anchor in a ±3% sweep still solves', _ssRun.every(function(r){ return !!r; }));
+  if (_ssRun.every(function(r){ return !!r; })) {
+    // THE DOSE MOVES SMOOTHLY. A step here means the recommendation is chattering.
+    var _ssJump = 0, _ssAt = '';
+    for (var i = 1; i < _ssRun.length; i++) {
+      var j = Math.abs(_ssRun[i].load - _ssRun[i-1].load) / _ssRun[i-1].load;
+      if (j > _ssJump) { _ssJump = j; _ssAt = _ssRun[i-1].load.toFixed(0) + '→' + _ssRun[i].load.toFixed(0); }
+    }
+    check('the recommended weekly load never jumps between adjacent anchors',
+      _ssJump < 0.15, 'worst jump ' + (_ssJump*100).toFixed(1) + '% (' + _ssAt + ')');
+    // …AND IT TRACKS THE ANCHOR IN THE RIGHT DIRECTION. A higher measured free T means
+    // the same schedule already reaches further, so LESS incoming ester is needed.
+    check('  …and a higher measured free T asks for less, not more',
+      _ssRun[_ssRun.length-1].load < _ssRun[0].load,
+      _ssRun[0].load.toFixed(0) + ' → ' + _ssRun[_ssRun.length-1].load.toFixed(0) + ' mg/wk');
+    // THE ONE THAT MATTERS. Whichever family wins, the plan must hold the target.
+    var _ssMiss = _ssRun.filter(function(r){ return r.lo < 1400*0.94 || r.hi > 1400*1.06; });
+    check('every winner holds the target, whichever solver family produced it',
+      _ssMiss.length === 0,
+      _ssMiss.map(function(r){ return r.cad + ' ' + Math.round(r.lo) + '-' + Math.round(r.hi); }).join(' | '));
+    // The cadence family IS allowed to flip — the ranker breaks a near-tie on fewer
+    // injections, and which side of the tie band a candidate falls on moves with the
+    // anchor. Recorded, not forbidden: if this ever stops flipping the note above is
+    // stale and the ranking has changed.
+    var _ssFams = {};
+    _ssRun.forEach(function(r){ _ssFams[r.cad] = 1; });
+    check('  …even though the cadence family legitimately changes across the sweep',
+      Object.keys(_ssFams).length >= 2, Object.keys(_ssFams).join(','));
+  }
+  G._tcBwEntries = _ssSave.bw; G._tcp = _ssSave.tp;
+  G._tcp.birthYear = _ssSave.by; G._tcp.measuredFT = _ssSave.ft;
+  G._tcp.shbg = _ssSave.sh; G._tcp.currentDoseMgWk = _ssSave.cd;
+}
+
 // ── EVERY SOLVER EMITS THE SAME PHASE CONTRACT ──────────────────────────────
 // Three solver families produce the dose plan — fixed-cadence, variable-interval and
 // daily-dithered — and the scoring picks whichever wins. Downstream code reads the
