@@ -19,7 +19,21 @@
 // and slot are the doubling this exists to fix, and still collapse. A row from anywhere
 // else — a manual entry, a T-Calc plan, a second protocol — is a different
 // administration and is never merged away.
-function _dedupInjectionSlots(list){var m={},order=[];(list||[]).forEach(function(e){var k=e.compound_id+'_'+(e.time_of_day||'')+'_'+(e.cycle_id||'');var c=m[k];if(c===undefined){m[k]=e;order.push(k);}else if(e.logged&&!c.logged){m[k]=e;}});return order.map(function(k){return m[k];});}
+// CANONICALISE THE COMPOUND ID IN THE KEY, exactly as the curve does.
+// One injection is sometimes stored TWICE — under the Enhanced tier as test_u and under
+// TRT as nebido, two rows with different ids. _tcCurveLog has collapsed those since
+// 2026-08-15 (counting both doubled the forward curve), but Today keyed on the raw
+// compound_id and listed them as two tickable doses. The same day shown as two
+// injections on one screen and one on the other is the ONE NUMBER, ONE SOURCE rule
+// broken in the pair where it matters most: what the user ticks off, and what the model
+// integrates. Only testosterone esters have aliases, so nothing else moves.
+//
+// Guarded because tab-tcalc.js owns the alias map and script order is not guaranteed;
+// the call itself happens at render time, long after every file has loaded.
+function _todayCanonCompId(id){
+  return (typeof _tcCanonCompId === 'function') ? _tcCanonCompId(id) : id;
+}
+function _dedupInjectionSlots(list){var m={},order=[];(list||[]).forEach(function(e){var k=_todayCanonCompId(e.compound_id)+'_'+(e.time_of_day||'')+'_'+(e.cycle_id||'');var c=m[k];if(c===undefined){m[k]=e;order.push(k);}else if(e.logged&&!c.logged){m[k]=e;}});return order.map(function(k){return m[k];});}
 // SEVEN DAYS BACK. Briefly 365 (2026-08-17), reverted at Henrik's request on
 // 2026-08-19: "Restore the 7 days only carousel." A year of tiles is not how you reach
 // an old day — the calendar card at the head of the strip is, and it can go back

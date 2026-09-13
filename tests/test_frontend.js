@@ -17497,13 +17497,36 @@ if (typeof G._dedupInjectionSlots === 'function' && typeof G._tcCurveLog === 'fu
   }));
   check('one injection stored under both tiers is one dose on the curve',
     _agDualCurve.length === 1, String(_agDualCurve.length));
-  // Today keys on compound_id, which is NOT canonicalised — so it shows the two tier
-  // rows separately. That is a real divergence, recorded rather than asserted away:
-  // it is cosmetic (Today is a checklist, and each row is tickable) where the curve's
-  // would be arithmetic. Worth closing, but not by making the curve double-count.
-  check('  …and Today, which does not canonicalise, shows them as two tickable rows',
-    _agDualToday.length === 2,
-    'if this becomes 1, Today gained canonicalisation and this note is stale');
+  // …and Today says one too, since 2026-09-13. It used to key on the raw compound_id
+  // and list the two tier rows separately — the same day shown as two injections on one
+  // screen and one on the other. Closed in the direction that keeps the arithmetic
+  // right: Today canonicalises like the curve, rather than the curve double-counting.
+  check('  …and Today says one as well, on the same rows',
+    _agDualToday.length === 1, String(_agDualToday.length));
+  check('  …so the two screens agree on the count for a dual-tier day',
+    _agDualToday.length === _agDualCurve.length);
+  // A dose ticked under either tier must show as ticked. The surviving row is the
+  // logged one whichever tier carried it, or the checklist would offer to re-take a
+  // dose the user has already had.
+  check('  …and the logged row survives whichever tier it came from', (function(){
+    var pick = function(loggedTier){
+      return G._dedupInjectionSlots([
+        {compound_id:'nebido', time_of_day:'AM', dose:'100', date:_agDay, cycle_id:'c1',
+         tier:'trt',      id:'t-row', logged:loggedTier === 'trt'},
+        {compound_id:'test_u', time_of_day:'AM', dose:'100', date:_agDay, cycle_id:'c1',
+         tier:'enhanced', id:'e-row', logged:loggedTier === 'enhanced'}
+      ]);
+    };
+    var a = pick('trt'), b = pick('enhanced');
+    return a.length === 1 && a[0].logged === true && a[0].id === 't-row'
+        && b.length === 1 && b[0].logged === true && b[0].id === 'e-row';
+  })());
+  // Only testosterone esters have aliases — nothing else may be merged by this.
+  check('  …while two genuinely different compounds are never merged by canonicalising',
+    G._dedupInjectionSlots([
+      {compound_id:'hgh',  time_of_day:'AM', dose:'3',   date:_agDay, cycle_id:'c1'},
+      {compound_id:'glow', time_of_day:'AM', dose:'0.1', date:_agDay, cycle_id:'c1'}
+    ]).length === 2);
 
   G._tcLoggedHistory = _agSaveH; G._tcProtocolInjections = _agSaveP;
 }
