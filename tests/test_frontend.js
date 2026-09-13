@@ -17429,6 +17429,109 @@ if(typeof G.macrosForUser==='function'){
   G._macrosTrainKcal=_mfSave.tk;
 }
 
+// ── EVERY SOLVER EMITS THE SAME PHASE CONTRACT ──────────────────────────────
+// Three solver families produce the dose plan — fixed-cadence, variable-interval and
+// daily-dithered — and the scoring picks whichever wins. Downstream code reads the
+// winner's phases without knowing which family produced it, so a field one of them
+// forgets is a latent break that only appears when that family happens to win.
+//
+// That is not hypothetical. The fixed-cadence solver omitted `perWeek` while the other
+// two set it, so the debug dump rendered "w0=undefined mg/wk" whenever it won. It rarely
+// won, so it went unseen until recalibrating the HPTA model on 2026-09-12 shifted the
+// scoring enough to make it win a covered case.
+//
+// REQUIRED means every phase from every family. OPTIONAL fields carry meaning by their
+// absence and must NOT be forced: no `iv` means "use the compound's cadence" (see the
+// dose_phases mapping in tcSolveTransition), `pattern` belongs to the dithered family
+// alone, and overshoot/unreachable are fixed-cadence diagnostics.
+console.log('\n── T-calc: the solver phase contract ───────────────────────');
+if (typeof G.tcSolveTransition === 'function' && typeof G._tcSolveDailyDither === 'function') {
+  // ⚠️ SNAPSHOT THE FIELDS, NOT THE OBJECT. This block mutates _tcp in place, so
+  // stashing the reference and assigning it back restores nothing — it hands back the
+  // object it just changed. That left birthYear/measuredFT/shbg/currentDoseMgWk set for
+  // every test after this one and broke eleven of them, all in the Dose Finder and the
+  // exposure card, which read those fields as the user's own profile.
+  var _pcSave = {bw:G._tcBwEntries, tp:G._tcp,
+                 by:G._tcp.birthYear, ft:G._tcp.measuredFT,
+                 sh:G._tcp.shbg, cd:G._tcp.currentDoseMgWk};
+  var _pcHist = function(n, every, mg, last){
+    var o=[], L=new Date(last+'T12:00:00');
+    for(var i=0;i<n;i++){ var d=new Date(L.getTime()-i*every*86400000);
+      o.push({compId:'nebido', doseMg:String(mg),
+              date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}); }
+    return o;
+  };
+  G._tcp.birthYear='1981'; G._tcp.measuredFT='915'; G._tcp.shbg='25'; G._tcp.currentDoseMgWk='350';
+  G._tcBwEntries=[{date:'2026-08-18', free_t:'915', total_t:'32', shbg:'25', unit:'pmol/L'}];
+  var _pcOpts = {incomingId:'enanthate', startDate:'2026-08-28', targetPmol:1400,
+                 concMgPerMl:250, stepMl:0.05, weeks:16};
+  var _pcRes = G.tcSolveTransition(Object.assign({history:_pcHist(33,2,100,'2026-08-26')}, _pcOpts));
+  // …and the dithered family, which does not win this scenario, called directly.
+  G._tcBwEntries=[{date:'2026-08-18', free_t:'1300', total_t:'32', shbg:'25', unit:'pmol/L'}];
+  G._tcp.measuredFT='1300';
+  var _pcDith = G._tcSolveDailyDither(Object.assign({history:_pcHist(60,2,100,'2026-08-20')},
+                  {incomingId:'enanthate', startDate:'2026-08-27', targetPmol:1400,
+                   concMgPerMl:250, stepMl:0.05, weeks:16}), {iters:10});
+
+  var _pcCands = (_pcRes.alternatives || []).slice();
+  if (_pcDith && _pcDith.phases) _pcCands.push(_pcDith);
+  check('the solve returns candidates from more than one solver family',
+    _pcCands.length >= 3 &&
+    _pcCands.some(function(c){ return (c.cadence||{}).key === 'variable'; }) &&
+    _pcCands.some(function(c){ return (c.cadence||{}).dithered; }),
+    _pcCands.map(function(c){ return (c.cadence||{}).key; }).join(','));
+
+  var _pcNum = function(v){ return typeof v === 'number' && isFinite(v); };
+  var _pcBad = [];
+  _pcCands.forEach(function(c){
+    (c.phases || []).forEach(function(p, i){
+      var who = ((c.cadence||{}).key || '?') + '#' + i;
+      if (!_pcNum(p.w) || p.w < 0)              _pcBad.push(who + '.w');
+      if (!_pcNum(p.mg) || p.mg < 0)            _pcBad.push(who + '.mg');
+      if (!_pcNum(p.ml) || p.ml < 0)            _pcBad.push(who + '.ml');
+      if (!_pcNum(p.perWeek) || p.perWeek < 0)  _pcBad.push(who + '.perWeek');
+      if (p.iv !== undefined && !(p.iv > 0))    _pcBad.push(who + '.iv');
+      if (p.pattern !== undefined &&
+          !(Array.isArray(p.pattern) && p.pattern.length === 7 && p.pattern.every(_pcNum)))
+        _pcBad.push(who + '.pattern');
+    });
+  });
+  check('every phase from every solver carries w, mg, ml and perWeek as finite numbers',
+    _pcBad.length === 0, _pcBad.join(' '));
+
+  // THE SUBSTANTIVE ONE. perWeek must be the weekly mg that phase actually delivers,
+  // computed from the phase's OWN fields. This catches a missing field and a wrong
+  // formula alike — the fixed-cadence solver was first given mg*7/days, which is the
+  // variable-interval rule and produced roughly double the real weekly load, because
+  // its cadence carries INJECTIONS per week rather than an interval in days.
+  var _pcWrong = [];
+  _pcCands.forEach(function(c){
+    var perWk = (c.cadence || {}).perWeek;
+    (c.phases || []).forEach(function(p, i){
+      var expect = null;
+      if (p.pattern && p.pattern.length) expect = p.pattern.reduce(function(a,b){ return a+b; }, 0);
+      else if (p.iv > 0)                 expect = p.mg * 7 / p.iv;
+      else if (perWk > 0)                expect = p.mg * perWk;
+      if (expect === null) return;
+      if (Math.abs(p.perWeek - expect) > 1.01)
+        _pcWrong.push(((c.cadence||{}).key||'?') + '#' + i + ' says ' + p.perWeek + ' want ' + Math.round(expect));
+    });
+  });
+  check('  …and perWeek is the weekly load that phase actually delivers',
+    _pcWrong.length === 0, _pcWrong.join(' | '));
+
+  // The absence of `iv` is MEANING, not an omission — do not "fix" it by forcing the
+  // field on. tcSolveTransition only copies it through when it is set, and the ramp
+  // generator reads a phase without one as "use the compound's cadence".
+  check('an absent iv is preserved as "use the compound cadence", not defaulted',
+    /if\(p\.iv>0\)e\.iv=p\.iv;/.test(_tcSrc) &&
+    (_pcRes.dose_phases || []).every(function(e){ return e.iv === undefined || e.iv > 0; }));
+
+  G._tcp = _pcSave.tp; G._tcBwEntries = _pcSave.bw;
+  G._tcp.birthYear = _pcSave.by; G._tcp.measuredFT = _pcSave.ft;
+  G._tcp.shbg = _pcSave.sh; G._tcp.currentDoseMgWk = _pcSave.cd;
+}
+
 // ── MASS BALANCE: EVERY mg ADMINISTERED REACHES THE MODEL, EXACTLY ONCE ─────
 // THE test for T-Calc. Every other number the tab produces — the plotted level, the
 // peak, the steady-state average, the solved dose recommendation, the Dose Finder — is
