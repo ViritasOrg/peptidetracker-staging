@@ -1582,8 +1582,17 @@ function _tcCurveLog(){
   // The greyed-out planner does not contribute. Its data is untouched and comes
   // straight back when the switch is flipped, but a planner that is visibly
   // disabled must not be silently driving the curve.
-  var seen = {}, merged = [];
-  function _add(list){
+  // THREE KEYS, BECAUSE THERE ARE THREE DIFFERENT QUESTIONS.
+  //   _rec     compound|date|injId   — is this the same RECORDED administration?
+  //   _claimed compound|date         — does a record already exist for that day?
+  //   _plan    compound|date|cycleId — is this the same PLANNED row?
+  // One key for all three is what broke: keyed on compound|date alone, the log allowed
+  // exactly ONE dose of a compound per day and silently dropped every other. Reported
+  // 2026-09-13 — an extra 75 mg Nebido on a day the protocol already had 100 mg never
+  // reached the model, so 175 mg went in and the curve integrated 100. Every level,
+  // peak and solved recommendation downstream was computed from a dose nobody took.
+  var _rec = {}, _claimed = {}, _plan = {}, merged = [];
+  function _add(list, isRecord){
     (list || []).forEach(function(e){
       if (!e || !e.date || !(parseDec(e.doseMg) > 0)) return;
       // A past-dated dose that was never ticked is a plan the user did not confirm
@@ -1600,9 +1609,32 @@ function _tcCurveLog(){
       // counted twice, which is what doubled the forward curve after a save
       // (2026-08-15). Doing it here is the only place that holds for every source.
       var _cid = (typeof _tcCanonCompId === 'function') ? _tcCanonCompId(e.compId) : e.compId;
-      var k = _cid + '|' + e.date;
-      if (seen[k]) return;
-      seen[k] = true;
+      var _day = _cid + '|' + e.date;
+      if (isRecord) {
+        // THE DOSE IS THE DISCRIMINATOR, NOT THE ROW ID.
+        // Tempting to key on injId — two stored rows, two injections — but it is wrong:
+        // ONE administration is routinely stored TWICE, under the Enhanced tier as
+        // test_u and under TRT as nebido, with different ids. Counting both is the
+        // doubling that inflated the forward curve on 2026-08-15. Same canonical
+        // compound, same day, same amount = one injection recorded more than once.
+        // A DIFFERENT amount is a different injection, which is what the 2026-09-13
+        // report was: 100 mg from the protocol and an extra 75 mg added by hand.
+        // Two genuinely separate shots of the identical amount on one day still
+        // collapse; that is the old behaviour and the safe direction when the data
+        // cannot tell them apart.
+        var _rk = _day + '|d' + parseDec(e.doseMg);
+        if (_rec[_rk]) return;
+        _rec[_rk] = true;
+        _claimed[_day] = true;
+      } else {
+        // ⚠️ THE RECORD OUTRANKS THE PLAN, on the same compound and day. A logged dose
+        // and a leftover unlogged row for it are one administration, and counting both
+        // is the doubling this whole function exists to prevent.
+        if (_claimed[_day]) return;
+        var _pk = _day + '|' + (e.cycleId || '');
+        if (_plan[_pk]) return;
+        _plan[_pk] = true;
+      }
       // Carry the canonical id forward too, so the PK lookup downstream resolves the
       // same ester the key collapsed on — history and protocol rows already do.
       merged.push((e.compId === _cid) ? e : Object.assign({}, e, { compId: _cid }));
@@ -1616,7 +1648,7 @@ function _tcCurveLog(){
   // already went in. This layer is what was missing entirely in simple mode: the
   // curve was built from the plan and the protocol's future rows, so six weeks of
   // logged TRT contributed nothing (2026-08-07).
-  _add(_tcLoggedHistory());
+  _add(_tcLoggedHistory(), true);
 
   // ── 2. THE PLAN, which is now only ever the protocol's ────────────────────
   // Phase 6 removed T-Calc's planner. What used to sit here — the simple plan, the
@@ -1632,7 +1664,7 @@ function _tcCurveLog(){
   // rows (below) — the same two sources Today and the week strip read.
 
   // ── 3. the protocol's planned future ──────────────────────────────────────
-  _add(_tcProtocolInjections());
+  _add(_tcProtocolInjections(), false);
   merged.sort(function(a,b){ return (a.date||'') < (b.date||'') ? -1 : (a.date||'') > (b.date||'') ? 1 : 0; });
   return merged;
 }

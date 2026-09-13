@@ -9156,8 +9156,10 @@ console.log('\n── T-Calc simple planner ────────────
       /openPastInjection\(/.test(_tcSrc) && !/function _tcShowAddSheet/.test(_tcSrc));
   }
   // The curve reads stored rows only now — no planner can drive it invisibly.
+  // Matched on the call site, not its full argument list — _add gained an isRecord
+  // flag on 2026-09-13 and this guard is about WHERE the future comes from.
   check('the curve takes its future from the protocol alone',
-    /_add\(_tcProtocolInjections\(\)\);/.test(_tcSrc) &&
+    /_add\(_tcProtocolInjections\(\)/.test(_tcSrc) &&
     !/function _tcSimplePlanInjections/.test(_tcSrc));
 
   // Regression (2026-07-30): the ester dropdown rendered with only its placeholder.
@@ -15715,8 +15717,13 @@ console.log('\n── Drafts cannot exist: the planner is gone ─────�
     !/function _tcUnsavedDraftBanner/.test(_dfSrc) && !/draft:true/.test(_dfSrc));
   check('  …and the save-to-protocol route is gone with it',
     !/function _tcOpenSaveToStack/.test(_dfSrc) && !/function _tcSaveToExistingStack/.test(_dfSrc));
+  // Exactly two sources, and these two. Matched on the call sites themselves rather
+  // than their full text: _add gained an isRecord flag on 2026-09-13, and a test that
+  // pins the argument list breaks on a change that does not alter what it is guarding.
   check('the curve is built from the record and the protocol only',
-    /_add\(_tcLoggedHistory\(\)\);/.test(_dfSrc) && /_add\(_tcProtocolInjections\(\)\);/.test(_dfSrc));
+    /_add\(_tcLoggedHistory\(\)/.test(_dfSrc) && /_add\(_tcProtocolInjections\(\)/.test(_dfSrc) &&
+    (_dfSrc.match(/\n  _add\(/g) || []).length === 2,
+    'call sites: ' + (_dfSrc.match(/\n  _add\(/g) || []).length);
 }
 
 // ── T-History: the "as of" readout follows the series end ────────────────────
@@ -17420,6 +17427,77 @@ if(typeof G.macrosForUser==='function'){
   if(_mfSave.s==null) G.localStorage.removeItem('user_sex'); else G.localStorage.setItem('user_sex',_mfSave.s);
   if(_mfSave.t==null) G.localStorage.removeItem('macros-include-training'); else G.localStorage.setItem('macros-include-training',_mfSave.t);
   G._macrosTrainKcal=_mfSave.tk;
+}
+
+// ── MASS BALANCE: EVERY mg ADMINISTERED REACHES THE MODEL, EXACTLY ONCE ─────
+// THE test for T-Calc. Every other number the tab produces — the plotted level, the
+// peak, the steady-state average, the solved dose recommendation, the Dose Finder — is
+// an integral over _tcCurveLog. If a dose is missing from that input, nothing downstream
+// can be right and nothing downstream will complain.
+//
+// Both directions have now bitten in production:
+//   TOO FEW — 2026-09-13: keyed on compound|date, the log allowed one dose of a compound
+//     per day. An extra 75 mg Nebido on a day the protocol already had 100 mg never
+//     reached the model. 175 mg went in; the curve integrated 100.
+//   TOO MANY — 2026-08-15: one injection stored under BOTH tiers (test_u/enhanced and
+//     nebido/trt, different row ids) was counted twice and doubled the forward curve.
+// The rule that satisfies both: same canonical compound, same day, same AMOUNT is one
+// administration recorded more than once. A different amount is a different injection.
+console.log('\n── T-calc: mass balance of the curve input ─────────────────');
+if (typeof G._tcCurveLog === 'function') {
+  var _mbSaveHist = G._tcLoggedHistory, _mbSaveProto = G._tcProtocolInjections;
+  var _mbRun = function(hist, proto){
+    G._tcLoggedHistory      = function(){ return hist || []; };
+    G._tcProtocolInjections = function(){ return proto || []; };
+    return G._tcCurveLog();
+  };
+  var _mbSum = function(rows){ return (rows||[]).reduce(function(a,r){ return a + parseFloat(r.doseMg); }, 0); };
+
+  // ── The reported case, with the real prod rows for 2026-09-13. ──
+  var _mbReported = [
+    {compId:'nebido', doseMg:'100', date:'2026-09-13', cycleId:'protocol_4_2026-09-11', injId:'5c5e9971'},
+    {compId:'nebido', doseMg:'75',  date:'2026-09-13', cycleId:'manual',                injId:'67a9989a'}
+  ];
+  var _mbOut = _mbRun(_mbReported, []);
+  check('an extra dose of the same compound on the same day reaches the model',
+    _mbOut.length === 2, String(_mbOut.length));
+  check('  …so the curve integrates 175 mg, which is what went in',
+    _mbSum(_mbOut) === 175, _mbSum(_mbOut) + ' mg of 175');
+
+  // ── And the opposite failure stays fixed. ──
+  check('one injection stored under both tiers still counts ONCE',
+    _mbRun([{compId:'nebido', doseMg:'100', date:'2026-09-13', cycleId:'c1', injId:'a'},
+            {compId:'nebido', doseMg:'100', date:'2026-09-13', cycleId:'c2', injId:'b'}], []).length === 1);
+  check('  …even though they are different stored rows — the DOSE is the discriminator',
+    _mbSum(_mbRun([{compId:'nebido', doseMg:'100', date:'2026-09-13', injId:'a'},
+                   {compId:'nebido', doseMg:'100', date:'2026-09-13', injId:'b'}], [])) === 100);
+  // The record outranks the plan on the same compound and day — a logged dose and a
+  // leftover unlogged row for it are one administration.
+  check('a recorded dose still outranks the protocol row for that day',
+    (function(){
+      var r = _mbRun([{compId:'enanthate', doseMg:'150', date:'2026-10-01', injId:'x'}],
+                     [{compId:'enanthate', doseMg:'125', date:'2026-10-01', cycleId:'stack1'}]);
+      return r.length === 1 && parseFloat(r[0].doseMg) === 150;
+    })());
+
+  // ── THE INVARIANT. Distinct amounts on one day are distinct injections, all of them. ──
+  check('mass balance: three different doses on one day all reach the model',
+    (function(){
+      var rows = [50, 75, 100].map(function(mg, i){
+        return {compId:'nebido', doseMg:String(mg), date:'2026-09-13', injId:'i'+i, cycleId:'c'+i};
+      });
+      var out = _mbRun(rows, []);
+      return out.length === 3 && _mbSum(out) === 225;
+    })());
+  check('  …and a day with one dose is unchanged',
+    _mbSum(_mbRun([{compId:'nebido', doseMg:'100', date:'2026-09-13', injId:'a'}], [])) === 100);
+  // Two spellings of one compound are still one injection — that is what the canonical
+  // id is for, and undoing it is what doubled the curve in the first place.
+  check('  …while two spellings of one compound remain a single dose',
+    _mbRun([{compId:'test_u', doseMg:'100', date:'2026-09-13', injId:'a'},
+            {compId:'nebido', doseMg:'100', date:'2026-09-13', injId:'b'}], []).length === 1);
+
+  G._tcLoggedHistory = _mbSaveHist; G._tcProtocolInjections = _mbSaveProto;
 }
 
 // ── PER-ESTER ATTRIBUTION ON THE T-CALC CURVE ───────────────────────────────
