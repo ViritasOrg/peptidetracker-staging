@@ -17446,7 +17446,14 @@ if(typeof G.macrosForUser==='function'){
 // alone, and overshoot/unreachable are fixed-cadence diagnostics.
 console.log('\n── T-calc: the solver phase contract ───────────────────────');
 if (typeof G.tcSolveTransition === 'function' && typeof G._tcSolveDailyDither === 'function') {
-  var _pcSave = {tp:G._tcp, bw:G._tcBwEntries};
+  // ⚠️ SNAPSHOT THE FIELDS, NOT THE OBJECT. This block mutates _tcp in place, so
+  // stashing the reference and assigning it back restores nothing — it hands back the
+  // object it just changed. That left birthYear/measuredFT/shbg/currentDoseMgWk set for
+  // every test after this one and broke eleven of them, all in the Dose Finder and the
+  // exposure card, which read those fields as the user's own profile.
+  var _pcSave = {bw:G._tcBwEntries, tp:G._tcp,
+                 by:G._tcp.birthYear, ft:G._tcp.measuredFT,
+                 sh:G._tcp.shbg, cd:G._tcp.currentDoseMgWk};
   var _pcHist = function(n, every, mg, last){
     var o=[], L=new Date(last+'T12:00:00');
     for(var i=0;i<n;i++){ var d=new Date(L.getTime()-i*every*86400000);
@@ -17521,6 +17528,8 @@ if (typeof G.tcSolveTransition === 'function' && typeof G._tcSolveDailyDither ==
     (_pcRes.dose_phases || []).every(function(e){ return e.iv === undefined || e.iv > 0; }));
 
   G._tcp = _pcSave.tp; G._tcBwEntries = _pcSave.bw;
+  G._tcp.birthYear = _pcSave.by; G._tcp.measuredFT = _pcSave.ft;
+  G._tcp.shbg = _pcSave.sh; G._tcp.currentDoseMgWk = _pcSave.cd;
 }
 
 // ── MASS BALANCE: EVERY mg ADMINISTERED REACHES THE MODEL, EXACTLY ONCE ─────
