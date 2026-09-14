@@ -4030,6 +4030,73 @@ console.log('\n── Hidden doses: counted, explained, never deleted ───�
   G._stacksLoaded = _hdSave.sl; G._injectionsCache = _hdSave.c; G._injHidden = _hdSave.hid;
 }
 
+// ── A START DATE IS A USER DECISION. NOTHING INFERRED MAY MOVE IT. ──────────
+// Henrik, 2026-09-14, twice in prod: "Start date for protocols change to 18th of May by
+// itself????" Protocol 5 was created to run from 15 Sep; its Plan card read 18 May 2026
+// while its own injections began 14 Sep.
+//
+// detectCycleStart dates a protocol carried over from the legacy peptide log, where the
+// doses are the only evidence of when anything started. It runs on every peptide-log
+// sync, and its last step was "even if already set, if earlier found" — so any NEW
+// protocol containing a peptide the user had taken before was back-dated to the first
+// time they ever took it, and saveStacksToBackend() persisted it.
+console.log('\n── Protocols: a set start date is never moved by the log ───');
+if (typeof G.detectCycleStart === 'function') {
+  const _dcSave = {log:G.window && G.window._peptideLog, us:G._userStacks,
+                   ai:G._activeStackIndices, save:G.saveStacksToBackend, tl:G.buildTimeline};
+  G.saveStacksToBackend = function(){}; G.buildTimeline = function(){};
+  // His shape: a protocol starting in September, holding peptides he has taken since May.
+  const OLD_DOSES = [
+    {date:'2026-05-18', doses:['glow_2026-05-18','reta-sun_2026-05-18']},
+    {date:'2026-06-02', doses:['glow_2026-06-02']}
+  ];
+  const mkStack = (start) => ({id:'P5', name:'Protocol 5', cycle_start:start,
+    peptides:[{id:'glow', name:'Glow'}, {id:'retatrutide', name:'Reta'}],
+    trt:{}, enhanced:{}});
+
+  // THE REPORTED BUG.
+  G.window._peptideLog = OLD_DOSES;
+  G._userStacks = [mkStack('2026-09-15')]; G._activeStackIndices = [0];
+  G.detectCycleStart();
+  check('a protocol dated September is NOT back-dated to a May dose',
+    G._userStacks[0].cycle_start === '2026-09-15', G._userStacks[0].cycle_start);
+  check('  …and its peptides are not dated before it started either',
+    (G._userStacks[0].peptides || []).every(function(p){
+      return !p.start_date || p.start_date >= '2026-09-15';
+    }), JSON.stringify((G._userStacks[0].peptides||[]).map(function(p){return p.start_date;})));
+
+  // The onboarding case it exists for still works: no start date, so fill one.
+  G.window._peptideLog = OLD_DOSES;
+  G._userStacks = [mkStack('')]; G._activeStackIndices = [0];
+  G.detectCycleStart();
+  check('a protocol with NO start date is still dated from the log',
+    G._userStacks[0].cycle_start === '2026-05-18', G._userStacks[0].cycle_start);
+
+  // A dose inside the protocol's own window is legitimately its own.
+  G.window._peptideLog = [{date:'2026-09-20', doses:['glow_2026-09-20']}];
+  G._userStacks = [mkStack('2026-09-15')]; G._activeStackIndices = [0];
+  G.detectCycleStart();
+  check('  …while a dose INSIDE the window still dates that peptide',
+    (G._userStacks[0].peptides[0] || {}).start_date === '2026-09-20',
+    String((G._userStacks[0].peptides[0]||{}).start_date));
+  check('  …without disturbing the protocol start', G._userStacks[0].cycle_start === '2026-09-15');
+
+  // The line that caused it must be gone, not merely bypassed.
+  const _dcSrc = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+  // Gone from the code, not merely stepped around. Every remaining assignment to
+  // cycle_start sits inside a `!active.cycle_start` guard — fill only.
+  check('the overwrite is removed from the source, not guarded around',
+    !/_earliest\s*<\s*active\.cycle_start/.test(_dcSrc) &&
+    !/active\.cycle_start\s*=\s*_earliest/.test(_dcSrc));
+  check('  …and cycle_start is only ever assigned behind a not-set guard',
+    (_dcSrc.match(/active\.cycle_start\s*=/g) || []).length === 2 &&
+    (_dcSrc.match(/if\(!active\.cycle_start\)/g) || []).length === 2);
+
+  if (G.window) G.window._peptideLog = _dcSave.log;
+  G._userStacks = _dcSave.us; G._activeStackIndices = _dcSave.ai;
+  G.saveStacksToBackend = _dcSave.save; G.buildTimeline = _dcSave.tl;
+}
+
 // ── ONLY A TAKEN DOSE SURVIVES ITS PROTOCOL ─────────────────────────────────
 // Henrik, 2026-09-14: "only taken injections from deleted or inactivated protocols can
 // be shown."

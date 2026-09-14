@@ -166,6 +166,24 @@ async function syncPeptideLogFromAgent(){try{const r=await fetch(AGENT_URL+'/pep
     localStorage.setItem('proto-chk-'+entry.date,JSON.stringify(entry.doses));
   });
   _syncPending=false;buildWeekStrip();buildToday();if(_viewDate){var _at=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,_at);}buildHistory();detectCycleStart();obInit();}catch(e){_syncPending=false;buildToday();obInit();}}
+// ⚠️ THIS IS ONBOARDING ARCHAEOLOGY. IT MAY FILL A BLANK; IT MAY NEVER OVERRULE THE USER.
+// Reported 2026-09-14, twice in prod: "Start date for protocols change to 18th of May by
+// itself????" Protocol 5 was created to run from 15 Sep and its Plan card read
+// 18 May 2026 while its own injections began 14 Sep.
+//
+// This function exists to date a protocol carried over from the legacy peptide log, where
+// the only evidence of when something started is the doses themselves. It ran on every
+// peptide-log sync, and its last step moved cycle_start backwards to the earliest peptide
+// dose it could find — explicitly "even if already set".
+//
+// So any NEW protocol containing a peptide the user has taken before was back-dated to
+// the first time they ever took it — Glow and Retatrutide going back to May — and
+// saveStacksToBackend() then persisted it. A start date is a user decision. Nothing
+// inferred from a log may move one that has been set.
+//
+// Both halves are fixed: cycle_start is only ever FILLED, never moved, and a peptide's
+// start_date is only backfilled from a dose that falls inside the protocol's own window.
+// A dose from before the protocol began is not this protocol's dose.
 function detectCycleStart(){
   if(!window._peptideLog||!_userStacks.length)return;
   var active=_userStacks[_activeStackIndices[0]];
@@ -191,16 +209,26 @@ function detectCycleStart(){
       });
       if(hit&&(!earliest||entry.date<earliest))earliest=entry.date;
     });
-    if(earliest){var _pp=earliest.split('-');p.start_date=_pp[0]+'-'+(_pp[1]||'1').padStart(2,'0')+'-'+(_pp[2]||'1').padStart(2,'0');changed=true;}
+    if(earliest){
+      var _pp=earliest.split('-');
+      var _norm=_pp[0]+'-'+(_pp[1]||'1').padStart(2,'0')+'-'+(_pp[2]||'1').padStart(2,'0');
+      // A dose taken before this protocol started belongs to whatever came before it.
+      if(active.cycle_start&&_norm<active.cycle_start)return;
+      p.start_date=_norm;changed=true;
+    }
   });
-  // Update cycle_start to earliest detected peptide start_date (even if already set, if earlier found)
-  var pdates=(active.peptides||[]).map(function(p){return p.start_date;}).filter(Boolean);
-  if(pdates.length){
-    pdates.sort();
-    var _dp=pdates[0].split('-');
-    var _earliest=_dp[0]+'-'+(_dp[1]||'1').padStart(2,'0')+'-'+(_dp[2]||'1').padStart(2,'0');
-    if(!active.cycle_start||_earliest<active.cycle_start){active.cycle_start=_earliest;changed=true;}
-  } else if(!active.cycle_start){
+  // FILL ONLY. The line here used to move an existing cycle_start backwards whenever an
+  // earlier peptide dose turned up — see the note on this function. It is the reported bug.
+  if(!active.cycle_start){
+    var pdates=(active.peptides||[]).map(function(p){return p.start_date;}).filter(Boolean);
+    if(pdates.length){
+      pdates.sort();
+      var _dp=pdates[0].split('-');
+      active.cycle_start=_dp[0]+'-'+(_dp[1]||'1').padStart(2,'0')+'-'+(_dp[2]||'1').padStart(2,'0');
+      changed=true;
+    }
+  }
+  if(!active.cycle_start){
     // Fallback: direct Reta scan
     var rd=window._peptideLog.filter(function(e){return e.doses&&e.doses.some(function(d){return d.startsWith('reta-')||d.startsWith('retatrutide_');});}).map(function(e){return e.date;});
     if(rd.length){rd.sort();var _rp=rd[0].split('-');active.cycle_start=_rp[0]+'-'+(_rp[1]||'1').padStart(2,'0')+'-'+(_rp[2]||'1').padStart(2,'0');changed=true;}
