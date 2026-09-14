@@ -4030,18 +4030,21 @@ console.log('\n── Hidden doses: counted, explained, never deleted ───�
   G._stacksLoaded = _hdSave.sl; G._injectionsCache = _hdSave.c; G._injHidden = _hdSave.hid;
 }
 
-// ── THE PAST IS ALWAYS VISIBLE ──────────────────────────────────────────────
-// Henrik, 2026-09-14: "Today only shows injections from the past if the old protocol is
-// active ... injections from Now and future need to be dependent on active protocol but
-// not in the past. If a injection was scheduled it should be visible in the past."
+// ── ONLY A TAKEN DOSE SURVIVES ITS PROTOCOL ─────────────────────────────────
+// Henrik, 2026-09-14: "only taken injections from deleted or inactivated protocols can
+// be shown."
 //
-// refreshInjectionsCache has three gates — the T-Calc stack binding, the active-cycle
-// check, and the orphan-compound check — and all three applied to every date. So
-// deactivating a protocol erased its history from Today and the week strip: doses that
-// had been administered, or that the user still needed to go back and tick off, stopped
-// existing on screen. A filter is a statement about what is PLANNED; it has no business
-// rewriting what already happened.
-console.log('\n── Today: a scheduled dose in the past is never hidden ─────');
+// A logged row is the record of something that went into the user, and deactivating a
+// protocol cannot unmake that — so it bypasses all three gates in refreshInjectionsCache
+// (the T-Calc stack binding, the active-cycle check, the orphan-compound check) whatever
+// its date. An UNTAKEN row is only ever a plan, and a plan belongs to whoever owns the
+// schedule; retire the protocol and its untaken doses go with it.
+//
+// ⚠️ NARROWER THAN THE RULE SHIPPED EARLIER THE SAME DAY. That one let every past row
+// through regardless of whether it was taken. An untaken past dose from the ACTIVE
+// protocol still reaches Today through the ordinary gates — it never needed an
+// exception. The exception is only about outliving deactivation.
+console.log('\n── Today: only a taken dose outlives its protocol ──────────');
 {
   const _pvSave = {f:G.fetch, us:G._userStacks, ai:G._activeStackIndices, sl:G._stacksLoaded,
                    c:G._injectionsCache, hid:G._injHidden};
@@ -4049,24 +4052,25 @@ console.log('\n── Today: a scheduled dose in the past is never hidden ──
     return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
   const PAST = _pv(-7), TODAY = _pv(0), FUTURE = _pv(7);
 
-  // ACTIVE carries glow; DEAD is a retired protocol; ORPHAN is a compound ACTIVE does
-  // not configure. Each of the three gates gets a past row and a future row.
   const ACTIVE = {id:'ACT', name:'Active', cycle_start:_pv(-50), cycle_length:44,
     peptides:[{id:'glow', name:'Glow', dose_am:'2', unit_am:'mg', times:['AM'],
                days:[0,1,2,3,4,5,6], active:true}], trt:{}, enhanced:{}};
   const DEAD = {id:'DEAD', name:'Retired', cycle_start:_pv(-200), cycle_length:12,
                 peptides:[], trt:{}, enhanced:{}};
-  const mkRows = () => ([
-    {id:'a-past',  compound_id:'glow', tier:'peptide', cycle_id:'ACT',      date:PAST,   dose:'2', unit:'mg', active:true, logged:true},
-    {id:'a-fut',   compound_id:'glow', tier:'peptide', cycle_id:'ACT',      date:FUTURE, dose:'2', unit:'mg', active:true, logged:false},
-    {id:'d-past',  compound_id:'glow', tier:'peptide', cycle_id:'DEAD',     date:PAST,   dose:'2', unit:'mg', active:true, logged:false},
-    {id:'d-fut',   compound_id:'glow', tier:'peptide', cycle_id:'DEAD',     date:FUTURE, dose:'2', unit:'mg', active:true, logged:false},
-    {id:'o-past',  compound_id:'hgh',  tier:'enhanced',cycle_id:'ACT',      date:PAST,   dose:'1', unit:'IU', active:true, logged:false},
-    {id:'o-fut',   compound_id:'hgh',  tier:'enhanced',cycle_id:'ACT',      date:FUTURE, dose:'1', unit:'IU', active:true, logged:false},
-    {id:'t-past',  compound_id:'nebido',tier:'trt',    cycle_id:'tcalc:DEAD',date:PAST,  dose:'100',unit:'mg',active:true, logged:false},
-    {id:'t-fut',   compound_id:'nebido',tier:'trt',    cycle_id:'tcalc:DEAD',date:FUTURE,dose:'100',unit:'mg',active:true, logged:false}
-  ]);
-  let ROWS = mkRows();
+  // Each gate gets a TAKEN and an UNTAKEN row in the past, so the two halves of the
+  // rule are separated everywhere it applies.
+  const ROWS = [
+    {id:'act-past-untaken', compound_id:'glow', tier:'peptide', cycle_id:'ACT',  date:PAST, dose:'2', unit:'mg', active:true, logged:false},
+    {id:'act-fut',          compound_id:'glow', tier:'peptide', cycle_id:'ACT',  date:FUTURE,dose:'2',unit:'mg', active:true, logged:false},
+    {id:'dead-past-taken',  compound_id:'glow', tier:'peptide', cycle_id:'DEAD', date:PAST, dose:'2', unit:'mg', active:true, logged:true},
+    {id:'dead-past-untaken',compound_id:'glow', tier:'peptide', cycle_id:'DEAD', date:PAST, dose:'2', unit:'mg', active:true, logged:false},
+    {id:'dead-today-taken', compound_id:'glow', tier:'peptide', cycle_id:'DEAD', date:TODAY,dose:'2', unit:'mg', active:true, logged:true},
+    {id:'dead-fut-untaken', compound_id:'glow', tier:'peptide', cycle_id:'DEAD', date:FUTURE,dose:'2',unit:'mg', active:true, logged:false},
+    {id:'orph-past-taken',  compound_id:'hgh',  tier:'enhanced',cycle_id:'ACT',  date:PAST, dose:'1', unit:'IU', active:true, logged:true},
+    {id:'orph-past-untaken',compound_id:'hgh',  tier:'enhanced',cycle_id:'ACT',  date:PAST, dose:'1', unit:'IU', active:true, logged:false},
+    {id:'tc-past-taken',    compound_id:'nebido',tier:'trt',    cycle_id:'tcalc:DEAD', date:PAST, dose:'100', unit:'mg', active:true, logged:true},
+    {id:'tc-past-untaken',  compound_id:'nebido',tier:'trt',    cycle_id:'tcalc:DEAD', date:PAST, dose:'100', unit:'mg', active:true, logged:false}
+  ];
   G._userStacks = [ACTIVE, DEAD]; G._activeStackIndices = [0];
   G._stacksLoaded = true; G._stacksNormalized = true;
   G.fetch = async (url, opt) => {
@@ -4074,69 +4078,35 @@ console.log('\n── Today: a scheduled dose in the past is never hidden ──
     return {ok:true, status:200, json:async()=>String(url).includes('/injections') ? ROWS : []};
   };
   await G.refreshInjectionsCache();
-  const idsOn = (d) => (G._injectionsCache[d] || []).map(e => e.id).sort();
-
-  check('a past dose from a RETIRED protocol is visible',
-    idsOn(PAST).indexOf('d-past') >= 0, idsOn(PAST).join(','));
-  check('  …so is a past dose whose compound the active protocol does not configure',
-    idsOn(PAST).indexOf('o-past') >= 0, idsOn(PAST).join(','));
-  check('  …and a past T-Calc dose bound to a retired stack',
-    idsOn(PAST).indexOf('t-past') >= 0, idsOn(PAST).join(','));
-  check('  …every past row, in fact — all four',
-    idsOn(PAST).join(',') === 'a-past,d-past,o-past,t-past', idsOn(PAST).join(','));
-
-  // …AND THE FUTURE IS STILL GATED. That half of the rule is unchanged: what is PLANNED
-  // belongs to the active protocol, or the user would be shown doses from a protocol
-  // they have switched away from.
-  check('the future is still filtered to the active protocol',
-    idsOn(FUTURE).indexOf('d-fut') < 0 && idsOn(FUTURE).indexOf('t-fut') < 0,
-    idsOn(FUTURE).join(','));
-  check('  …including the orphan-compound gate', idsOn(FUTURE).indexOf('o-fut') < 0);
-  check('  …while the active protocol\'s own future dose still shows',
-    idsOn(FUTURE).join(',') === 'a-fut', idsOn(FUTURE).join(','));
-  // A row that is shown is not hidden — the count drives the "doses are hidden" notice,
-  // and counting a visible past row would tell the user something untrue.
-  check('past rows are not counted as hidden', (G._injHidden||{}).count === 3,
-    'hidden=' + ((G._injHidden||{}).count) + ' (expected the 3 future rows only)');
-
-  // Today itself is "now" and stays gated — for an UNTICKED dose.
-  ROWS = mkRows().concat([
-    {id:'d-today', compound_id:'glow', tier:'peptide', cycle_id:'DEAD', date:TODAY,
-     dose:'2', unit:'mg', active:true, logged:false}
-  ]);
-  await G.refreshInjectionsCache();
-  check('today counts as now, so a retired protocol\'s UNTICKED dose today is gated',
-    ((G._injectionsCache[TODAY] || []).map(e => e.id)).indexOf('d-today') < 0);
-
-  // ── A TICKED DOSE IS VISIBLE WHATEVER ITS DATE ────────────────────────────
-  // Henrik, 2026-09-14: "a ticked dose must be visible." The past rule alone left one
-  // hole: tick a dose this morning, deactivate that protocol this afternoon, and it
-  // vanished from Today until midnight made it "past". A logged row is not a plan — it
-  // is the record of something that went into the user — so no filter about which
-  // protocol owns the days ahead may remove it.
-  ROWS = mkRows().concat([
-    {id:'L-today-dead', compound_id:'glow',  tier:'peptide', cycle_id:'DEAD',       date:TODAY,  dose:'2',  unit:'mg', active:true, logged:true},
-    {id:'L-today-orph', compound_id:'hgh',   tier:'enhanced',cycle_id:'ACT',        date:TODAY,  dose:'1',  unit:'IU', active:true, logged:true},
-    {id:'L-today-tc',   compound_id:'nebido',tier:'trt',     cycle_id:'tcalc:DEAD', date:TODAY,  dose:'100',unit:'mg', active:true, logged:true},
-    {id:'L-fut-dead',   compound_id:'glow',  tier:'peptide', cycle_id:'DEAD',       date:FUTURE, dose:'2',  unit:'mg', active:true, logged:true}
-  ]);
-  await G.refreshInjectionsCache();
   const has = (d, id) => (G._injectionsCache[d] || []).some(e => e.id === id);
-  check('a dose ticked TODAY on a retired protocol stays visible',
-    has(TODAY, 'L-today-dead'), (G._injectionsCache[TODAY]||[]).map(e=>e.id).join(','));
-  check('  …and one whose compound the active protocol does not configure',
-    has(TODAY, 'L-today-orph'));
-  check('  …and a ticked T-Calc dose bound to a retired stack', has(TODAY, 'L-today-tc'));
-  // Future-dated logged rows should not normally exist, but if one does it is still a
-  // record of something administered. The rule is unconditional so it cannot be reasoned
-  // around: ticked means visible.
-  check('  …and the rule is unconditional, so even a future-dated ticked row shows',
-    has(FUTURE, 'L-fut-dead'));
-  check('  …while the UNTICKED dose beside it on the same day is still gated',
-    !has(TODAY, 'd-today'));
-  // A visible row is not a hidden one.
-  check('  …and no ticked row is counted as hidden', (G._injHidden||{}).count === 3,
-    'hidden=' + ((G._injHidden||{}).count) + ' (expected the 3 unticked future rows only)');
+
+  // TAKEN outlives the protocol, at every gate and every date.
+  check('a TAKEN dose from a retired protocol is still shown', has(PAST, 'dead-past-taken'));
+  check('  …including one taken today, the moment the protocol is retired',
+    has(TODAY, 'dead-today-taken'));
+  check('  …one whose compound the active protocol does not configure',
+    has(PAST, 'orph-past-taken'));
+  check('  …and a taken T-Calc dose bound to a retired stack', has(PAST, 'tc-past-taken'));
+
+  // UNTAKEN does not. It was never administered and never will be, so offering it for
+  // ticking would invite logging a dose from a protocol already walked away from.
+  check('an UNTAKEN past dose from a retired protocol is gone with it',
+    !has(PAST, 'dead-past-untaken'));
+  check('  …as is an untaken past dose the active protocol does not configure',
+    !has(PAST, 'orph-past-untaken'));
+  check('  …and an untaken past T-Calc dose on a retired stack',
+    !has(PAST, 'tc-past-untaken'));
+  check('  …and the retired protocol\'s untaken future is still gone', !has(FUTURE, 'dead-fut-untaken'));
+
+  // The ACTIVE protocol needs no exception — the ordinary gates already pass it, past
+  // and future alike. This is the case the earlier, wider rule was really protecting.
+  check('the active protocol\'s own untaken past dose still shows, via the normal gates',
+    has(PAST, 'act-past-untaken'));
+  check('  …and its future dose', has(FUTURE, 'act-fut'));
+
+  // A row on screen is not a hidden one; a row correctly withheld is.
+  check('hidden counts the withheld untaken rows and nothing else',
+    (G._injHidden||{}).count === 4, 'hidden=' + ((G._injHidden||{}).count) + ' (expected 4)');
 
   G.fetch = _pvSave.f; G._userStacks = _pvSave.us; G._activeStackIndices = _pvSave.ai;
   G._stacksLoaded = _pvSave.sl; G._injectionsCache = _pvSave.c; G._injHidden = _pvSave.hid;
