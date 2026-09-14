@@ -251,6 +251,7 @@ function _labHeader() {
   return '<div class="card"><div class="card-header">' +
     '<div class="card-title-wrap"><div class="card-dot" style="background:var(--accent3)"></div>' +
     '<div class="card-title">BLOODWORK</div></div>' +
+    '<button onclick="logBloodDraw()" style="background:var(--surface2);color:var(--accent4);border:1px solid var(--accent4);border-radius:8px;padding:7px 12px;font-size:12px;font-weight:800;letter-spacing:0.4px;cursor:pointer;font-family:inherit;margin-right:6px">LOG DRAW</button>' +
     '<button onclick="_labOpenAddSheet()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:800;letter-spacing:0.4px;cursor:pointer;font-family:inherit">+ ADD</button>' +
     '</div>' +
     '<div class="card-body" style="padding:0 16px 14px;font-size:12px;color:var(--muted2);line-height:1.5">One place for every blood test. Flags, trends and what each result means — used across the app.</div></div>';
@@ -282,6 +283,76 @@ function _labMarkerRow(entry, entries, idx, key) {
     '</div>' + meaning + '</div>';
 }
 
+// ── A DRAW IS LOGGED WHEN IT HAPPENS, NOT WHEN THE RESULTS ARRIVE ───────────
+// Henrik, 2026-09-14: "Need to be able to log time of blood test, it matters during
+// cycle for t-calc since it might be many days before test results are added."
+//
+// It matters because the DRAW DATE is the calibration anchor. _tcFreeTSeries solves
+// TT_base as TT_at_draw * P / total[anchorDay], so the anchor DAY sets the scale of the
+// whole curve — and a lab that takes a week to report means the date typed in with the
+// results is a week late. On a loaded protocol that is a week of accumulation charged to
+// the wrong day.
+//
+// ⚠️ THE STATUS IS DERIVED, NEVER STORED. A draw with no results yet is simply a
+// bloodwork entry carrying only its date; once any result lands it reads as done. No new
+// backend field, no migration, and no way for a stored status to disagree with the data
+// it describes. _tcFreeTSeries already skips entries with no usable value when choosing
+// its anchor, so a pending draw sits in the record without touching the curve until its
+// numbers arrive.
+function _labDrawStatus(entry){
+  if(!entry) return 'drawn';
+  if(entry.markers && Object.keys(entry.markers).length) return 'done';
+  if(entry.extra && entry.extra.length) return 'done';
+  if(entry.total_t != null || entry.shbg != null || entry.free_t != null) return 'done';
+  return 'drawn';
+}
+function _labStatusChip(entry){
+  var done = _labDrawStatus(entry) === 'done';
+  var col = done ? 'var(--accent3)' : 'var(--accent4)';
+  var txt = done ? 'DONE' : 'DRAWN \u00b7 AWAITING RESULTS';
+  return '<span style="font-size:9px;font-weight:800;letter-spacing:0.5px;color:'+col
+    +';border:1px solid '+col+';border-radius:5px;padding:2px 6px;flex-shrink:0">'+txt+'</span>';
+}
+// Shared by the Labs header and the Today button, so the two cannot record a draw
+// differently. Dates default to today; the picker lets a draw be back-dated, which is
+// the normal case when it is remembered a day later.
+async function logBloodDraw(dateStr){
+  var d = dateStr || (typeof dateKey==='function' ? dateKey(new Date()) : '');
+  if(!d) return false;
+  var h = (typeof authHeaders === 'function') ? authHeaders() : null;
+  if(!h){ alert('Sign in required.'); return false; }
+  // One draw per day. A second tap is a mis-tap, not a second blood test, and two
+  // entries on one date would give the curve two anchors for the same measurement.
+  var existing = (_tcBwEntries || []).filter(function(e){ return e && e.date === d; })[0];
+  if(existing){
+    if(typeof switchTab==='function'){ var _b=document.getElementById('tab-btn-labs'); if(_b)switchTab('labs',_b); }
+    return false;
+  }
+  try{
+    var r = await fetch(AGENT_URL + '/bloodwork', {
+      method:'POST',
+      headers: Object.assign({'Content-Type':'application/json'}, h),
+      body: JSON.stringify({date:d})
+    });
+    if(!r.ok){ alert('Failed to log the draw.'); return false; }
+  }catch(_e){ alert('Network error.'); return false; }
+  _tcBwEntries = null;
+  if (typeof _tcBwLoading !== 'undefined') _tcBwLoading = true;
+  await _tcFetchBwEntries();
+  if (typeof buildLabs === 'function') buildLabs();
+  if (typeof buildToday === 'function' && typeof _currentTab !== 'undefined' && _currentTab === 'today') buildToday();
+  return true;
+}
+// From Today: log it, then say so without leaving the tab.
+async function logBloodDrawFromToday(btn){
+  if(btn){ btn.disabled = true; btn.textContent = 'Logging\u2026'; }
+  var ok = await logBloodDraw();
+  if(btn){
+    btn.disabled = false;
+    btn.textContent = ok ? '\u2713 Blood draw logged' : 'Log blood test';
+  }
+}
+
 function _labEntryCard(entry, entries, idx, expanded) {
   var keys = _labEntryKeys(entry);
   var sex = _labSex();
@@ -302,11 +373,22 @@ function _labEntryCard(entry, entries, idx, expanded) {
     : (expanded && ordered.length > 4 ? '<button onclick="_labToggleEntry(' + idx + ')" style="width:100%;background:none;border:none;color:var(--muted2);font-size:11px;font-weight:700;cursor:pointer;padding:9px;font-family:inherit">Show less ▴</button>' : '');
   var dateLabel = entry.date || '';
   var ctx = (entry.dose_at_bw != null) ? '<span style="font-size:10px;color:var(--muted2)"> · ' + _esc(String(entry.dose_at_bw)) + ' mg/wk</span>' : '';
+  var pending = _labDrawStatus(entry) !== 'done';
+  // A pending draw has nothing to show but its date, so it offers the one action that
+  // moves it forward rather than an empty body.
+  var body = pending
+    ? '<div style="padding:12px 16px 14px">'
+      + '<div style="font-size:11.5px;color:var(--muted2);line-height:1.5;margin-bottom:10px">'
+      + 'Blood taken on this date. The T-Calc curve anchors on the day of the draw, so entering the results later keeps them tied to the right day.</div>'
+      + '<button onclick="_labOpenAddSheet(\'' + _esc(entry.date || '') + '\')" style="width:100%;background:var(--accent);color:#000;border:none;border-radius:9px;padding:10px;font-size:12.5px;font-weight:800;cursor:pointer;font-family:inherit">Add results</button>'
+      + '</div>'
+    : '<div style="padding:2px 16px 6px">' + rows + moreBtn + '</div>';
   return '<div class="card"><div class="card-header">' +
-    '<div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div>' +
+    '<div class="card-title-wrap"><div class="card-dot" style="background:' + (pending ? 'var(--accent4)' : 'var(--accent)') + '"></div>' +
     '<div class="card-title" style="font-size:14px">' + _esc(dateLabel) + '</div></div>' + ctx +
-    '<button onclick="_labDeleteEntry(\'' + _esc(entry.id || '') + '\')" style="background:none;border:1px solid var(--border);border-radius:7px;color:var(--muted2);font-size:12px;cursor:pointer;padding:4px 10px;font-family:inherit">Delete</button>' +
-    '</div><div style="padding:2px 16px 6px">' + rows + moreBtn + '</div></div>';
+    _labStatusChip(entry) +
+    '<button onclick="_labDeleteEntry(\'' + _esc(entry.id || '') + '\')" style="background:none;border:1px solid var(--border);border-radius:7px;color:var(--muted2);font-size:12px;cursor:pointer;padding:4px 10px;font-family:inherit;margin-left:6px">Delete</button>' +
+    '</div>' + body + '</div>';
 }
 
 var _labExpanded = {};
@@ -324,7 +406,11 @@ function _labRender() {
       '</div></div>';
     return html;
   }
-  html += _labSafetyCard(entries[0]);   // derived safety summary, all tiers
+  // The safety summary reads the latest draw that actually HAS results. A pending draw
+  // is the newest entry by date and carries none, so passing entries[0] blindly would
+  // blank the summary the moment a draw is logged.
+  var _latestDone = entries.filter(function(e){ return _labDrawStatus(e) === 'done'; })[0];
+  if (_latestDone) html += _labSafetyCard(_latestDone);
   entries.forEach(function (e, i) { html += _labEntryCard(e, entries, i, !!_labExpanded[i]); });
   return html;
 }
