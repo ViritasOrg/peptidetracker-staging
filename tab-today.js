@@ -33,7 +33,23 @@
 function _todayCanonCompId(id){
   return (typeof _tcCanonCompId === 'function') ? _tcCanonCompId(id) : id;
 }
-function _dedupInjectionSlots(list){var m={},order=[];(list||[]).forEach(function(e){var k=_todayCanonCompId(e.compound_id)+'_'+(e.time_of_day||'')+'_'+(e.cycle_id||'');var c=m[k];if(c===undefined){m[k]=e;order.push(k);}else if(e.logged&&!c.logged){m[k]=e;}});return order.map(function(k){return m[k];});}
+// IS THIS ROW A DELIBERATE EXTRA, OR JUST ANOTHER COPY OF THE PLAN?
+// That is the only question the key has to answer, and cycle_id answers it wrongly.
+// Keyed on cycle_id (2026-09-13, to stop an extra 75 mg Nebido being eaten), TWO
+// PROTOCOLS overlapping produced two rows for every shared compound: reported
+// 2026-09-14 with protocol_4 and protocol_5 both live, Today listed Glow twice and
+// HGH twice in each slot — 8 rows for 5 doses. Two protocols scheduling the same
+// compound in the same slot is a TRANSITION, not two injections; the user takes one.
+//
+// A hand-added dose is the real exception, and it says so in the record: cycle_id
+// 'manual', or source 'manual'. Those get their own id in the key, so any number of
+// them survive. Everything scheduled by a protocol — whichever protocol, whichever
+// version, whichever tier spelling — is one planned dose per compound and slot.
+function _todayDoseOrigin(e){
+  var manual = (e.cycle_id === 'manual') || (e.source === 'manual');
+  return manual ? ('manual:' + (e.id || e.dose || '')) : 'plan';
+}
+function _dedupInjectionSlots(list){var m={},order=[];(list||[]).forEach(function(e){var k=_todayCanonCompId(e.compound_id)+'_'+(e.time_of_day||'')+'_'+_todayDoseOrigin(e);var c=m[k];if(c===undefined){m[k]=e;order.push(k);}else if(e.logged&&!c.logged){m[k]=e;}});return order.map(function(k){return m[k];});}
 // SEVEN DAYS BACK. Briefly 365 (2026-08-17), reverted at Henrik's request on
 // 2026-08-19: "Restore the 7 days only carousel." A year of tiles is not how you reach
 // an old day — the calendar card at the head of the strip is, and it can go back

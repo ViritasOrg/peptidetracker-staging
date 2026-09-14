@@ -332,16 +332,64 @@ if (typeof G._dedupInjectionSlots === 'function') {
         return seen[k] && seen[k].logged;
       });
     })());
-  // A T-Calc testosterone plan and a protocol dose are different origins too.
-  check('dedup slots: a T-Calc dose is not merged into a protocol dose',
-    G._dedupInjectionSlots([
-      {compound_id:'enanthate', time_of_day:'AM', dose:'50',  cycle_id:'protocol_9'},
-      {compound_id:'enanthate', time_of_day:'AM', dose:'100', cycle_id:'tcalc'}
-    ]).length === 2);
-  check('dedup slots: two protocols dosing the same compound both show',
+  // ── TWO PROTOCOLS ON ONE SLOT IS A TRANSITION, NOT TWO INJECTIONS ────────
+  // ⚠️ THESE TWO ASSERTIONS USED TO SAY THE OPPOSITE, AND THEY WERE WRONG.
+  // Written 2026-09-13 alongside the cycle_id key, on the reasoning that a different
+  // origin means a different administration. Reality answered on 2026-09-14: with
+  // protocol_4 and protocol_5 both live, Today listed Glow twice and HGH twice in each
+  // slot — 8 rows for 5 doses, and the user takes ONE of each. Overlapping protocols
+  // are how a schedule is revised; the old rows linger until they are cleaned up.
+  //
+  // Same for a T-Calc plan beside a protocol row: T-Calc is the only thing that
+  // schedules testosterone (_genInjBatches suppresses the whole TRT tier), so those two
+  // rows are one planned dose under two mechanisms, never two injections.
+  check('dedup slots: two protocols dosing the same compound collapse to one',
     G._dedupInjectionSlots([
       {compound_id:'nebido', time_of_day:'AM', dose:'100', cycle_id:'protocol_a'},
       {compound_id:'nebido', time_of_day:'AM', dose:'100', cycle_id:'protocol_b'}
+    ]).length === 1);
+  check('  …even when the revision changed the dose',
+    G._dedupInjectionSlots([
+      {compound_id:'hgh', time_of_day:'AM', dose:'3', cycle_id:'protocol_4'},
+      {compound_id:'hgh', time_of_day:'AM', dose:'2', cycle_id:'protocol_5'}
+    ]).length === 1);
+  check('  …and a T-Calc plan beside a protocol row is still one dose',
+    G._dedupInjectionSlots([
+      {compound_id:'enanthate', time_of_day:'AM', dose:'50',  cycle_id:'protocol_9'},
+      {compound_id:'enanthate', time_of_day:'AM', dose:'100', cycle_id:'tcalc'}
+    ]).length === 1);
+
+  // THE REPORTED DAY, verbatim from prod for 2026-09-14. Two protocols, 8 stored rows,
+  // 5 doses to take.
+  var _ovDay = [
+    {compound_id:'glow',   time_of_day:'AM', dose:'0.09', logged:true,  cycle_id:'protocol_4_2026-09-11', id:'8b249b47'},
+    {compound_id:'glow',   time_of_day:'AM', dose:'0.09', logged:true,  cycle_id:'protocol_5_2026-09-15', id:'c387c668'},
+    {compound_id:'hgh',    time_of_day:'AM', dose:'3',    logged:true,  cycle_id:'protocol_4_2026-09-11', id:'b34b7b03'},
+    {compound_id:'hgh',    time_of_day:'AM', dose:'2',    logged:true,  cycle_id:'protocol_5_2026-09-15', id:'d244e179'},
+    {compound_id:'hgh',    time_of_day:'PM', dose:'3',    logged:false, cycle_id:'protocol_4_2026-09-11', id:'6584e72a'},
+    {compound_id:'hgh',    time_of_day:'PM', dose:'2',    logged:false, cycle_id:'protocol_5_2026-09-15', id:'8605aabb'},
+    {compound_id:'mast_e', time_of_day:null, dose:'100',  logged:false, cycle_id:'protocol_5_2026-09-15', id:'f2be2a92'},
+    {compound_id:'nebido', time_of_day:'AM', dose:'100',  logged:false, cycle_id:'protocol_4_2026-09-11', id:'ca93f1b7'}
+  ];
+  var _ovOut = G._dedupInjectionSlots(_ovDay);
+  check('dedup slots: the reported overlapping-protocol day renders 5 doses, not 8',
+    _ovOut.length === 5, _ovOut.length + ': ' + _ovOut.map(function(e){return e.compound_id+'/'+(e.time_of_day||'-');}).join(' '));
+  check('  …one Glow, one HGH per slot, plus Nebido and Masteron',
+    _ovOut.filter(function(e){return e.compound_id==='glow';}).length === 1 &&
+    _ovOut.filter(function(e){return e.compound_id==='hgh' && e.time_of_day==='AM';}).length === 1 &&
+    _ovOut.filter(function(e){return e.compound_id==='hgh' && e.time_of_day==='PM';}).length === 1 &&
+    _ovOut.filter(function(e){return e.compound_id==='nebido';}).length === 1 &&
+    _ovOut.filter(function(e){return e.compound_id==='mast_e';}).length === 1);
+  // …and the hand-added extra that started all this still survives beside the plan.
+  check('  …while a hand-added extra dose is still its own row',
+    G._dedupInjectionSlots([
+      {compound_id:'nebido', time_of_day:'AM', dose:'100', logged:true, cycle_id:'protocol_4_2026-09-11', id:'r1'},
+      {compound_id:'nebido', time_of_day:'AM', dose:'75',  logged:true, cycle_id:'manual', source:'manual', id:'r2'}
+    ]).length === 2);
+  check('  …and two hand-added extras are two rows, not one',
+    G._dedupInjectionSlots([
+      {compound_id:'nebido', time_of_day:'AM', dose:'50', logged:true, cycle_id:'manual', source:'manual', id:'m1'},
+      {compound_id:'nebido', time_of_day:'AM', dose:'50', logged:true, cycle_id:'manual', source:'manual', id:'m2'}
     ]).length === 2);
 }
 
