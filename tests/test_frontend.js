@@ -4112,6 +4112,93 @@ console.log('\n── Today: only a taken dose outlives its protocol ───�
   G._stacksLoaded = _pvSave.sl; G._injectionsCache = _pvSave.c; G._injHidden = _pvSave.hid;
 }
 
+// ── OVERLAPPING PROTOCOLS ARE DETECTED, EXPLAINED, AND CUTTABLE ─────────────
+// Henrik, 2026-09-14: "Overlapping protocols need a warning when activated explaining
+// the issue, also offer to cut one of them and let user decide which conflicting
+// protocols stay intact."
+//
+// The reported case: protocol 4 ran 11-14 Sep, protocol 5 began 14 Sep, and both booked
+// Glow and HGH on the 14th — Today listed each twice, 8 rows for 5 doses.
+//
+// ⚠️ COMPARED ON THE SCHEDULED DAYS, NOT THE DECLARED DATES. _chainFromActive already
+// refuses to chain a protocol whose cycle_start precedes the previous one's end, so a
+// declared-date check stays silent on exactly this case: the two protocols do not
+// overlap by their stored boundaries, they overlap because one had its start moved and
+// its rows now land on days the other still covers.
+console.log('\n── Protocols: an overlap is warned about, and cuttable ─────');
+if (typeof G._detectStackOverlap === 'function') {
+  const _osSave = {us:G._userStacks, c:G._injectionsCache};
+  const D = (o) => { const t = new Date(G.NOW || new Date()); t.setDate(t.getDate()+o);
+    return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+  const P4 = {id:'P4', name:'Protocol 4', cycle_start:D(-3)};
+  const P5 = {id:'P5', name:'Protocol 5', cycle_start:D(0)};
+  G._userStacks = [P4, P5];
+  // The overlap day carries the same compounds in the same slots from both protocols;
+  // the days on either side belong to one protocol each.
+  const row = (id, stack, comp, slot, day, logged) =>
+    ({id:id, compound_id:comp, compound_name:comp, time_of_day:slot, date:day,
+      // _stackCycleId returns stack.id, and prod rows carry exactly that
+      // (protocol_4_2026-09-11 is both the protocol's id and its rows' cycle_id).
+      cycle_id:stack, dose:'1', unit:'mg', active:true, logged:!!logged});
+  G._injectionsCache = {
+    [D(-1)]: [row('p4-solo','P4','glow','AM',D(-1))],
+    [D(0)]:  [row('p4-glow','P4','glow','AM',D(0)),  row('p5-glow','P5','glow','AM',D(0)),
+              row('p4-hgh', 'P4','hgh', 'PM',D(0)),  row('p5-hgh', 'P5','hgh', 'PM',D(0)),
+              row('p4-taken','P4','nebido','AM',D(0), true), row('p5-neb','P5','nebido','AM',D(0))],
+    [D(1)]:  [row('p5-solo','P5','glow','AM',D(1))]
+  };
+  const _osOv = G._detectStackOverlap(1);   // activating Protocol 5
+  check('activating a protocol that shares days with another is detected',
+    _osOv.length === 1 && _osOv[0].id === 'P4', JSON.stringify(_osOv.map(o=>o.id)));
+  check('  …naming the day', _osOv[0].days.length === 1 && _osOv[0].days[0] === D(0),
+    _osOv[0].days.join(','));
+  check('  …and the compounds that clash', _osOv[0].compounds.sort().join(',') === 'glow,hgh',
+    _osOv[0].compounds.join(','));
+  // A dose already taken is history, not a scheduling conflict to resolve.
+  check('  …while a dose already ticked is not counted as a clash',
+    _osOv[0].compounds.indexOf('nebido') < 0, _osOv[0].compounds.join(','));
+  // Days only one protocol covers are not a conflict.
+  check('  …and days only one protocol covers are left out',
+    _osOv[0].days.indexOf(D(-1)) < 0 && _osOv[0].days.indexOf(D(1)) < 0);
+  // Symmetry: it is the same clash seen from the other side.
+  check('the same overlap is found when activating the other protocol',
+    (G._detectStackOverlap(0)[0]||{}).id === 'P5');
+  // No overlap at all is the normal case and must stay silent.
+  G._injectionsCache = { [D(0)]: [row('p5-only','P5','glow','AM',D(0))] };
+  check('a protocol with the days to itself raises nothing',
+    G._detectStackOverlap(1).length === 0);
+
+  // THE CUT. It removes the untaken overlapping rows of ONE protocol and nothing else.
+  if (typeof G._overlapRowIds === 'function') {
+    G._injectionsCache = {
+      [D(-1)]: [row('p4-solo','P4','glow','AM',D(-1))],
+      [D(0)]:  [row('p4-glow','P4','glow','AM',D(0)),  row('p5-glow','P5','glow','AM',D(0)),
+                row('p4-taken','P4','nebido','AM',D(0), true)]
+    };
+    const cutP4 = G._overlapRowIds('P4', [D(0)]);
+    check('cutting a protocol removes its untaken rows on the overlap day',
+      cutP4.indexOf('p4-glow') >= 0, cutP4.join(','));
+    check('  …never a dose already ticked', cutP4.indexOf('p4-taken') < 0, cutP4.join(','));
+    check('  …never a row the other protocol owns', cutP4.indexOf('p5-glow') < 0);
+    check('  …and never a day outside the overlap', cutP4.indexOf('p4-solo') < 0);
+    check('  …so the user can cut either side', G._overlapRowIds('P5', [D(0)]).join(',') === 'p5-glow');
+  }
+  // The cut must go through inj-writer, which owns every write to the record.
+  const _ohSrc = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)),'index.html'),'utf8');
+  check('the cut deletes through inj-writer, not a raw fetch',
+    /injDeleteOne\(ids\[j\]/.test(_ohSrc) && !/DELETE[\s\S]{0,80}cutOverlap/.test(_ohSrc));
+  // And activation actually asks.
+  check('activation checks for an overlap and shows the warning',
+    /_detectStackOverlap\(idx\)/.test(_ohSrc) && /_showOverlapModal\(idx,_ovl\)/.test(_ohSrc));
+  // The handlers sit inside a JS string that builds the modal, so the quotes are
+  // backslash-escaped in the source. Match the call and the argument, not the quoting.
+  check('  …offering to cut either protocol, or keep both',
+    /_resolveOverlap\(\\?'cut-other/.test(_ohSrc) && /_resolveOverlap\(\\?'cut-mine/.test(_ohSrc) &&
+    /_resolveOverlap\(\\?'keep/.test(_ohSrc));
+
+  G._userStacks = _osSave.us; G._injectionsCache = _osSave.c;
+}
+
 // ── Rebuild schedule: refills a gap without disturbing the record ────────────
 // Regeneration only ever ran forward from midnight today, so a day that lost its doses
 // stayed lost — nothing could reach backwards. This drives the real rebuildScheduleFrom()
