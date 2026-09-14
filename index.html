@@ -1639,6 +1639,84 @@ function _detectStackConflicts(idx){
   conflicts=conflicts.filter(function(c){var k=c.existingTier+'|'+c.tier+'|'+c.compoundId;if(seen[k])return false;seen[k]=true;return true;});
   return{conflicts:conflicts};
 }
+// ── OVERLAPPING PROTOCOLS ────────────────────────────────────────────────────
+// Henrik, 2026-09-14: "Overlapping protocols need a warning when activated explaining
+// the issue, also offer to cut one of them and let user decide which conflicting
+// protocols stay intact."
+//
+// Reported case: protocol 4 ran 11-14 Sep and protocol 5 began 14 Sep, so both scheduled
+// Glow and HGH on the 14th. Today listed each twice — 8 rows for 5 doses. The de-dup now
+// collapses that on screen, but the duplicate rows keep accumulating in the record and
+// the user is never told the two protocols disagree about who owns the day.
+//
+// ⚠️ COMPARE THE SCHEDULED DAYS, NOT THE DECLARED DATES. _chainFromActive already
+// refuses to chain a protocol whose cycle_start precedes the previous one's end, so a
+// declared-date check would have stayed silent on the reported case: the two protocols
+// do not overlap by their stored boundaries, they overlap because one of them had its
+// start moved and its rows now land on days the other still covers. The record is what
+// the user sees, so the record is what gets compared.
+// Matched on the cycle ids the protocol OWNS, not on stack.id: a row carries a derived
+// cycle id (protocol_4_2026-09-11), and a protocol whose start date was edited owns rows
+// under more than one spelling. _stackOwnedCycleIds already collects them all — using
+// stack.id here found nothing at all, which is how the first draft of this reported no
+// overlap on the very case it was written for.
+function _stackOwnsCycle(stack, cyc){
+  if(!stack||!cyc)return false;
+  if(cyc===stack.id)return true;
+  var owned=(typeof _stackOwnedCycleIds==='function')?_stackOwnedCycleIds(stack):[];
+  return owned.indexOf(cyc)>=0;
+}
+function _stackScheduledDays(stack, cache){
+  cache=cache||(typeof _injectionsCache!=='undefined'?_injectionsCache:null);
+  var out={};
+  if(!stack||!cache)return out;
+  Object.keys(cache).forEach(function(d){
+    (cache[d]||[]).forEach(function(e){
+      if(!e)return;
+      if(!_stackOwnsCycle(stack,(typeof _injOwnerStackId==='function'?_injOwnerStackId(e):'')))return;
+      // A dose already taken is history and cannot be un-scheduled, so it is not a
+      // conflict to resolve — only the plan ahead is.
+      if(e.logged)return;
+      if(!out[d])out[d]={};
+      out[d][_stackOverlapKey(e)]=e;
+    });
+  });
+  return out;
+}
+// Same shape as the Today de-dup key: one planned dose per compound and slot. Two
+// protocols filling the same key on the same day is the conflict.
+function _stackOverlapKey(e){
+  var id=(typeof _tcCanonCompId==='function')?_tcCanonCompId(e.compound_id):e.compound_id;
+  return id+'_'+(e.time_of_day||'');
+}
+// Which OTHER protocols would be dosing the same compound and slot on the same day as
+// this one, given what is actually scheduled. Returns one entry per clashing protocol.
+function _detectStackOverlap(idx, cache){
+  var st=_userStacks[idx];
+  if(!st||!st.id)return[];
+  var mine=_stackScheduledDays(st,cache);
+  var myDays=Object.keys(mine);
+  if(!myDays.length)return[];
+  var out=[];
+  (_userStacks||[]).forEach(function(other,oi){
+    if(oi===idx||!other||!other.id)return;
+    var theirs=_stackScheduledDays(other,cache);
+    var days=[],comps={};
+    myDays.forEach(function(d){
+      if(!theirs[d])return;
+      var hit=Object.keys(mine[d]).filter(function(k){return !!theirs[d][k];});
+      if(!hit.length)return;
+      days.push(d);
+      hit.forEach(function(k){ comps[(mine[d][k].compound_name)||k]=true; });
+    });
+    if(!days.length)return;
+    days.sort();
+    out.push({idx:oi, id:other.id, name:other.name||('Protocol '+(oi+1)),
+              days:days, first:days[0], last:days[days.length-1],
+              compounds:Object.keys(comps)});
+  });
+  return out;
+}
 function _showConflictModal(idx,conflicts){
   var st=_userStacks[idx];
   var stName=st?st.name||('Protocol '+(idx+1)):'This protocol';
@@ -1676,6 +1754,96 @@ function _showConflictModal(idx,conflicts){
     +'</button>'
     +'</div></div>';
   document.body.appendChild(overlay);
+}
+var _pendingOverlapData=null;
+// The warning. Names the days, the compounds and both protocols, then offers to cut one
+// of them — the user decides which stays intact.
+function _showOverlapModal(idx, overlaps){
+  var st=_userStacks[idx];
+  var stName=st?(st.name||('Protocol '+(idx+1))):'This protocol';
+  var o=overlaps[0];
+  var dayTxt=o.days.length===1?('on '+o.first):(o.days.length+' days, '+o.first+' to '+o.last);
+  var btn='display:block;width:100%;padding:13px 14px;border-radius:10px;border:none;font-size:13px;font-weight:700;text-align:left;cursor:pointer;margin-bottom:10px;';
+  var rows=overlaps.map(function(x){
+    return '<div style="padding:7px 0;border-bottom:1px solid var(--border)">'
+      +'<div style="font-size:13px;font-weight:700;color:var(--text)">'+_esc(x.name)+'</div>'
+      +'<div style="font-size:11px;color:var(--muted2)">'+_esc(x.compounds.join(', '))
+      +' &mdash; '+(x.days.length===1?('on '+x.first):(x.days.length+' days, '+x.first+' to '+x.last))+'</div></div>';
+  }).join('');
+  var overlay=document.createElement('div');
+  overlay.id='stack-overlap-modal';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.93);z-index:9999;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:20px 16px 40px;';
+  overlay.innerHTML='<div style="max-width:480px;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;margin-top:20px;">'
+    +'<div style="background:#78350f;padding:16px 18px;">'
+    +'<div style="font-size:17px;font-weight:800;color:#fcd34d;">&#9888;&#65039; Two protocols dose the same days</div>'
+    +'<div style="font-size:12px;color:#fcd34d;margin-top:4px;"><strong>'+_esc(stName)+'</strong> overlaps a protocol that is already scheduling doses</div>'
+    +'</div>'
+    +'<div style="padding:16px 18px;">'
+    +'<div style="font-size:12px;color:var(--muted2);line-height:1.6;margin-bottom:10px">'
+    +'Both protocols have the same compound booked in the same slot '+dayTxt+'. '
+    +'You only take the dose once &mdash; the second row is a leftover from the handover, not a second injection. '
+    +'Today shows one of each, but the extra rows stay in the record and will keep piling up.</div>'
+    +rows
+    +'<div style="font-size:12px;color:var(--muted2);margin-top:14px;margin-bottom:10px;font-weight:700;">Which one should keep those days?</div>'
+    +'<button onclick="_resolveOverlap(\'cut-other\')" style="'+btn+'background:#78350f;color:#fcd34d;">'
+    +'&#9986;&#65039; Keep <strong>'+_esc(stName)+'</strong> &mdash; cut the other'
+    +'<div style="font-size:11px;font-weight:400;opacity:0.85;margin-top:3px">Removes the untaken overlapping doses from '+_esc(o.name)+'. Anything already ticked is kept.</div>'
+    +'</button>'
+    +'<button onclick="_resolveOverlap(\'cut-mine\')" style="'+btn+'background:var(--surface2);color:var(--text);border:1px solid var(--border);">'
+    +'&#9986;&#65039; Keep <strong>'+_esc(o.name)+'</strong> &mdash; cut this one'
+    +'<div style="font-size:11px;font-weight:400;color:var(--muted2);margin-top:3px">Removes the untaken overlapping doses from '+_esc(stName)+' instead.</div>'
+    +'</button>'
+    +'<button onclick="_resolveOverlap(\'keep\')" style="'+btn+'background:var(--surface2);color:var(--muted2);border:1px solid var(--border);">'
+    +'&#10003; Keep both &mdash; this is intentional'
+    +'<div style="font-size:11px;font-weight:400;color:var(--muted2);margin-top:3px">Leaves every row where it is.</div>'
+    +'</button>'
+    +'</div></div>';
+  document.body.appendChild(overlay);
+}
+// Cutting removes the UNTAKEN overlapping rows from the losing protocol and nothing else.
+// A ticked dose is the record of something administered and survives every cut — the same
+// rule Today now renders by.
+async function _resolveOverlap(action){
+  var data=_pendingOverlapData;_pendingOverlapData=null;
+  var overlay=document.getElementById('stack-overlap-modal');
+  if(overlay)overlay.remove();
+  if(!data)return;
+  if(action==='cut-other'||action==='cut-mine'){
+    var victims=(action==='cut-other')
+      ? data.overlaps.map(function(o){return {id:o.id,days:o.days};})
+      : [{id:(_userStacks[data.newIdx]||{}).id, days:data.overlaps.reduce(function(a,o){return a.concat(o.days);},[])}];
+    for(var i=0;i<victims.length;i++){
+      var v=victims[i];
+      if(!v.id)continue;
+      var ids=_overlapRowIds(v.id,v.days);
+      // injDeleteOne, never a raw DELETE: inj-writer.js owns every write to the record
+      // (asserted by the suite), and going around it loses the tagging and the rollback
+      // the rest of the app relies on.
+      for(var j=0;j<ids.length;j++){
+        try{ await injDeleteOne(ids[j],'cut-overlap'); }
+        catch(e){ if(typeof _logErr==='function')_logErr('cutOverlap',e); }
+      }
+    }
+  }
+  _normalizeActiveStack();
+  await _afterActiveStackChange(_activeStackIndices.length>0);
+}
+// The rows a cut would remove: this protocol's UNTAKEN doses on the named days. Listed
+// explicitly rather than issuing a date-ranged delete, because a range would also take
+// rows the other protocol owns and rows the user has ticked.
+function _overlapRowIds(stack, days){
+  if(typeof stack==='string')stack=(_userStacks||[]).filter(function(s){return s&&s.id===stack;})[0];
+  var want={};days.forEach(function(d){want[d]=true;});
+  var out=[];
+  Object.keys(_injectionsCache||{}).forEach(function(d){
+    if(!want[d])return;
+    (_injectionsCache[d]||[]).forEach(function(e){
+      if(!e||e.logged||!e.id)return;
+      if(!_stackOwnsCycle(stack,(typeof _injOwnerStackId==='function'?_injOwnerStackId(e):'')))return;
+      out.push(e.id);
+    });
+  });
+  return out;
 }
 async function _resolveConflict(action){
   var data=_pendingConflictData;_pendingConflictData=null;
@@ -1813,6 +1981,15 @@ async function toggleStack(idx){
     if(det.conflicts.length>0){
       _pendingConflictData={newIdx:idx,conflicts:det.conflicts};
       _showConflictModal(idx,det.conflicts);
+      return;
+    }
+    // …then the cross-protocol one. Separate check, separate modal: the first is about
+    // one protocol dosing a compound twice, this is about two protocols owning the same
+    // day. Only asked on activation, which is the moment the user is choosing.
+    var _ovl=_detectStackOverlap(idx);
+    if(_ovl.length>0){
+      _pendingOverlapData={newIdx:idx,overlaps:_ovl};
+      _showOverlapModal(idx,_ovl);
       return;
     }
   } else {
