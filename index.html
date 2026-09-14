@@ -1468,8 +1468,26 @@ async function refreshInjectionsCache(){
   var to=new Date(today0.getTime()+90*86400000);
   var entries=await fetchInjectionsForRange(dateKey(from),dateKey(to));
   _injectionsCache={};
+  // ⚠️ THE PAST IS ALWAYS VISIBLE. EVERY FILTER BELOW APPLIES TO TODAY AND FORWARD ONLY.
+  // Henrik, 2026-09-14: "Today only shows injections from the past if the old protocol is
+  // active ... injections from Now and future need to be dependent on active protocol but
+  // not in the past. If a injection was scheduled it should be visible in the past."
+  //
+  // Exactly right, and the three gates below were all applied to every date. Deactivating
+  // a protocol therefore erased its history from Today and the week strip: doses that had
+  // been administered, or that the user still needed to go back and tick off, simply
+  // stopped existing on screen. A filter is a statement about what is PLANNED — which
+  // protocol owns the days ahead. It has no business rewriting what already happened.
+  //
+  // Today itself counts as "now" and stays gated, per the rule as stated.
+  var _pastKey=dateKey(today0);
   entries.forEach(function(e){
     var _cyc=e.cycle_id||'';
+    if((e.date||'')<_pastKey){
+      if(!_injectionsCache[e.date])_injectionsCache[e.date]=[];
+      _injectionsCache[e.date].push(e);
+      return;
+    }
     // T-Calc testosterone: unassigned ('tcalc') is global and always shows;
     // assigned ('tcalc:<stackId>') shows only while its stack is active. Either
     // way it bypasses the orphan-compound check.
