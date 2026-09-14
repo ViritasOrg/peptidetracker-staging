@@ -3982,6 +3982,88 @@ console.log('\n── Hidden doses: counted, explained, never deleted ───�
   G._stacksLoaded = _hdSave.sl; G._injectionsCache = _hdSave.c; G._injHidden = _hdSave.hid;
 }
 
+// ── THE PAST IS ALWAYS VISIBLE ──────────────────────────────────────────────
+// Henrik, 2026-09-14: "Today only shows injections from the past if the old protocol is
+// active ... injections from Now and future need to be dependent on active protocol but
+// not in the past. If a injection was scheduled it should be visible in the past."
+//
+// refreshInjectionsCache has three gates — the T-Calc stack binding, the active-cycle
+// check, and the orphan-compound check — and all three applied to every date. So
+// deactivating a protocol erased its history from Today and the week strip: doses that
+// had been administered, or that the user still needed to go back and tick off, stopped
+// existing on screen. A filter is a statement about what is PLANNED; it has no business
+// rewriting what already happened.
+console.log('\n── Today: a scheduled dose in the past is never hidden ─────');
+{
+  const _pvSave = {f:G.fetch, us:G._userStacks, ai:G._activeStackIndices, sl:G._stacksLoaded,
+                   c:G._injectionsCache, hid:G._injHidden};
+  const _pv = (o) => { const t = new Date(G.NOW || new Date()); t.setDate(t.getDate()+o);
+    return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+  const PAST = _pv(-7), TODAY = _pv(0), FUTURE = _pv(7);
+
+  // ACTIVE carries glow; DEAD is a retired protocol; ORPHAN is a compound ACTIVE does
+  // not configure. Each of the three gates gets a past row and a future row.
+  const ACTIVE = {id:'ACT', name:'Active', cycle_start:_pv(-50), cycle_length:44,
+    peptides:[{id:'glow', name:'Glow', dose_am:'2', unit_am:'mg', times:['AM'],
+               days:[0,1,2,3,4,5,6], active:true}], trt:{}, enhanced:{}};
+  const DEAD = {id:'DEAD', name:'Retired', cycle_start:_pv(-200), cycle_length:12,
+                peptides:[], trt:{}, enhanced:{}};
+  const mkRows = () => ([
+    {id:'a-past',  compound_id:'glow', tier:'peptide', cycle_id:'ACT',      date:PAST,   dose:'2', unit:'mg', active:true, logged:true},
+    {id:'a-fut',   compound_id:'glow', tier:'peptide', cycle_id:'ACT',      date:FUTURE, dose:'2', unit:'mg', active:true, logged:false},
+    {id:'d-past',  compound_id:'glow', tier:'peptide', cycle_id:'DEAD',     date:PAST,   dose:'2', unit:'mg', active:true, logged:false},
+    {id:'d-fut',   compound_id:'glow', tier:'peptide', cycle_id:'DEAD',     date:FUTURE, dose:'2', unit:'mg', active:true, logged:false},
+    {id:'o-past',  compound_id:'hgh',  tier:'enhanced',cycle_id:'ACT',      date:PAST,   dose:'1', unit:'IU', active:true, logged:false},
+    {id:'o-fut',   compound_id:'hgh',  tier:'enhanced',cycle_id:'ACT',      date:FUTURE, dose:'1', unit:'IU', active:true, logged:false},
+    {id:'t-past',  compound_id:'nebido',tier:'trt',    cycle_id:'tcalc:DEAD',date:PAST,  dose:'100',unit:'mg',active:true, logged:false},
+    {id:'t-fut',   compound_id:'nebido',tier:'trt',    cycle_id:'tcalc:DEAD',date:FUTURE,dose:'100',unit:'mg',active:true, logged:false}
+  ]);
+  let ROWS = mkRows();
+  G._userStacks = [ACTIVE, DEAD]; G._activeStackIndices = [0];
+  G._stacksLoaded = true; G._stacksNormalized = true;
+  G.fetch = async (url, opt) => {
+    if (opt && opt.method === 'DELETE') return {ok:true, status:200, json:async()=>({})};
+    return {ok:true, status:200, json:async()=>String(url).includes('/injections') ? ROWS : []};
+  };
+  await G.refreshInjectionsCache();
+  const idsOn = (d) => (G._injectionsCache[d] || []).map(e => e.id).sort();
+
+  check('a past dose from a RETIRED protocol is visible',
+    idsOn(PAST).indexOf('d-past') >= 0, idsOn(PAST).join(','));
+  check('  …so is a past dose whose compound the active protocol does not configure',
+    idsOn(PAST).indexOf('o-past') >= 0, idsOn(PAST).join(','));
+  check('  …and a past T-Calc dose bound to a retired stack',
+    idsOn(PAST).indexOf('t-past') >= 0, idsOn(PAST).join(','));
+  check('  …every past row, in fact — all four',
+    idsOn(PAST).join(',') === 'a-past,d-past,o-past,t-past', idsOn(PAST).join(','));
+
+  // …AND THE FUTURE IS STILL GATED. That half of the rule is unchanged: what is PLANNED
+  // belongs to the active protocol, or the user would be shown doses from a protocol
+  // they have switched away from.
+  check('the future is still filtered to the active protocol',
+    idsOn(FUTURE).indexOf('d-fut') < 0 && idsOn(FUTURE).indexOf('t-fut') < 0,
+    idsOn(FUTURE).join(','));
+  check('  …including the orphan-compound gate', idsOn(FUTURE).indexOf('o-fut') < 0);
+  check('  …while the active protocol\'s own future dose still shows',
+    idsOn(FUTURE).join(',') === 'a-fut', idsOn(FUTURE).join(','));
+  // A row that is shown is not hidden — the count drives the "doses are hidden" notice,
+  // and counting a visible past row would tell the user something untrue.
+  check('past rows are not counted as hidden', (G._injHidden||{}).count === 3,
+    'hidden=' + ((G._injHidden||{}).count) + ' (expected the 3 future rows only)');
+
+  // Today itself is "now" and stays gated, per the rule as stated.
+  ROWS = mkRows().concat([
+    {id:'d-today', compound_id:'glow', tier:'peptide', cycle_id:'DEAD', date:TODAY,
+     dose:'2', unit:'mg', active:true, logged:false}
+  ]);
+  await G.refreshInjectionsCache();
+  check('today counts as now, so a retired protocol\'s dose today is still gated',
+    ((G._injectionsCache[TODAY] || []).map(e => e.id)).indexOf('d-today') < 0);
+
+  G.fetch = _pvSave.f; G._userStacks = _pvSave.us; G._activeStackIndices = _pvSave.ai;
+  G._stacksLoaded = _pvSave.sl; G._injectionsCache = _pvSave.c; G._injHidden = _pvSave.hid;
+}
+
 // ── Rebuild schedule: refills a gap without disturbing the record ────────────
 // Regeneration only ever ran forward from midnight today, so a day that lost its doses
 // stayed lost — nothing could reach backwards. This drives the real rebuildScheduleFrom()
