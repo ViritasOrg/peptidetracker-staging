@@ -4051,14 +4051,44 @@ console.log('\n── Today: a scheduled dose in the past is never hidden ──
   check('past rows are not counted as hidden', (G._injHidden||{}).count === 3,
     'hidden=' + ((G._injHidden||{}).count) + ' (expected the 3 future rows only)');
 
-  // Today itself is "now" and stays gated, per the rule as stated.
+  // Today itself is "now" and stays gated — for an UNTICKED dose.
   ROWS = mkRows().concat([
     {id:'d-today', compound_id:'glow', tier:'peptide', cycle_id:'DEAD', date:TODAY,
      dose:'2', unit:'mg', active:true, logged:false}
   ]);
   await G.refreshInjectionsCache();
-  check('today counts as now, so a retired protocol\'s dose today is still gated',
+  check('today counts as now, so a retired protocol\'s UNTICKED dose today is gated',
     ((G._injectionsCache[TODAY] || []).map(e => e.id)).indexOf('d-today') < 0);
+
+  // ── A TICKED DOSE IS VISIBLE WHATEVER ITS DATE ────────────────────────────
+  // Henrik, 2026-09-14: "a ticked dose must be visible." The past rule alone left one
+  // hole: tick a dose this morning, deactivate that protocol this afternoon, and it
+  // vanished from Today until midnight made it "past". A logged row is not a plan — it
+  // is the record of something that went into the user — so no filter about which
+  // protocol owns the days ahead may remove it.
+  ROWS = mkRows().concat([
+    {id:'L-today-dead', compound_id:'glow',  tier:'peptide', cycle_id:'DEAD',       date:TODAY,  dose:'2',  unit:'mg', active:true, logged:true},
+    {id:'L-today-orph', compound_id:'hgh',   tier:'enhanced',cycle_id:'ACT',        date:TODAY,  dose:'1',  unit:'IU', active:true, logged:true},
+    {id:'L-today-tc',   compound_id:'nebido',tier:'trt',     cycle_id:'tcalc:DEAD', date:TODAY,  dose:'100',unit:'mg', active:true, logged:true},
+    {id:'L-fut-dead',   compound_id:'glow',  tier:'peptide', cycle_id:'DEAD',       date:FUTURE, dose:'2',  unit:'mg', active:true, logged:true}
+  ]);
+  await G.refreshInjectionsCache();
+  const has = (d, id) => (G._injectionsCache[d] || []).some(e => e.id === id);
+  check('a dose ticked TODAY on a retired protocol stays visible',
+    has(TODAY, 'L-today-dead'), (G._injectionsCache[TODAY]||[]).map(e=>e.id).join(','));
+  check('  …and one whose compound the active protocol does not configure',
+    has(TODAY, 'L-today-orph'));
+  check('  …and a ticked T-Calc dose bound to a retired stack', has(TODAY, 'L-today-tc'));
+  // Future-dated logged rows should not normally exist, but if one does it is still a
+  // record of something administered. The rule is unconditional so it cannot be reasoned
+  // around: ticked means visible.
+  check('  …and the rule is unconditional, so even a future-dated ticked row shows',
+    has(FUTURE, 'L-fut-dead'));
+  check('  …while the UNTICKED dose beside it on the same day is still gated',
+    !has(TODAY, 'd-today'));
+  // A visible row is not a hidden one.
+  check('  …and no ticked row is counted as hidden', (G._injHidden||{}).count === 3,
+    'hidden=' + ((G._injHidden||{}).count) + ' (expected the 3 unticked future rows only)');
 
   G.fetch = _pvSave.f; G._userStacks = _pvSave.us; G._activeStackIndices = _pvSave.ai;
   G._stacksLoaded = _pvSave.sl; G._injectionsCache = _pvSave.c; G._injHidden = _pvSave.hid;
