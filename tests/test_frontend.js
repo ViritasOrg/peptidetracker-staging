@@ -13645,9 +13645,61 @@ if (typeof G._labSafetyFindings === 'function') {
 } else {
   check('tab-labs.js Phase 5 helpers present', false, '_labSafetyFindings missing');
 }
+
+// ── A DRAW IS LOGGED WHEN IT HAPPENS, NOT WHEN THE RESULTS ARRIVE ───────────
+// Henrik, 2026-09-14: "Need to be able to log time of blood test, it matters during
+// cycle for t-calc since it might be many days before test results are added."
+//
+// The draw date IS the calibration anchor: _tcFreeTSeries solves TT_base as
+// TT_at_draw * P / total[anchorDay], so the anchor DAY sets the scale of the whole
+// curve. A lab that takes a week to report means the date typed in with the results is
+// a week late, and on a loaded protocol that is a week of accumulation charged to the
+// wrong day.
+console.log('\n── Labs: a blood draw is logged before its results ─────────');
+if (typeof G._labDrawStatus === 'function') {
+  // THE STATUS IS DERIVED, NOT STORED — no new backend field, and no way for a stored
+  // status to disagree with the data it describes.
+  check('an entry with only a date reads as DRAWN', G._labDrawStatus({date:'2026-09-14'}) === 'drawn');
+  check('  …and any result at all makes it DONE',
+    G._labDrawStatus({date:'d', markers:{total_t:{value:20}}}) === 'done' &&
+    G._labDrawStatus({date:'d', total_t:20}) === 'done' &&
+    G._labDrawStatus({date:'d', free_t:400}) === 'done' &&
+    G._labDrawStatus({date:'d', shbg:30}) === 'done' &&
+    G._labDrawStatus({date:'d', extra:[{name:'x', value:1}]}) === 'done');
+  check('  …an empty markers map is still just a draw',
+    G._labDrawStatus({date:'d', markers:{}, extra:[]}) === 'drawn');
+  if (typeof G._labStatusChip === 'function') {
+    check('the chip names both states',
+      /DRAWN/.test(G._labStatusChip({date:'d'})) && /DONE/.test(G._labStatusChip({date:'d', total_t:20})));
+  }
+  // ⚠️ A PENDING DRAW MUST NOT BLANK THE SAFETY SUMMARY. It is the newest entry by date
+  // and has no results; reading the newest entry blindly would wipe the card.
+  const _ldSrc = fs.readFileSync(path.join(__dirname, '../tab-labs.js'), 'utf8');
+  check('the safety card skips a pending draw and reads the latest resulted one',
+    /_latestDone\s*=\s*entries\.filter\(function\s*\(e\)\s*\{\s*return _labDrawStatus\(e\) === 'done'/.test(_ldSrc));
+  // The buttons the request asked for, in both places.
+  check('Labs offers a LOG DRAW button', /onclick="logBloodDraw\(\)"/.test(_ldSrc));
+  const _ldHtml = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  check('  …and Today offers one too', /logBloodDrawFromToday\(this\)/.test(_ldHtml));
+  check('  …both going through the same recorder', /async function logBloodDraw\(dateStr\)/.test(_ldSrc) &&
+    /async function logBloodDrawFromToday/.test(_ldSrc));
+  // One draw per day: a second tap is a mis-tap, and two entries on one date would give
+  // the curve two anchors for the same measurement.
+  check('a second draw on a day that already has one is refused',
+    /filter\(function\(e\)\{ return e && e\.date === d; \}\)\[0\]/.test(_ldSrc) &&
+    /if\(existing\)\{/.test(_ldSrc));
+  // A pending draw offers the one action that moves it forward, prefilled with ITS date
+  // so the results stay tied to the day of the draw.
+  check('a pending draw offers Add results, prefilled with the draw date',
+    /Add results/.test(_ldSrc) && /_labOpenAddSheet\([^)]*_esc\(entry\.date/.test(_ldSrc));
+}
 {
   const labs = fs.readFileSync(path.join(__dirname, '../tab-labs.js'), 'utf8');
-  check('Labs renders a derived safety card',   labs.includes('_labSafetyCard(entries[0])'));
+  // Not entries[0] any more. A logged-but-unreported draw is the newest entry by date and
+  // carries no results, so reading the first entry blindly blanked the safety summary the
+  // moment a draw was logged. It now reads the latest draw that actually HAS results.
+  check('Labs renders a derived safety card from the latest RESULTED draw',
+    /_latestDone\s*=\s*entries\.filter/.test(labs) && labs.includes('_labSafetyCard(_latestDone)'));
   check('Labs marker rows include a sparkline',  labs.includes('_labSparkline(entries, key)'));
   check('safety guidance uses backend note→meaning', labs.includes('m.note || m.meaning'));
 }
