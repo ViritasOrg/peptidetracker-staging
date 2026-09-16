@@ -3122,6 +3122,29 @@ function _tcSolveEvaluate(ctx, cad, dates, doses){
 // above the resolution floor. Shortest keeps the peak lowest, which is the stated
 // priority; the floor is what stops it asking for an undrawable dose. Ties go to the
 // interval whose quantised dose lands closest to the weekly requirement.
+// WHAT ONE INJECTION A WEEK COSTS, in the same units as `ripple` (a fraction of the
+// weekly mean). 0.01 = one percentage point of within-week swing per weekly injection.
+//
+// Calibrated to be a price, not a veto. On a 4.5-day ester daily (7/wk, ~7% ripple)
+// against every-2-days (3.5/wk, ~14%) is a 7-point gap for 3.5 extra injections: at
+// 0.01 the daily plan still wins, but by 3.5 points instead of 7, and any ester where
+// the gap is narrower — cypionate at 8 d, undecanoate at 56 d, where every interval
+// from daily to fortnightly ripples within a few points — now goes the other way. That
+// is the intent: shorter intervals keep winning where the pharmacology actually pays
+// for them, and stop winning where it does not.
+//
+// ⚠️ THIS IS A PREFERENCE, NOT A MEASUREMENT. Unlike every other constant in this
+// solver it is not derived from anything — there is no study on what a wasted 0.08 ml
+// of hub oil is worth against a percentage point of free-T swing. Change it on request,
+// and do not let it grow large enough to pick a schedule that misses target: it is
+// compared only AFTER worstSettled has decided, never against it.
+var _TC_INJ_COST = 0.01;
+// HOW FAR OFF TARGET A PLAN MAY SIT AND STILL BE CHOSEN FOR CONVENIENCE. Above this a
+// candidate is inadmissible: it can still be offered as an alternative and still win
+// when nothing does better, but no amount of saved injections promotes it over a plan
+// that actually holds the level. 6% of target, matching the band the suite asserts a
+// winner must hold.
+var _TC_HOLD_TOL = 0.06;
 var _TC_IV_CANDIDATES = [1, 2, 3, 4, 5, 7, 10, 14];
 // A dose below this many syringe steps cannot be set accurately enough to be worth
 // scheduling — two steps means a ±½-step rounding error is ≤25% of the dose.
@@ -3847,7 +3870,29 @@ function tcSolveTransition(opts){
     targetPmol:  parseDec(opts.targetPmol)||0,
     concMgPerMl: parseDec(opts.concMgPerMl)||250,
     stepMl:      parseDec(opts.stepMl)||_TC_SOLVE_STEP_ML,
-    weeks:       parseInt(opts.weeks,10)||12
+    weeks:       parseInt(opts.weeks,10)||12,
+    // ── AN INJECTION IS NOT FREE ────────────────────────────────────────────
+    // Henrik, 2026-09-16: "single small injections like 50mg (or like today a 25mg)
+    // does cause some issues … I do loose oil since the syringe and needle head still
+    // contains some oil that gets wasted. Also cost of syringes and needles becomes
+    // wasteful."
+    //
+    // He was right, and the ranking could not see it. It scored how well a schedule
+    // holds target, then how much it ripples, and only used injection count to break a
+    // tie in BOTH — which for a 4.5-day ester never happens: daily enanthate ripples
+    // ~7% against ~14% every-2-days, a gap far outside the 0.03 tie band, so daily won
+    // on ripple and the count key never fired. Seven injections a week were bought with
+    // seven points of ripple and no price was ever asked.
+    //
+    // The price is real and it is not only inconvenience. Detachable-needle dead space
+    // is ~0.07-0.10 ml; at 250 mg/ml a 25 mg dose is 0.10 ml, so nearly half of every
+    // draw stays in the hub. A daily plan over 13 weeks throws away more oil than a
+    // whole vial.
+    //
+    // So injections now cost ripple. maxInjPerWeek is the hard override for a user who
+    // simply will not do daily; injCost is the standing price everything pays.
+    maxInjPerWeek: parseDec(opts.maxInjPerWeek)||0,       // 0 = no cap
+    injCost:     (opts.injCost==null)?_TC_INJ_COST:(parseDec(opts.injCost)||0)
   };
   if(!ctx.incomingId||!ctx.startDate||!(ctx.targetPmol>0)) return null;
 
@@ -3906,14 +3951,24 @@ function tcSolveTransition(opts){
   // wins. The tolerance is deliberately small — this breaks near-ties, it does not let
   // a smooth schedule win at the wrong level.
   var _TIE=0.03;
-  // ⚠️ AND WHEN SMOOTHNESS TIES TOO, TAKE THE FEWER INJECTIONS.
+  // ⚠️ AND SMOOTHNESS IS BOUGHT, NOT GIVEN. THE CURRENCY IS INJECTIONS.
   // Ripple is governed by interval ÷ half-life, which is an ester property: measured on
   // this model, every-2-days gives 82% ripple on propionate (t½ 0.8 d), 14% on enanthate
   // (4.5 d), 8% on cypionate (8 d) and 4% on undecanoate (56 d). For a long ester the
-  // ripple is flat at EVERY interval from daily to fortnightly — so a tie-break on
-  // ripple alone would happily recommend daily Nebido injections, which is 56 jabs to
-  // achieve what 4 achieve. Fewer injections is the third key, and it only ever applies
-  // once the first two are indistinguishable.
+  // ripple is flat at EVERY interval from daily to fortnightly — so ranking on ripple
+  // alone would happily recommend daily Nebido injections, which is 56 jabs to achieve
+  // what 4 achieve.
+  //
+  // Injection count used to be the THIRD key, applied only when ripple tied inside
+  // 0.03. That is a tie-break, not a cost, and for a mid-length ester it never fired:
+  // daily enanthate beats every-2-days by ~7 points of ripple, so it won outright and
+  // the count was never consulted. Seven injections a week cost nothing to propose.
+  //
+  // Now they cost `injCost` of ripple each. Same comparison, same tie band — the score
+  // being compared is simply ripple PLUS what the injections to achieve it are worth.
+  // A schedule that is smoother because it jabs twice as often has to be smoother by
+  // enough to pay for it. Still strictly after worstSettled: a plan may never buy
+  // smoothness by missing the target.
   var perWeekOf=function(r){
     var c=r.cadence||{};
     if(c.dithered) return 7;
@@ -3923,7 +3978,60 @@ function tcSolveTransition(opts){
     if(r.intervals&&r.intervals.length) return 7/(r.intervals.reduce(function(a,b){return a+b;},0)/r.intervals.length);
     return 3.5;
   };
+  // Ripple plus the price of the injections that buy it.
+  var _rippleCost=function(r){
+    var rip=(r.ripple==null)?Infinity:r.ripple;
+    if(!isFinite(rip)) return rip;
+    return rip + (ctx.injCost>0 ? ctx.injCost*perWeekOf(r) : 0);
+  };
+  // ⚠️ A CAP IS A CAP — IT REMOVES CANDIDATES, IT DOES NOT DISCOUNT THEM.
+  // A user who says "at most 3 a week" has not said "prefer 3, take 7 if it scores
+  // better"; folding the cap into the score would do exactly that. Applied before the
+  // sort, and only while something survives it: a cap that excludes every candidate is
+  // a cap that cannot be honoured, and answering with nothing helps no one. In that
+  // case the cap is dropped and said so, rather than silently obeyed or silently
+  // ignored.
+  var _capped=null;
+  if(ctx.maxInjPerWeek>0){
+    var _fits=results.filter(function(r){ return perWeekOf(r)<=ctx.maxInjPerWeek+1e-9; });
+    if(_fits.length){ _capped=results.length-_fits.length; results=_fits; }
+    else _capped=-1;
+  }
+  // ⚠️ HOLDING THE TARGET IS NOT FOR SALE, AND _TIE IS TOO WIDE TO PROTECT IT ALONE.
+  // The keys below are ordered so that target-holding decides first and everything else
+  // only breaks its ties — but a 0.03 tie band is 42 pmol/L at a 1400 target, and a
+  // candidate sitting 0.029 worse could always be promoted by the second key. While
+  // that key was ripple, an intrinsic property that happened to track fit, nothing came
+  // of it. Charging for injections broke the coincidence: adding the price flipped an
+  // every-3-days plan holding 1267-1361 over a daily one holding 1400, and it won on
+  // being cheaper to administer while missing the target by 9.5%.
+  //
+  // So admissibility is a gate, not a key. A plan that cannot hold the target within
+  // _TC_HOLD_TOL never wins on convenience, at any price, however few the injections.
+  // Below the gate the ordering is exactly what it was. If NOTHING is admissible the
+  // gate stops discriminating and the old ranking decides the least-bad option, which
+  // is the honest answer to "no schedule holds this target" — the notes say so
+  // separately, and refusing to rank would just hide it.
+  //
+  // ⚠️ MEASURED ON THE WEEKLY MEANS, NOT ON worstSettled. The first cut of this gate
+  // used worstSettled, which folds RIPPLE into the number — and ripple is the very
+  // thing the injections are being bought to reduce. At a 6% band that made every
+  // interval longer than daily inadmissible by construction (every-2-days enanthate
+  // ripples ~14%, so ±7% before it is even off target), which does not gate the price,
+  // it abolishes it. Holding the target is a statement about where the level SITS; the
+  // swing around it is the separate thing the next key already ranks.
+  var _admits=function(r){
+    var wk=r.weekly||[], lo=Infinity, hi=0;
+    for(var i=(r.settleWeeks||0); i<wk.length; i++){
+      if(wk[i].mean<lo) lo=wk[i].mean;
+      if(wk[i].mean>hi) hi=wk[i].mean;
+    }
+    if(!isFinite(lo)||!(ctx.targetPmol>0)) return false;
+    return lo>=ctx.targetPmol*(1-_TC_HOLD_TOL) && hi<=ctx.targetPmol*(1+_TC_HOLD_TOL);
+  };
   results.sort(function(a,b){
+    var aOK=_admits(a), bOK=_admits(b);
+    if(aOK!==bOK) return aOK?-1:1;
     // worstSettled, not worst — see the note in the scorer. The loading peak is an
     // ester property common to every candidate; ranking on it lets a near-constant
     // decide. Falls back to worst for any result that predates the field.
@@ -3931,7 +4039,7 @@ function tcSolveTransition(opts){
     var bw=(b.worstSettled==null)?b.worst:b.worstSettled;
     var d=aw-bw;
     if(Math.abs(d)>_TIE) return d;
-    var rp=a.ripple-b.ripple;
+    var rp=_rippleCost(a)-_rippleCost(b);
     if(Math.abs(rp)>_TIE) return rp;
     return perWeekOf(a)-perWeekOf(b);
   });
@@ -3943,7 +4051,7 @@ function tcSolveTransition(opts){
       // Already solved at full iteration count; the fixed-cadence refiner cannot
       // express it and would silently collapse it back to one interval.
       if(!fallback||results[ri].meanErr<fallback.meanErr) fallback=results[ri];
-      if(results[ri].meanErr<=tol){ best=results[ri]; break; }
+      if(results[ri].meanErr<=tol&&_admits(results[ri])){ best=results[ri]; break; }
       continue;
     }
     try{ refined=_tcSolveForCadence(ctx,results[ri].cadence,{iters:12}); }
@@ -3953,7 +4061,14 @@ function tcSolveTransition(opts){
     if(!refined||refined.degenerate) continue;
     results[ri]=refined;
     if(!fallback||refined.meanErr<fallback.meanErr) fallback=refined;
-    if(refined.meanErr<=tol){ best=refined; break; }
+    // ⚠️ RE-CHECK ADMISSIBILITY HERE — THE SORT RANKED THE CHEAP SOLVE.
+    // The ranking above runs on the 4-iteration pass; this loop re-solves the leaders
+    // at 12 and REPLACES them. A candidate can therefore arrive at the front of the
+    // queue admissible and be accepted after refining into something that is not, which
+    // is how an every-3-days plan holding 1267-1361 against a 1400 target was chosen
+    // on price. meanErr alone does not catch it: its 10% tolerance is wider than the
+    // 6% band, so a plan can miss the target and still pass.
+    if(refined.meanErr<=tol&&_admits(refined)){ best=refined; break; }
   }
   if(!best) best=fallback||results[0];
   if(!best||best.degenerate) return {best:null, alternatives:[], target:ctx.targetPmol,
@@ -3964,6 +4079,46 @@ function tcSolveTransition(opts){
   var notes=[];
   var guard=_tcSolveAnchorGuard(ctx);
   if(guard) notes.push(guard);
+  // ── SAY WHAT THE INJECTIONS COST, AND WHAT SKIPPING SOME WOULD ────────────
+  // The ranking now prices injections, so the reader is entitled to see the bill.
+  // Without this the frequency is just a number at the top of a card and the trade
+  // behind it — which is the whole of Henrik's 2026-09-16 question — is invisible.
+  (function(){
+    if(_capped===-1){
+      notes.push('No schedule fits a limit of '+ctx.maxInjPerWeek+' injection'
+        +(ctx.maxInjPerWeek===1?'':'s')+' a week at this target and syringe step, so the '
+        +'limit was not applied. The options below are the unrestricted ones.');
+    }else if(_capped>0){
+      notes.push(_capped+' schedule'+(_capped===1?' was':'s were')+' excluded for needing '
+        +'more than '+ctx.maxInjPerWeek+' injection'+(ctx.maxInjPerWeek===1?'':'s')+' a week.');
+    }
+    if(!best) return;
+    var bw=perWeekOf(best);
+    // ALWAYS SAY THE FREQUENCY. It is the thing the user actually has to do, and until
+    // now it was implicit in a cadence label. The comparison below rides on this line
+    // when there is one to make; the line itself is not conditional on there being one.
+    var line='This plan asks for about '+(Math.round(bw*10)/10)+' injection'
+      +(Math.abs(bw-1)<0.05?'':'s')+' a week.';
+    // The cheapest alternative that is meaningfully rarer, and what it would cost.
+    var leaner=null;
+    results.forEach(function(r){
+      if(perWeekOf(r)>=bw-0.4) return;                       // not actually fewer
+      if(!_admits(r)) return;                                // never trade target for convenience
+      if(!leaner||perWeekOf(r)<perWeekOf(leaner)) leaner=r;
+    });
+    if(leaner){
+      var dRip=Math.round((leaner.ripple-best.ripple)*100);
+      var saved=Math.round((bw-perWeekOf(leaner))*10)/10;
+      line+=' '+(leaner.cadence&&leaner.cadence.label||'A longer interval')
+        +' also holds the target, with '+saved+' fewer a week, at '
+        +(dRip>0?('about '+dRip+' more points of within-week swing'):'no more swing')
+        +' — it is listed below and can be applied instead.';
+    }
+    // Why fewer, larger injections is not merely a preference.
+    line+=' Syringe dead space is a fixed ~0.08 ml every time, whatever the dose, so it '
+      +'is a far bigger share of a small draw than a large one.';
+    notes.push(line);
+  })();
   // ── HOW WELL IS THIS CURVE ACTUALLY CALIBRATED? ────────────────────────────
   // The guards above catch a curve that cannot be solved at all. They say nothing
   // about one that solves fine but rests on a weak anchor, and those numbers come out

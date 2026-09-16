@@ -924,7 +924,7 @@ function _trtSolveWeeksDefault(scope){
 }
 function _trtSolveSt(id,scope){
   if(!_trtSolveState[id])_trtSolveState[id]={target:'',conc:'',
-    weeks:_trtSolveWeeksDefault(scope),step:'0.05',running:false,result:null,error:''};
+    weeks:_trtSolveWeeksDefault(scope),step:'0.05',maxInj:'',running:false,result:null,error:''};
   return _trtSolveState[id];
 }
 // ⚠️ NEVER RE-RENDER FROM A TEXT INPUT'S oninput HANDLER.
@@ -1035,7 +1035,10 @@ async function trtSolveRun(scope,id){
       history:hist, scheduled:sched, incomingId:_inc,
       startDate:start, targetPmol:st.target,
       concMgPerMl:parseDec(st.conc)||_trtDefaultConc(id),
-      stepMl:parseDec(st.step)||0.05, weeks:parseInt(st.weeks,10)||16
+      stepMl:parseDec(st.step)||0.05, weeks:parseInt(st.weeks,10)||16,
+      // '' means no cap — the solver then ranks on the standing per-injection price
+      // alone, which is the default and the behaviour everyone had before.
+      maxInjPerWeek:parseDec(st.maxInj)||0
     }):null;
     if(!res)st.error='Could not solve — check the target, the start date, and that you have logged injections to model the tail from.';
     st.result=res;
@@ -1232,6 +1235,23 @@ function _renderTRTSolve(c,selData,scope,hideRun){
       +'</select>'
       +'<span style="font-size:11px;color:var(--muted2)">= '
       +(Math.round((parseDec(conc)||250)*(parseDec(st.step)||0.05)*10)/10)+' mg per step</span></div>'
+    // ── HOW OFTEN YOU ARE WILLING TO INJECT IS AN INPUT, NOT AN OUTPUT ───────
+    // Henrik, 2026-09-16, on a plan that asked for a 25 mg jab every day: "I do loose
+    // oil since the syringe and needle head still contains some oil that gets wasted.
+    // Also cost of syringes and needles becomes wasteful."
+    //
+    // The solver prices injections now, so a frequent plan has to earn its smoothness.
+    // This is the hard override on top of that price, for when the answer is simply
+    // "not daily, whatever the model says". Left empty it does nothing.
+    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'
+      +'<span style="font-size:11px;color:var(--muted2);min-width:56px">At most</span>'
+      +'<select class="unit-sel" onchange="'+q('trtSolveSet',",'maxInj',this.value")+'">'
+      +[['','no limit'],['7','1 a day'],['4','4 a week'],['3','3 a week'],
+        ['2','2 a week'],['1','1 a week']].map(function(o){
+          return '<option value="'+o[0]+'"'+(String(st.maxInj||'')===o[0]?' selected':'')+'>'+o[1]+'</option>';
+        }).join('')
+      +'</select>'
+      +'<span style="font-size:11px;color:var(--muted2)">injections</span></div>'
     +'<button onclick="'+q('trtSolveRun')+'"'+(st.running?' disabled':'')
       +' style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.5px;'+(st.running?'opacity:0.6;':'')+'">'
       +(st.running?'Solving…':'Generate schedule')+'</button>';
