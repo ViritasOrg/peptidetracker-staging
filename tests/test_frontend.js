@@ -6124,6 +6124,24 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       const solveShown=(h)=>/trtSolveRun/.test(h);
       return solveShown(ePlan('target')) && !solveShown(ePlan('fixed')) && !solveShown(ePlan('ramp'));
     })());
+    // ⚠️ THE CADENCE BELONGS TO THE STRATEGY TOO. Henrik, 2026-09-16: "when I choose
+    // Target T, why show this weird schedule builder at all?" — the same inert-control
+    // bug as the Dose field, one row further down. trtSolveApply writes cadence, days and
+    // freqVal from the plan it picks, so a weekday builder under the target is something
+    // the user can set, that looks set, and that the next Generate silently overwrites.
+    // Fixed and Ramp keep it: nothing else decides their spacing.
+    check('  …with the schedule builder editable in fixed and ramp, but not in target',
+      (function(){
+        const builder=(h)=>/day-chip/.test(h)||/Weekly days/.test(h);
+        return builder(ePlan('fixed')) && builder(ePlan('ramp')) && !builder(ePlan('target'))
+            && builder(wPlan('ramp')) && !builder(wPlan('target'));
+      })());
+    check('  …target showing what the solve chose instead, as a fact not a field',
+      /Chosen by the solve/.test(ePlan('target')) && /Chosen by the solve/.test(wPlan('target')));
+    // TIME is not the solver's to pick — it stays a field in every mode, and it lives
+    // outside this renderer, so nothing here may swallow it.
+    check('  …and no mode renders a time-of-day control inside the plan section',
+      !/time-chip[^"]*"[^>]*>AM</.test(ePlan('target')) && !/>AM</.test(ePlan('fixed')));
 
     // ⚠️ NOTHING SAVED BEFORE THE SWITCH EXISTED CHANGES MEANING. plan_mode is new; the
     // ramp's on/off state has always been "does dose_phases exist", so that is what an
