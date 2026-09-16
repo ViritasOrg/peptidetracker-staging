@@ -2074,6 +2074,81 @@ function _tcAttrRows(log) {
   return rows;
 }
 
+// ── WHAT WAS ON BOARD AT A BLOOD DRAW — DERIVED, NEVER ASKED ────────────────
+// Henrik, 2026-09-16: "App knows exactly how much testosterone I been taking, and the
+// current ramp up is impossible for an end user to just say a weekly dosage, its a
+// combination of slow Test U already injected and the ramp up using Test E. The app
+// needs to answer this question NOT the user."
+//
+// `dose_at_bw` was a typed number in mg/week, and during an ester transition there is no
+// such number to type. On 15 Sep 2026 the honest answer was "a decaying undecanoate
+// depot injected weeks ago, plus a ramping enanthate schedule" — no weekly figure
+// describes that. Asking for one gets a guess or a blank, and that draw carried null,
+// which is the field that turns a measurement into a calibration.
+//
+// The record already holds every logged injection and the model already integrates them.
+// This reads the answer out of the same series the curve is drawn from, so the number in
+// Labs and the number under the chart cannot disagree.
+//
+// ⚠️ THE UNIT IS mg TESTOSTERONE PER DAY, NOT mg OF ESTER PER WEEK. Esters carry
+// different testosterone mass fractions — undecanoate 0.6315, enanthate 0.7199 — so
+// adding their milligrams together adds two different substances and lands between the
+// two answers, wrong for both. The appearance rate is what the model actually works in
+// (`total[]`), and it is the same number whichever ester delivered it. A mg/week figure
+// is offered alongside it as mg of TESTOSTERONE per week, which is a conversion of the
+// rate and not a prescription: it is not the mg of ester to draw up.
+//
+// ENDOGENOUS PRODUCTION IS EXCLUDED. "What dose were you on" asks about administered
+// drug. The model's own-production term is a separate line, already reported separately
+// by the attribution chart, and folding it in here would inflate the denominator of
+// every dose-response figure computed from this.
+var _TC_RATE_MEMO = null;
+function _tcRateAtDate(dateStr) {
+  if (!dateStr) return null;
+  var log = (typeof _tcCurveLog === 'function') ? _tcCurveLog() : null;
+  if (!log || !log.length) return null;
+  // Memoised on the shape of the log, because Labs asks this once per row and the
+  // series is the same for all of them. Any change to the record changes the key.
+  var sig = log.length + '|' + log[0].date + '|' + log[log.length - 1].date;
+  if (!_TC_RATE_MEMO || _TC_RATE_MEMO.sig !== sig) {
+    var sorted = log.slice().sort(function(a, b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+    var S = null;
+    try { S = _tcFreeTSeries(sorted, {}); } catch (e) { return null; }
+    if (!S || !S.byComp) return null;
+    _TC_RATE_MEMO = { sig: sig, S: S, rows: _tcAttrRows(sorted) };
+  }
+  var S = _TC_RATE_MEMO.S;
+  // Local noon on both sides — see the note at the top of _tcFreeTSeries. Mixing a bare
+  // new Date('YYYY-MM-DD') (UTC midnight) with this series' local-noon origin leaves a
+  // half-day remainder that Math.round promotes to a whole day, and the draw reads the
+  // rate from the day next to the one it happened on.
+  var t = Math.round((new Date(dateStr + 'T12:00:00').getTime() - S.firstDate.getTime()) / 86400000);
+  if (!(t >= 0) || t > S.totalDays) return null;     // outside what the record covers
+  var parts = [], drug = 0;
+  (_TC_RATE_MEMO.rows || []).forEach(function(r) {
+    if (r.id === _TC_ATTR_ENDOG_ID) return;
+    var arr = S.byComp[r.id];
+    if (!arr) return;
+    var v = arr[t] || 0;
+    if (!(v > 0)) return;
+    drug += v;
+    parts.push({ id: r.id, label: r.label, mgPerDay: v });
+  });
+  parts.sort(function(a, b){ return b.mgPerDay - a.mgPerDay; });
+  if (drug > 0) parts.forEach(function(p){ p.pct = Math.round(100 * p.mgPerDay / drug); });
+  return { date: dateStr, mgPerDay: drug, mgPerWeek: drug * 7, parts: parts,
+           endogMgPerDay: (S.endog && S.endog[t]) || 0 };
+}
+// One sentence for the surfaces that show it. Names the esters when more than one is on
+// board, because "78 mg/wk" during a transition hides the thing that makes it hard.
+function _tcRateLabel(r) {
+  if (!r) return '';
+  if (!(r.mgPerDay > 0)) return 'nothing on board';
+  var head = Math.round(r.mgPerWeek) + ' mg/wk T';
+  if (r.parts.length < 2) return head;
+  return head + ' (' + r.parts.map(function(p){ return p.label + ' ' + p.pct + '%'; }).join(', ') + ')';
+}
+
 // Split the PLOTTED free-T curve into one line per component.
 //
 // EXACT, not an approximation. At each day the model turns a single appearance rate
@@ -2203,7 +2278,14 @@ async function _tcFetchBwEntries() {
     if (latest.total_t    != null) _tcp.totalT         = String(latest.total_t);
     if (latest.shbg       != null) _tcp.shbg           = String(latest.shbg);
     if (latest.free_t     != null) _tcp.measuredFT     = String(latest.free_t);
-    if (latest.dose_at_bw != null) _tcp.currentDoseMgWk = String(latest.dose_at_bw);
+    // ⚠️ DERIVED FIRST, TYPED ONLY AS A FALLBACK. The record knows what was on board;
+    // a typed mg/week is at best a summary of it and during an ester transition is not
+    // expressible at all. Guarded because this runs on the bloodwork fetch, which can
+    // land before the injection history the rate is computed from — when it does,
+    // _tcRateAtDate returns null and the stored value still applies.
+    var _dr = (typeof _tcRateAtDate === 'function') ? _tcRateAtDate(latest.date) : null;
+    if (_dr && _dr.mgPerDay > 0)        _tcp.currentDoseMgWk = String(Math.round(_dr.mgPerWeek));
+    else if (latest.dose_at_bw != null) _tcp.currentDoseMgWk = String(latest.dose_at_bw);
   }
   _tcBwLoading = false;
   buildTCalc();
@@ -5650,7 +5732,10 @@ function buildTCalc() {
       var _bwTT   = parseDec(_latestBw.total_t)   || 0;
       var _bwSHBG = parseDec(_latestBw.shbg)       || 0;
       var _bwMFT  = parseDec(_latestBw.free_t)     || 0;
-      var _bwDose = parseDec(_latestBw.dose_at_bw) || 0;
+      // Same rule as the profile sync: the record answers this, not a typed number.
+      var _bwRate = (typeof _tcRateAtDate === 'function') ? _tcRateAtDate(_latestBw.date) : null;
+      var _bwDose = (_bwRate && _bwRate.mgPerDay > 0) ? _bwRate.mgPerWeek
+                                                      : (parseDec(_latestBw.dose_at_bw) || 0);
       var _bwVerm = (_bwTT > 0 && _bwSHBG > 0) ? _tcVermeulenFT(_bwTT, _bwSHBG) : null;
       var _bwFrac = _bwMFT > 0 && _bwTT > 0 ? _bwMFT / (_bwTT * 1000)
                   : (_bwVerm !== null && _bwTT > 0 ? _bwVerm / (_bwTT * 1000) : null);
