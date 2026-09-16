@@ -6431,6 +6431,102 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
   }
 
 
+// ── An injection is not free ─────────────────────────────────────────────────
+// Henrik, 2026-09-16, on a plan asking for a 25 mg jab every day: "I do loose oil since
+// the syringe and needle head still contains some oil that gets wasted. Also cost of
+// syringes and needles becomes wasteful."
+//
+// The ranking could not see any of that. It scored target-holding, then ripple, and used
+// injection count ONLY to break a tie in both — which for a 4.5-day ester never happens:
+// daily enanthate ripples ~7% against ~14% every-2-days, a gap far outside the 0.03 tie
+// band, so daily won on ripple outright and the count key never fired. Seven injections a
+// week cost nothing to propose.
+console.log('\n── The price of an injection ──────────────────────────────');
+{
+  const ih=[]; const il=new Date('2026-08-20T12:00:00');
+  for(let i=0;i<60;i++){const d=new Date(il.getTime()-i*2*86400000);
+    ih.push({compId:'nebido',doseMg:'100',
+      date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+  const solve=(extra)=>G.tcSolveTransition(Object.assign({history:ih,incomingId:'enanthate',
+    startDate:'2026-08-27',targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:12}, extra||{}));
+  const perWeek=(r)=>{ if(!r||!r.best) return null; const c=r.best.cadence||{};
+    if(c.dithered) return 7;
+    if(c.perWeek) return c.perWeek;
+    if(c.days&&c.days.length) return c.days.length;
+    if(c.freqVal>0) return 7/(c.freqUnit==='weeks'?c.freqVal*7:c.freqVal);
+    return 3.5; };
+
+  // ⚠️ A PRICE, NOT A VETO. It is compared only after worstSettled has decided, so it
+  // can never buy fewer injections at the cost of missing the target.
+  check('an injection costs ripple, and the price is small',
+    G._TC_INJ_COST > 0 && G._TC_INJ_COST <= 0.05, String(G._TC_INJ_COST));
+
+  // The term is wired and directional: charge a lot for injections and the solver
+  // reaches for a longer interval. Asserted as a comparison rather than against a
+  // named cadence — which cadence wins depends on the ester, and the claim here is
+  // only that the price moves the answer in the direction of fewer jabs.
+  const free=solve({injCost:0}), dear=solve({injCost:0.5});
+  check('pricing injections moves the solver toward fewer of them',
+    !!(free&&dear&&free.best&&dear.best) && perWeek(dear)<=perWeek(free),
+    (free&&free.best?free.best.cadence.label:'?')+' -> '+(dear&&dear.best?dear.best.cadence.label:'?'));
+
+  // The hard cap. "At most 3 a week" is not "prefer 3" — a capped candidate is removed,
+  // never discounted, or a high-scoring daily plan would simply outscore the limit.
+  const capped=solve({maxInjPerWeek:3});
+  check('a cap on injections per week is obeyed, not merely preferred',
+    !!(capped&&capped.best) && perWeek(capped)<=3+1e-9,
+    capped&&capped.best?(capped.best.cadence.label+' = '+perWeek(capped)+'/wk'):'no result');
+  check('  …and every alternative offered respects it too',
+    !!(capped) && (capped.alternatives||[]).every(r=>{
+      const c=r.cadence||{};
+      const pw=c.dithered?7:(c.perWeek||(c.days&&c.days.length)||(c.freqVal>0?7/(c.freqUnit==='weeks'?c.freqVal*7:c.freqVal):3.5));
+      return pw<=3+1e-9;
+    }));
+
+  // ⚠️ A CAP NOTHING CAN MEET IS NOT A REASON TO ANSWER NOTHING. Refusing outright, or
+  // obeying silently and returning an empty list, are both worse than saying so.
+  const impossible=solve({maxInjPerWeek:0.01});
+  check('a cap no schedule can meet is dropped and said out loud',
+    !!(impossible&&impossible.best) &&
+    (impossible.notes||[]).some(n=>/was not applied/.test(n)),
+    impossible?JSON.stringify((impossible.notes||[]).slice(0,1)):'no result');
+
+  // The bill is shown. Without this the frequency is a number on a card and the trade
+  // behind it — the whole of the question that prompted this — stays invisible.
+  check('the plan says how often it asks you to inject',
+    (free.notes||[]).some(n=>/injections a week/.test(n)) ||
+    (free.alternatives||[]).length===0,
+    JSON.stringify((free.notes||[]).filter(n=>/injection/.test(n)).slice(0,1)));
+
+  // ⚠️ THE PRICE MAY NEVER BUY A PLAN THAT MISSES THE TARGET.
+  // This is the guard that broke first and it broke twice. Charging for injections let
+  // the solver reach past every-2-days to every-3-days, which held 1267-1361 against a
+  // 1400 target and won on being cheaper to administer — a 9.5% miss bought with
+  // convenience. The first gate measured worstSettled, which folds RIPPLE in and so
+  // made every interval longer than daily inadmissible by construction; the second
+  // measures where the weekly means SIT, which is the actual claim. And it has to be
+  // re-checked after refinement, because the ranking runs on the cheap 4-iteration
+  // pass and the winner is re-solved at 12 before being accepted.
+  const holds=(r)=>{
+    if(!r||!r.best) return false;
+    const wk=(r.best.weekly||[]).slice(r.best.settleWeeks||0).map(x=>x.mean);
+    if(!wk.length) return false;
+    return Math.min(...wk)>=1400*0.94 && Math.max(...wk)<=1400*1.06;
+  };
+  check('even a steep injection price cannot buy a plan that misses target',
+    holds(dear), dear&&dear.best
+      ? (dear.best.cadence.label+' '+(dear.best.weekly||[]).slice(dear.best.settleWeeks||0)
+          .map(x=>Math.round(x.mean)).join(','))
+      : 'no result');
+  check('  …nor can a cap on injections per week',
+    holds(capped), capped&&capped.best?capped.best.cadence.label:'no result');
+
+  // The default must not have quietly become the cap: no cap is still no cap.
+  check('no cap is the default, and it excludes nothing',
+    !(solve().notes||[]).some(n=>/were excluded for needing/.test(n)));
+}
+
+
   // ── Typing must not tear out the field being typed into ───────────────────
   // Reported 2026-08-27: "entering a target level hides the keyboard for each
   // character entered". trtSolveSet re-rendered the whole panel from the input's
