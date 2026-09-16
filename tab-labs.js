@@ -330,6 +330,21 @@ function renderTodayLogDraw(){
   host.innerHTML=_labLogDrawButtonHtml({wide:true, id:'today-log-draw-btn',
                                         onclick:'logBloodDrawFromToday(this)'});
 }
+// ⚠️ WHAT WAS ON BOARD IS READ OUT OF THE RECORD, NOT TYPED IN.
+// "App knows exactly how much testosterone I been taking, and the current ramp up is
+// impossible for an end user to just say a weekly dosage … The app needs to answer this
+// question NOT the user." (2026-09-16)
+//
+// _tcRateAtDate integrates the logged injections through the same model the curve is
+// drawn from, so the figure here and the figure under the chart cannot disagree. The
+// stored dose_at_bw stays as the fallback: entries predating this, and any draw whose
+// dosing happened before the user started logging, still have only the typed number.
+function _labDoseContext(entry){
+  if(!entry || !entry.date) return '';
+  var r = (typeof _tcRateAtDate === 'function') ? _tcRateAtDate(entry.date) : null;
+  if(r) return (typeof _tcRateLabel === 'function') ? _tcRateLabel(r) : '';
+  return (entry.dose_at_bw != null) ? (String(entry.dose_at_bw) + ' mg/wk') : '';
+}
 function _labStatusChip(entry){
   var done = _labDrawStatus(entry) === 'done';
   var col = done ? 'var(--accent3)' : 'var(--accent4)';
@@ -410,7 +425,8 @@ function _labEntryCard(entry, entries, idx, expanded) {
     ? '<button onclick="_labToggleEntry(' + idx + ')" style="width:100%;background:none;border:none;color:var(--muted2);font-size:11px;font-weight:700;cursor:pointer;padding:9px;font-family:inherit">Show ' + hiddenN + ' more ▾</button>'
     : (expanded && ordered.length > 4 ? '<button onclick="_labToggleEntry(' + idx + ')" style="width:100%;background:none;border:none;color:var(--muted2);font-size:11px;font-weight:700;cursor:pointer;padding:9px;font-family:inherit">Show less ▴</button>' : '');
   var dateLabel = entry.date || '';
-  var ctx = (entry.dose_at_bw != null) ? '<span style="font-size:10px;color:var(--muted2)"> · ' + _esc(String(entry.dose_at_bw)) + ' mg/wk</span>' : '';
+  var _dc = _labDoseContext(entry);
+  var ctx = _dc ? '<span style="font-size:10px;color:var(--muted2)"> · ' + _esc(_dc) + '</span>' : '';
   var pending = _labDrawStatus(entry) !== 'done';
   // A pending draw has nothing to show but its date, so it offers the one action that
   // moves it forward rather than an empty body.
@@ -473,7 +489,8 @@ function _labListRow(entry, idx){
   var chip=pending
     ? '<span style="font-size:8.5px;font-weight:800;letter-spacing:0.4px;color:var(--accent4);border:1px solid var(--accent4);border-radius:4px;padding:1px 5px;flex-shrink:0">DRAWN</span>'
     : (worst?'<span style="font-size:8.5px;font-weight:800;letter-spacing:0.4px;color:'+worst.color+';border:1px solid '+worst.color+';border-radius:4px;padding:1px 5px;flex-shrink:0">'+worst.label.toUpperCase()+'</span>':'');
-  var ctx=(entry.dose_at_bw!=null)?(' \u00b7 '+_esc(String(entry.dose_at_bw))+' mg/wk'):'';
+  var _dc2=_labDoseContext(entry);
+  var ctx=_dc2?(' \u00b7 '+_esc(_dc2)):'';
   return '<div onclick="_labOpenDetail('+idx+')" style="display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--border);cursor:pointer">'
     +'<div style="width:8px;height:8px;border-radius:50%;background:'+dotCol+';flex-shrink:0"></div>'
     +'<div style="flex:1;min-width:0">'
@@ -603,9 +620,46 @@ function _labSetUnit(key, u) {
   if (!_labAdd.values[key]) _labAdd.values[key] = { value: '', unit: u };
   _labAdd.values[key].unit = u;
 }
-function _labSetDate(v) { _labAdd.date = v; }
+function _labSetDate(v) {
+  _labAdd.date = v;
+  // In place, never a re-render — see the note above _labDoseAtDrawHtml.
+  var host = (typeof document !== 'undefined') ? document.getElementById('lab-dose-derived') : null;
+  if (host) host.innerHTML = _labDoseAtDrawHtml(v);
+}
 function _labSetDose(v) { _labAdd.dose = v; }
 function _labToggleMore() { _labMoreOpen = !_labMoreOpen; _labRenderAddSheet(); }
+
+// The computed half of the DOSE AT DRAW block, on its own so the date field can refresh
+// it without re-rendering the sheet around the control being used — the same rule
+// trtSolveSet follows, and for the same reason: a full re-render tears out the input
+// (and on iOS, closes the date picker mid-interaction).
+function _labDoseAtDrawHtml(dateStr) {
+  var r = (typeof _tcRateAtDate === 'function') ? _tcRateAtDate(dateStr) : null;
+  var out = '';
+  if (r && r.mgPerDay > 0) {
+    out += '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:6px">'
+      + '<div style="font-size:15px;font-weight:700;color:var(--text)">'
+      + (Math.round(r.mgPerDay * 10) / 10) + ' mg T/day'
+      + '<span style="font-size:12px;color:var(--muted2);font-weight:400"> \u00b7 '
+      + Math.round(r.mgPerWeek) + ' mg/wk equivalent</span></div>'
+      + (r.parts.length > 1
+          ? ('<div style="font-size:11px;color:var(--muted2);margin-top:4px;line-height:1.5">'
+             + r.parts.map(function (p) {
+                 return _esc(p.label) + ' ' + (Math.round(p.mgPerDay * 10) / 10) + ' mg/day (' + p.pct + '%)';
+               }).join(' \u00b7 ') + '</div>')
+          : '')
+      + '<div style="font-size:10px;color:var(--muted2);margin-top:5px">From your logged injections. '
+      + 'Testosterone delivered, not milligrams of ester \u2014 esters differ in how much '
+      + 'testosterone they carry, so their milligrams do not add up.</div></div>';
+  } else if (r) {
+    out += '<div style="font-size:11px;color:var(--muted2);margin-bottom:6px;line-height:1.5">'
+      + 'Nothing on board on this date, from your logged injections.</div>';
+  }
+  out += '<div style="font-size:10px;color:var(--muted2);margin-bottom:4px">'
+    + (r ? 'Override (mg/wk) \u00b7 only if the record is incomplete' : 'mg/wk \u00b7 optional')
+    + '</div>';
+  return out;
+}
 
 function _labRenderAddSheet() {
   var sheet = document.getElementById('lab-add-sheet');
@@ -623,9 +677,16 @@ function _labRenderAddSheet() {
   h += '<div style="font-size:11px;color:var(--muted2);margin-bottom:8px;font-weight:700;letter-spacing:0.5px">COMMON</div>';
   LAB_QUICK_KEYS.forEach(function (k) { if (_labMarkerIndex[k]) h += _labInput(k); });
 
-  // Dose context (kept for the free-T model).
-  h += '<div style="margin-bottom:12px"><label style="' + lSty + '">DOSE AT DRAW (mg/wk) · optional</label>' +
-    '<input type="text" inputmode="decimal" value="' + _esc(_labAdd.dose || '') + '" oninput="_labSetDose(this.value)" placeholder="—" style="' + iSty + '"></div>';
+  // ── DOSE AT DRAW: ANSWERED, THEN OFFERED FOR CORRECTION ──────────────────
+  // The app computes this from the logged injections now. The field stays, because the
+  // record only knows what has been logged — a draw taken before the user started
+  // logging, or during dosing done elsewhere, still has nothing to derive from — but it
+  // is no longer a question the user has to answer from nothing. When there IS an
+  // answer it is stated above the box, in the ester split that makes a single weekly
+  // number impossible to give.
+  h += '<div style="margin-bottom:12px"><label style="' + lSty + '">DOSE AT DRAW</label>'
+    + '<div id="lab-dose-derived">' + _labDoseAtDrawHtml(_labAdd.date) + '</div>'
+    + '<input type="text" inputmode="decimal" value="' + _esc(_labAdd.dose || '') + '" oninput="_labSetDose(this.value)" placeholder="\u2014" style="' + iSty + '"></div>';
 
   // Everything else, grouped by panel, behind a disclosure.
   h += '<button onclick="_labToggleMore()" style="width:100%;background:none;border:1px dashed var(--border);border-radius:8px;color:var(--muted2);font-size:12px;font-weight:700;letter-spacing:0.4px;cursor:pointer;padding:11px;font-family:inherit;margin:4px 0 14px">' +

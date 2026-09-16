@@ -13860,6 +13860,98 @@ if (typeof G._labDrawStatus === 'function') {
     G.buildLabs = _caSave.bl; G._labCloseAddSheet = _caSave.close;
   }
 
+  // ── WHAT WAS ON BOARD AT A DRAW IS DERIVED, NOT TYPED ────────────────────
+  // Henrik, 2026-09-16: "App knows exactly how much testosterone I been taking, and the
+  // current ramp up is impossible for an end user to just say a weekly dosage, its a
+  // combination of slow Test U already injected and the ramp up using Test E. The app
+  // needs to answer this question NOT the user."
+  //
+  // He is right, and the blank proves it: the 15 Sep 2026 draw carried dose_at_bw null,
+  // which is the one field that turns a measurement into a calibration.
+  if (typeof G._tcRateAtDate === 'function') {
+    const _drSave = {hist:G._tcHistory, hs:G._tcHistoryState, c:G._injectionsCache,
+                     us:G._userStacks, ai:G._activeStackIndices, memo:G._TC_RATE_MEMO};
+    // A transition in the shape that prompted this: an undecanoate depot injected weeks
+    // ago, still releasing, with an enanthate schedule ramping under it.
+    const _drD = (o) => { const t=new Date('2026-09-15T12:00:00'); t.setDate(t.getDate()+o);
+      return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); };
+    const _drLog = [];
+    for (let i = 8; i >= 1; i--) _drLog.push({compId:'nebido', doseMg:'250', date:_drD(-i*14)});
+    for (let i = 20; i >= 0; i--) _drLog.push({compId:'enanthate', doseMg:'30', date:_drD(-i)});
+    G._tcHistory = _drLog.map(e => ({compId:e.compId, doseMg:e.doseMg, date:e.date, source:'logged'}));
+    G._tcHistoryState = 'ready';
+    G._injectionsCache = {}; G._userStacks = []; G._activeStackIndices = [];
+    G._TC_RATE_MEMO = null;
+
+    const _r = G._tcRateAtDate('2026-09-15');
+    check('the app computes what was on board at a draw', !!(_r && _r.mgPerDay > 0),
+      _r ? JSON.stringify({mgPerDay:_r.mgPerDay, n:_r.parts.length}) : 'null');
+
+    if (_r && _r.mgPerDay > 0) {
+      // ⚠️ BOTH ESTERS, BECAUSE THAT IS THE WHOLE POINT. A single weekly number is
+      // exactly what cannot be given during a transition.
+      check('  …split across every ester still releasing, not one number',
+        _r.parts.length === 2 &&
+        _r.parts.some(p => /nebido|undecanoate/i.test(p.id + p.label)) &&
+        _r.parts.some(p => /enanth/i.test(p.id + p.label)),
+        _r.parts.map(p => p.label + ' ' + p.pct + '%').join(', '));
+      check('  …whose shares sum to the whole',
+        Math.abs(_r.parts.reduce((a, p) => a + p.mgPerDay, 0) - _r.mgPerDay) < 1e-6);
+      // ⚠️ mg TESTOSTERONE, NOT mg OF ESTER. Undecanoate carries 0.6315 and enanthate
+      // 0.7199 testosterone by mass, so adding their milligrams adds two different
+      // substances. The rate is below the raw ester mg/day for that reason, and a test
+      // that accepted the ester sum would be blessing the error.
+      const _rawMgPerDay = 250/14 + 30;        // what the labels on the vials say
+      check('  …measured as testosterone delivered, not as milligrams of ester',
+        _r.mgPerDay < _rawMgPerDay * 0.85,
+        _r.mgPerDay.toFixed(1) + ' vs ' + _rawMgPerDay.toFixed(1) + ' raw ester mg/day');
+      check('  …and the weekly figure is just that rate times seven',
+        Math.abs(_r.mgPerWeek - _r.mgPerDay * 7) < 1e-6);
+      // Own production is a separate line; folding it in would inflate the denominator
+      // of every dose-response figure computed from this.
+      check('  …with endogenous production reported apart, never counted as dose',
+        _r.endogMgPerDay != null && _r.parts.every(p => p.id !== '__endog__'));
+    }
+
+    // Outside what the record covers is UNKNOWN, which is not the same as zero — a zero
+    // would be read downstream as "measured on no drug" and calibrate against it.
+    check('  …and a date the record does not reach is unknown, not zero',
+      G._tcRateAtDate(_drD(-400)) === null, JSON.stringify(G._tcRateAtDate(_drD(-400))));
+
+    if (typeof G._tcRateLabel === 'function' && _r) {
+      check('the label names the esters rather than hiding them in one figure',
+        /mg\/wk T/.test(G._tcRateLabel(_r)) && /%/.test(G._tcRateLabel(_r)),
+        G._tcRateLabel(_r));
+    }
+    // Labs reads it through one helper, and still falls back to a stored figure for
+    // entries predating this — a draw whose dosing was never logged has nothing to
+    // derive from, and that is the reason the typed field is kept rather than deleted.
+    if (typeof G._labDoseContext === 'function') {
+      G._TC_RATE_MEMO = null; G._tcHistory = []; G._tcHistoryState = 'ready';
+      check('a draw with nothing in the record falls back to the stored figure',
+        G._labDoseContext({date:'2020-01-01', dose_at_bw:150}) === '150 mg/wk',
+        G._labDoseContext({date:'2020-01-01', dose_at_bw:150}));
+    }
+    const _dsSrc = fs.readFileSync(path.join(__dirname, '../tab-labs.js'), 'utf8');
+    check('the add sheet states what it computed before offering the box',
+      /_labDoseAtDrawHtml\(_labAdd\.date\)/.test(_dsSrc) && /Override \(mg\/wk\)/.test(_dsSrc));
+    // ⚠️ IN PLACE, NEVER A RE-RENDER. Redrawing the sheet from the date field's oninput
+    // tears out the control being used and closes the iOS date picker mid-interaction —
+    // the lesson trtSolveSet already carries.
+    check('  …and changing the date refreshes that panel without redrawing the sheet',
+      /getElementById\('lab-dose-derived'\)/.test(_dsSrc) &&
+      !/function _labSetDate\(v\) \{[\s\S]{0,240}?_labRenderAddSheet/.test(_dsSrc));
+    // The curve and Labs must not be able to disagree about what was on board.
+    const _tcSrc2 = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+    check('  …and the profile reads the derived rate before any typed one',
+      /_dr && _dr\.mgPerDay > 0\)\s*_tcp\.currentDoseMgWk/.test(_tcSrc2) &&
+      /else if \(latest\.dose_at_bw != null\)/.test(_tcSrc2));
+
+    G._tcHistory = _drSave.hist; G._tcHistoryState = _drSave.hs;
+    G._injectionsCache = _drSave.c; G._userStacks = _drSave.us;
+    G._activeStackIndices = _drSave.ai; G._TC_RATE_MEMO = _drSave.memo;
+  }
+
   // ── THE LIST IS TWO LINES PER DRAW, DETAIL BEHIND A TAP ──────────────────
   // "each lab test on a single line (can be two rows but no more) ... Clicking a line
   // opens a detailed view". With 10+ draws and a growing marker set, rendering every
