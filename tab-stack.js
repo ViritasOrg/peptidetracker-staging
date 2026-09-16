@@ -1154,6 +1154,13 @@ function trtSolveApply(scope,id,which){
   var _load=(pick===st.result.best)?st.result.loading:null;
   if(_load&&_load.mg>0) comp.load_mg=String(_load.mg);
   else delete comp.load_mg;
+  // ⚠️ THE CAP TRAVELS WITH THE PLAN, or the generator cannot honour it.
+  // The solver trims its candidate days so the cap counts doses already taken
+  // (_injCapTrim); the generator has to trim the SAME days or the rows written would
+  // not be the rows scored. Stored per compound because the cap is per compound.
+  var _cap=parseDec(st.maxInj)||0;
+  if(_cap>0) comp.max_inj_week=String(_cap);
+  else delete comp.max_inj_week;
   comp.unit='mg';
   // Keep the flat dose in step with the maintenance dose, so turning the ramp OFF
   // later lands on the held dose rather than whatever was in the box beforehand.
@@ -5117,6 +5124,29 @@ function _genInjBatches(stack,cycleId,fromDate){
       var cEnd=c.end_date?new Date(Math.min(parseLocalDate(c.end_date).getTime(),cycleEnd.getTime())):new Date(cycleEnd);
       var compEntries=[];
       var _loadDay=_trtLoadFirstDay(c,cycleStart,cycleEnd), _loadMg=parseDec(c.load_mg)||0;
+      // ⚠️ THE SAME TRIM THE SOLVER SCORED, FROM THE SAME FUNCTION.
+      // A cap of "3 a week" is a cap on 7-day WINDOWS counting doses already in the
+      // record, not a quota the plan's own first week gets to spend afresh. Working it
+      // out here independently would be two implementations of one rule, which is how
+      // the plan and the curve come to disagree; _injCapTrim is the single copy.
+      var _capW=parseDec(c.max_inj_week)||0, _allowed=null;
+      if(_capW>0&&typeof _injCapTrim==='function'){
+        var _cand=[];
+        for(var _cd=new Date(cStart);_cd<=cEnd;_cd=_nextDay(_cd))
+          if(_phasedHitsDay(c,_cd,cycleStart,_trtHitsDay))_cand.push(new Date(_cd));
+        var _taken=[];
+        Object.keys(_injectionsCache||{}).forEach(function(dk){
+          (_injectionsCache[dk]||[]).forEach(function(e){
+            if(!e||!e.logged)return;
+            var eid=(typeof _canonCompoundId==='function')?_canonCompoundId(e.compound_id):e.compound_id;
+            if(eid!==_canonCompoundId(c.id))return;
+            var t=new Date(e.date+'T12:00:00').getTime();
+            if(isFinite(t))_taken.push(t);
+          });
+        });
+        _allowed={};
+        _injCapTrim(_cand,_taken,_capW).forEach(function(dd){_allowed[dateKey(dd)]=true;});
+      }
       for(var d=new Date(cStart);d<=cEnd;d=_nextDay(d)){
         var daysSince=Math.floor((d-cycleStart)/86400000);
         var hit=false;
@@ -5126,6 +5156,7 @@ function _genInjBatches(stack,cycleId,fromDate){
         // that exact reading for saved protocols and lets either be chosen now.
         hit=_phasedHitsDay(c,d,cycleStart,_trtHitsDay);
         if(!hit)continue;
+        if(_allowed&&!_allowed[dateKey(d)])continue;   // the cap's window is already full
         // ── DOSE RAMPS APPLY TO TESTOSTERONE TOO (ester transitions) ──────────
         // _effectiveDoseAt had exactly one call site — the peptide branch — so a TRT
         // compound carrying dose_phases generated its FLAT dose and the ramp was

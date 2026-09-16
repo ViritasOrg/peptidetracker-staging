@@ -6854,6 +6854,59 @@ console.log('\n── The price of an injection ──────────�
     !(solve({minMl:0}).notes||[]).some(n=>/asking for a draw under/.test(n)));
   check('the default floor is a tenth of a millilitre', G._TC_MIN_ML===0.1,
     String(G._TC_MIN_ML));
+
+  // ── A CAP COUNTS THE DOSES ALREADY TAKEN ─────────────────────────────────
+  // Henrik, 2026-09-16: "Still setting injections to max 3 per week adds 3 more this
+  // week even though I already done 2." The cap chose the cadence and nothing else, so
+  // a plan applied mid-week laid its full opening quota on top of what was already in
+  // the record. The steady state was right all along; only the opening double-counted.
+  {
+    const ms=(d)=>new Date(d+'T12:00:00').getTime();
+    const dk=(d)=>d.toISOString().slice(0,10);
+    const every2=[];
+    for(let i=0;i<10;i++){const t=new Date(ms('2026-09-17')); t.setDate(t.getDate()+i*2); every2.push(t);}
+
+    // Nothing taken: a cap of 3 leaves an every-2-days grid alone for the first week
+    // (17, 19, 21 is three in seven days) and only bites after.
+    const clean=G._injCapTrim(every2, [], 3).map(dk);
+    check('with nothing already taken the cap leaves the opening week alone',
+      clean.slice(0,3).join(',')==='2026-09-17,2026-09-19,2026-09-21', clean.slice(0,4).join(','));
+
+    // The reported case: two taken on the 15th and 16th.
+    const taken=[ms('2026-09-15'), ms('2026-09-16')];
+    const trimmed=G._injCapTrim(every2, taken, 3).map(dk);
+    check('two already taken leave room for one more, not three',
+      trimmed[0]==='2026-09-17' && trimmed[1]!=='2026-09-19',
+      trimmed.slice(0,4).join(','));
+    // ⚠️ NO 7-DAY WINDOW MAY EXCEED THE CAP, counting the taken ones. Asserted directly
+    // rather than by naming the dates it happens to pick, so the rule is what is pinned.
+    check('  …and no 7-day window ever holds more than the cap',
+      (function(){
+        const all=taken.concat(trimmed.map(d=>ms(d))).sort((a,b)=>a-b);
+        for(const t of all){
+          if(all.filter(x=>x>=t-6*86400000&&x<=t).length>3) return false;
+        }
+        return true;
+      })(), trimmed.join(','));
+    // It thins, it never invents: every surviving date came from the input grid.
+    check('  …and it only ever removes days, never adds them',
+      trimmed.every(d=>every2.map(dk).indexOf(d)>=0) && trimmed.length<=every2.length);
+    check('  …while no cap leaves the grid untouched',
+      G._injCapTrim(every2, taken, 0).length===every2.length);
+
+    // ⚠️ ONE RULE, BOTH SIDES. Trimming in the generator alone would write rows the
+    // solver never scored — the plan and the curve describing different schedules.
+    const _tcSrc3=fs.readFileSync(path.join(__dirname,'../tab-tcalc.js'),'utf8');
+    const _stSrc3=fs.readFileSync(path.join(__dirname,'../tab-stack.js'),'utf8');
+    check('the solver and the generator trim through the same function',
+      /function _injCapTrim\(/.test(_tcSrc3) &&
+      /_injCapTrim\(out, opts\.takenMs, opts\.cap\)/.test(_tcSrc3) &&
+      /_injCapTrim\(_cand,_taken,_capW\)/.test(_stSrc3) &&
+      !/function _injCapTrim\(/.test(_stSrc3));
+    check('  …and the cap travels with the plan so the generator can honour it',
+      /comp\.max_inj_week=String\(_cap\)/.test(_stSrc3) &&
+      /parseDec\(c\.max_inj_week\)/.test(_stSrc3));
+  }
 }
 
 // ── The loading dose ─────────────────────────────────────────────────────────
