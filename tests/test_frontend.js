@@ -2103,6 +2103,88 @@ console.log('\n── Today tick ⇄ T-Calc history ─────────�
 }
 
 
+// ── When a dose was taken, not just that it was ──────────────────────────────
+// `date` is a calendar day and `time_of_day` is a three-value slot, so the record
+// said WHICH DAY a dose was administered and never WHEN. `logged_at` has been in
+// the schema since it was written (routers/injections.py, InjectionEntry line 84
+// and PatchPayload line 139) and no writer in this app ever filled it: a live read
+// of the record on 2026-09-16 found 57 logged rows in the first half of September,
+// 53 carrying a slot and 0 carrying a timestamp.
+//
+// A schema field that nothing populates reads, to anyone downstream, exactly like
+// a dose whose time is unknown. These assertions exist so the tick keeps filling
+// it — and so an untick keeps CLEARING it, which is the half that silently does
+// not happen if the backend patch ever goes back to exclude_none.
+console.log('\n── Injection timestamps ───────────────────────────────────');
+{
+  const _atSave = {f:G.fetch, c:G._injectionsCache, vd:G._viewDate, tf:G._tcFetchHistory};
+  const _puts = [];
+  G._tcFetchHistory = async () => {};            // the curve re-read is another test's subject
+  G.fetch = async (url, opt) => {
+    if (opt && opt.method === 'PUT') _puts.push({url:String(url), body:JSON.parse(opt.body)});
+    return {ok:true, status:200, json:async()=>({})};
+  };
+  const _day = '2026-09-16';
+  G._viewDate = null;
+  G._injectionsCache = {};
+  G._injectionsCache[_day] = [{id:'at1', compound_id:'nebido', compound_name:'Nebido', tier:'trt',
+                               cycle_id:'c1', date:_day, dose:'100', unit:'mg', logged:false,
+                               active:true, time_of_day:'AM'}];
+  const _row = () => G._injectionsCache[_day][0];
+
+  await (async () => {
+    await G.toggleInjection('at1', false);       // tick
+    check('ticking a dose sends a logged_at with it',
+      _puts.length === 1 && _puts[0].body.logged === true &&
+      typeof _puts[0].body.logged_at === 'string',
+      JSON.stringify(_puts[0] && _puts[0].body));
+    const _stamp = _puts[0].body.logged_at;
+    // Local time with the offset spelled out. A bare UTC instant read back in
+    // another season disagrees with the local `date` sitting beside it.
+    check('  …a local timestamp carrying its UTC offset, not a bare instant',
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/.test(_stamp), _stamp);
+    check('  …whose date half is the day the dose belongs to',
+      _stamp.slice(0,10) === G.dateKey(new Date()), _stamp);
+    check('  …and the cache carries it without waiting for a refetch',
+      _row().logged_at === _stamp, String(_row().logged_at));
+
+    await G.toggleInjection('at1', true);        // untick
+    check('unticking clears the timestamp rather than leaving a stale one',
+      _puts.length === 2 && _puts[1].body.logged === false &&
+      _puts[1].body.logged_at === null, JSON.stringify(_puts[1] && _puts[1].body));
+    check('  …in the cache too — an untaken dose has no time',
+      _row().logged_at === null, String(_row().logged_at));
+
+    // The failure path must put back what was there, not a null. A row logged
+    // yesterday that fails to untick today is still logged, at yesterday's time.
+    _row().logged = true; _row().logged_at = '2026-09-15T08:30:00+03:00';
+    G.fetch = async () => ({ok:false, status:500, json:async()=>({})});
+    await G.toggleInjection('at1', true);
+    check('a failed untick restores the timestamp it was about to clear',
+      _row().logged === true && _row().logged_at === '2026-09-15T08:30:00+03:00',
+      String(_row().logged_at));
+
+    G.fetch = _atSave.f; G._injectionsCache = _atSave.c;
+    G._viewDate = _atSave.vd; G._tcFetchHistory = _atSave.tf;
+  })();
+
+  // The bulk untick is the same event sixteen times over; it must clear too.
+  const _todayJs = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+  check('Reset Today clears the stamps along with the flags',
+    /body:JSON\.stringify\(\{logged:false,logged_at:null\}\)/.test(_todayJs) &&
+    /e\.logged=false;e\.logged_at=null;/.test(_todayJs));
+
+  // ⚠️ THE CURVE STILL WORKS IN WHOLE DAYS. Nebido ~56 d and enanthate ~4.5 d put a
+  // few hours far inside the uncertainty of the anchor draw, so feeding this field
+  // to the PK model would claim a precision the inputs do not have. Giving the
+  // curve sub-day resolution has to be a deliberate change with its own
+  // justification — not something that arrives because the field now has values.
+  const _tcJs = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('T-Calc does not quietly start reading injection times',
+    !/logged_at/.test(_tcJs));
+}
+
+
 // ── Evidence grades + research citations ─────────────────────────────────────
 // Henrik, 2026-08-12: "this app will basically have research citations and t-calc
 // as its USP." So a dose recommendation must never render without (a) how well
@@ -16816,7 +16898,7 @@ console.log('\n── One writer for injections ──────────�
   const _todaySrc = _fs2.readFileSync(_p2.join(__dirname, '../tab-today.js'), 'utf8');
   check('  …except Today\'s tick, which records rather than plans',
     (_todaySrc.match(/method:'PUT'/g) || []).length === 2 &&
-    /body:JSON.stringify\(\{logged:newLogged\}\)/.test(_todaySrc));
+    /body:JSON.stringify\(\{logged:newLogged,logged_at:_stamp\}\)/.test(_todaySrc));
 
   // Behavioural: drive the writer against a stubbed fetch. The stub is re-armed
   // immediately before each call — this block runs after the synchronous suite, and
