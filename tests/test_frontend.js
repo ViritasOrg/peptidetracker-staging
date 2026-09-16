@@ -6847,25 +6847,41 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     const today=ev('dateKey(NOW)');
     const nextStart=()=>ev('_nextFreeStartDate()');
     const save=ev('_userStacks.slice()');
+    // ⚠️ DATES RELATIVE TO NOW, NEVER LITERALS FOR A PROTOCOL THAT IS STILL RUNNING.
+    // This block was written on 2026-08-28 against Henrik's live protocol — "ending
+    // September 13 … should default to 14 September" — and hardcoded both. On
+    // 2026-09-16 the fixture protocol had finished, `_nextFreeStartDate` correctly
+    // returned today, and two assertions went red on `main` claiming a bug that was
+    // not there. A test that rots on a wall clock reports the calendar, not the code.
+    // The RULE under test is "one day after the last protocol ends, and never into the
+    // past", which has no calendar in it — so neither do the fixtures.
+    const off=(n)=>ev('(function(n){var d=new Date(NOW);d.setDate(d.getDate()+n);return dateKey(d);})('+n+')');
 
     setStacks([]);
     check('with no protocols the default is today', nextStart()===today, nextStart());
-    // The reported case.
-    setStacks([{id:'p1',cycle_start:'2026-06-01',end_date:'2026-09-13'}]);
-    check('  …a protocol ending 13 Sep defaults the next one to 14 Sep',
-      nextStart()==='2026-09-14', nextStart());
+    // The reported case, in the shape it was reported: a protocol still running, whose
+    // last day is a fortnight out, hands the next one the day after.
+    setStacks([{id:'p1',cycle_start:off(-90),end_date:off(14)}]);
+    check('  …a protocol ending in a fortnight defaults the next one to the day after',
+      nextStart()===off(15), nextStart());
     // An end derived from cycle_length counts too, not just an explicit end_date.
-    setStacks([{id:'p1',cycle_start:'2026-08-28',cycle_length:12}]);
+    // 12 weeks from a week ago = 77 days out.
+    setStacks([{id:'p1',cycle_start:off(-7),cycle_length:12}]);
     check('  …a length-derived end counts the same as an explicit one',
-      nextStart()==='2026-11-21', nextStart());
+      nextStart()===off(78), nextStart());
     // ⚠️ NEVER INTO THE PAST. A finished protocol must not drag the default backwards.
-    setStacks([{id:'p1',cycle_start:'2026-01-01',end_date:'2026-03-01'}]);
+    // Both dates are behind NOW by construction, so this one cannot rot forward.
+    setStacks([{id:'p1',cycle_start:off(-260),end_date:off(-200)}]);
     check('  …but a protocol that already ended yields today', nextStart()===today, nextStart());
+    // …including one that ended yesterday, the boundary the rule turns on.
+    setStacks([{id:'p1',cycle_start:off(-60),end_date:off(-1)}]);
+    check('  …and one that ended yesterday yields today, not yesterday+1',
+      nextStart()===today, nextStart());
     // The protocol being created has no cycle_start, so it contributes no end date and
     // cannot push its own default forward.
-    setStacks([{id:'p1',cycle_start:'2026-06-01',end_date:'2026-09-13'},{id:'new'}]);
+    setStacks([{id:'p1',cycle_start:off(-90),end_date:off(14)},{id:'new'}]);
     check('  …and the protocol being created does not count itself',
-      nextStart()==='2026-09-14', nextStart());
+      nextStart()===off(15), nextStart());
 
     setStacks(save);
     check('  …and the wizard first-injection follows the same default',
