@@ -158,8 +158,176 @@ if(_endedAt){
     +'<div style="font-size:13px;color:var(--muted2);margin-bottom:16px;line-height:1.5">'+_why+'</div>'
     +'<button onclick="switchTab(\'stacks\',document.getElementById(\'tab-btn-stacks\'))" style="background:var(--accent);color:#000;border:none;border-radius:20px;padding:10px 20px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Open Plan</button></div>';
 }else{
-list.innerHTML='<div class="empty"><div class="empty-icon">✓</div>Nothing scheduled today</div>';}}document.getElementById('today-badge').textContent='—';return;}const order=(typeof TIME_RANK!=='undefined')?TIME_RANK:{'AM':0,'null':1,'PM':2};doses.sort(function(a,b){return(order[a.time_of_day]??1)-(order[b.time_of_day]??1);});var done=0;doses.forEach(function(dose){var isChk=dose.logged;if(isChk)done++;var item=document.createElement('div');item.className='check-item'+(isChk?' checked-item':'');var box=document.createElement('div');box.className='check-box'+(isChk?' checked':'');box.innerHTML='<svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';var main=document.createElement('div');main.className='check-main';var nameEl=document.createElement('div');nameEl.className='check-name';nameEl.style.color=(dose.tier==='trt'?'#e05050':dose.dot);nameEl.textContent=dose.compound_name;var detailEl=document.createElement('div');detailEl.className='check-detail';detailEl.textContent=dose.dose+(dose.unit?' '+(UNIT_LABELS[dose.unit]||dose.unit):'');main.appendChild(nameEl);main.appendChild(detailEl);item.appendChild(box);item.appendChild(main);if(dose.time_of_day){var timeEl=document.createElement('div');timeEl.className='check-time';timeEl.textContent=(typeof _slotLabel==='function')?_slotLabel(dose.time_of_day):dose.time_of_day;item.appendChild(timeEl);}item.onclick=function(){toggleInjection(dose.id,dose.logged);};var cId=dose.compound_id;if(dose.tier==='peptide'){var _pcp=PEPTIDE_CAT.find(function(c){return c.id===cId;});if(_pcp){var _bib=document.createElement('button');_bib.className='info-btn';_bib.textContent='ℹ';(function(_id){_bib.onclick=function(e){e.stopPropagation();showPeptideCard(_id);};}(cId));item.appendChild(_bib);}}else if(dose.tier==='enhanced'){var _ece=(ENHANCEMENT_COMPOUNDS||[]).find(function(c){return c.id===cId;});if(_ece){var _bib=document.createElement('button');_bib.className='info-btn';_bib.textContent='ℹ';(function(_id){_bib.onclick=function(e){e.stopPropagation();showEnhancedCard(_id);};}(cId));item.appendChild(_bib);}}list.appendChild(item);});const badge=document.getElementById('today-badge');badge.textContent=done+' / '+doses.length;badge.className='card-badge '+(done===doses.length?'badge-done':'badge-today');}
-async function toggleInjection(id,currentLogged){var newLogged=!currentLogged;Object.keys(_injectionsCache).forEach(function(dk){(_injectionsCache[dk]||[]).forEach(function(e){if(e.id===id)e.logged=newLogged;});});if(typeof _tlNoteInjection==='function')_tlNoteInjection(id,newLogged);if(_viewDate){var activeTile=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,activeTile);}else{buildToday();}buildWeekStrip();try{var r=await fetch(AGENT_URL+'/injections/'+id,{method:'PUT',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({logged:newLogged})});if(!r.ok){_logHttp('toggleInj',r.status,'/injections/'+id);Object.keys(_injectionsCache).forEach(function(dk){(_injectionsCache[dk]||[]).forEach(function(e){if(e.id===id)e.logged=currentLogged;});});if(typeof _tlNoteInjection==='function')_tlNoteInjection(id,currentLogged);if(_viewDate){var activeTile=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,activeTile);}else{buildToday();}}else if(typeof _tcFetchHistory==='function'){/* THE RECORD CHANGED — RE-READ IT, DO NOT GUESS. _tcHistory is fetched once per session: _tcFetchHistory returns early on a warm cache and buildTCalc only calls it while the state is 'idle'. Every other source the curve rests on (_injectionsCache, _tcp.manualLog) is rebuilt from the backend on each refresh, so the moment a logged flag changes here the two disagree for the rest of the session. Ticking moved a dose out of the plan without moving it into the history (_tcProtocolInjections and _tcLoadLogFromStack both skip logged rows) and the curve LOST it; unticking left it in the history after it had left the record and the curve KEPT it. Display-only and cleared on restart, which is what made it hard to place: six unticks left the curve frozen at 31 doses / first 16 Jul / peak 1225 pmol/L against a true 25 / 28 Jul / 1018 (2026-08-15). Forced, because the cache is warm by definition at this point. _tcFetchHistory ends in buildTCalc(), so the redraw comes with it; only the success path needs this — a failed PUT left the record untouched and the rollback below restores the cache. */await _tcFetchHistory(true);}}catch(e){_logErr('toggleInj',e);Object.keys(_injectionsCache).forEach(function(dk){(_injectionsCache[dk]||[]).forEach(function(e){if(e.id===id)e.logged=currentLogged;});});if(typeof _tlNoteInjection==='function')_tlNoteInjection(id,currentLogged);}}
+list.innerHTML='<div class="empty"><div class="empty-icon">✓</div>Nothing scheduled today</div>';}}document.getElementById('today-badge').textContent='—';return;}const order=(typeof TIME_RANK!=='undefined')?TIME_RANK:{'AM':0,'null':1,'PM':2};doses.sort(function(a,b){return(order[a.time_of_day]??1)-(order[b.time_of_day]??1);});var done=0;doses.forEach(function(dose){var isChk=dose.logged;if(isChk)done++;var item=document.createElement('div');item.className='check-item'+(isChk?' checked-item':'');var box=document.createElement('div');box.className='check-box'+(isChk?' checked':'');box.innerHTML='<svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';var main=document.createElement('div');main.className='check-main';var nameEl=document.createElement('div');nameEl.className='check-name';nameEl.style.color=(dose.tier==='trt'?'#e05050':dose.dot);nameEl.textContent=dose.compound_name;var detailEl=document.createElement('div');detailEl.className='check-detail';detailEl.textContent=dose.dose+(dose.unit?' '+(UNIT_LABELS[dose.unit]||dose.unit):'');main.appendChild(nameEl);main.appendChild(detailEl);item.appendChild(box);item.appendChild(main);_todayTimeCell(item,dose);item.onclick=function(){toggleInjection(dose.id,dose.logged);};var cId=dose.compound_id;if(dose.tier==='peptide'){var _pcp=PEPTIDE_CAT.find(function(c){return c.id===cId;});if(_pcp){var _bib=document.createElement('button');_bib.className='info-btn';_bib.textContent='ℹ';(function(_id){_bib.onclick=function(e){e.stopPropagation();showPeptideCard(_id);};}(cId));item.appendChild(_bib);}}else if(dose.tier==='enhanced'){var _ece=(ENHANCEMENT_COMPOUNDS||[]).find(function(c){return c.id===cId;});if(_ece){var _bib=document.createElement('button');_bib.className='info-btn';_bib.textContent='ℹ';(function(_id){_bib.onclick=function(e){e.stopPropagation();showEnhancedCard(_id);};}(cId));item.appendChild(_bib);}}list.appendChild(item);});const badge=document.getElementById('today-badge');badge.textContent=done+' / '+doses.length;badge.className='card-badge '+(done===doses.length?'badge-done':'badge-today');}
+// ── The time column, in one place ────────────────────────────────────────────
+// Today and the day-inline view build the same checklist from the same rows and
+// used to carry their own copy of this cell. They render it from here now, so the
+// two cannot drift — a dose must not show its time on one screen and its slot on
+// the other.
+//
+// An untaken dose shows the plan's slot (AM/MID/PM), exactly as before: it has no
+// administration time, because it has not been administered. A taken one shows the
+// clock time it went in once there is one, and is tappable to set or correct it.
+function _injClockLabel(stamp){
+  var m=/T(\d{2}):(\d{2})/.exec(String(stamp||''));
+  return m?(m[1]+':'+m[2]):'';
+}
+function _todayTimeCell(item, dose){
+  var clock=dose.logged?_injClockLabel(dose.logged_at):'';
+  if(!clock && !dose.time_of_day) return;
+  var timeEl=document.createElement('div');
+  timeEl.className='check-time';
+  timeEl.textContent=clock||((typeof _slotLabel==='function')?_slotLabel(dose.time_of_day):dose.time_of_day);
+  // Editable only for a taken dose that is a real stored row. The fallback rows
+  // showDayInline builds from the legacy peptide log carry synthetic ids and no
+  // cycle_id — there is no record row behind them to PUT to, and offering an edit
+  // that silently 404s is worse than offering none.
+  if(dose.logged && dose.id && dose.cycle_id){
+    timeEl.className='check-time check-time-set';
+    timeEl.title = clock ? 'Edit the time this dose was taken'
+                         : 'Set the time this dose was taken';
+    timeEl.onclick=function(ev){ ev.stopPropagation(); openInjectionTimeEditor(dose.id); };
+  }
+  item.appendChild(timeEl);
+}
+
+// ── Correcting when a dose was taken ─────────────────────────────────────────
+// The tick stamps the moment you tick, which is the right default and the wrong
+// record for a dose ticked the next morning, or for one entered days later. So the
+// stamp is editable, and a row logged before the app kept one can be given a time.
+//
+// Only the TIME moves. The date stays the plan's: changing that would be moving the
+// dose to another day rather than annotating it — a different operation, with
+// consequences for the schedule, the curve and the overlap rules that an edit field
+// tucked into a checklist row has no business having.
+//
+// No _tcFetchHistory re-read here, deliberately, and not by omission. That forced
+// re-read exists because ticking moves a dose between the plan and the history (see
+// the note in toggleInjection); `logged` does not change here, so nothing the curve
+// reads changes, and the curve bins by day regardless.
+var _injTimeEditId=null;
+function _findCachedInjection(id){
+  var found=null;
+  Object.keys(_injectionsCache).forEach(function(dk){
+    (_injectionsCache[dk]||[]).forEach(function(e){ if(e.id===id) found=e; });
+  });
+  return found;
+}
+function _closeInjectionTimeEditor(){
+  var o=document.getElementById('inj-time-modal');
+  if(o) o.remove();
+  _injTimeEditId=null;
+}
+function openInjectionTimeEditor(id){
+  var row=_findCachedInjection(id);
+  if(!row || !row.logged) return;
+  _injTimeEditId=id;
+  var clock=_injClockLabel(row.logged_at);
+  var name=row.compound_name||row.compound_id||'This dose';
+  var amount=(row.dose||'')+(row.unit?' '+((typeof UNIT_LABELS!=='undefined'&&UNIT_LABELS[row.unit])||row.unit):'');
+  var btn='display:block;width:100%;padding:12px 14px;border-radius:10px;border:none;font-size:13px;font-weight:800;letter-spacing:0.4px;cursor:pointer;margin-bottom:10px;text-align:center;font-family:inherit;';
+  var o=document.createElement('div');
+  o.id='inj-time-modal';
+  o.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.93);z-index:9999;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:20px 16px 40px;';
+  o.innerHTML='<div style="max-width:420px;margin:20px auto 0;background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden">'
+    +'<div style="padding:16px 18px;border-bottom:1px solid var(--border)">'
+    +'<div style="font-size:16px;font-weight:800;color:var(--text)">Time taken</div>'
+    +'<div style="font-size:12px;color:var(--muted2);margin-top:3px">'+_esc(name)
+      +(amount?' &middot; '+_esc(amount):'')+' &middot; '+_esc(row.date||'')+'</div>'
+    +'</div>'
+    +'<div style="padding:16px 18px">'
+    +'<div style="font-size:12px;color:var(--muted2);line-height:1.6;margin-bottom:12px">'
+    +(clock?'This is when you ticked the dose. Change it to when the injection actually went in.'
+           :'No time was recorded for this dose &mdash; it was ticked before the app kept one. Set it if you remember.')
+    +'</div>'
+    +'<input id="inj-time-input" type="time" value="'+_esc(clock)+'" '
+    +'style="width:100%;box-sizing:border-box;background:var(--surface2);color:var(--text);'
+    +'border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-size:18px;'
+    +'font-family:var(--font-mono);margin-bottom:14px">'
+    +'<button onclick="saveInjectionTime()" style="'+btn+'background:var(--accent);color:#000">SAVE</button>'
+    +(clock?'<button onclick="clearInjectionTime()" style="'+btn+'background:var(--surface2);color:var(--muted2);border:1px solid var(--border)">CLEAR TIME</button>':'')
+    +'<button onclick="_closeInjectionTimeEditor()" style="'+btn+'background:var(--surface2);color:var(--text);border:1px solid var(--border)">CANCEL</button>'
+    +'</div></div>';
+  document.body.appendChild(o);
+}
+// Read the field BEFORE closing — the close removes the input from the document.
+async function saveInjectionTime(){
+  var id=_injTimeEditId;
+  var inp=document.getElementById('inj-time-input');
+  var v=inp?String(inp.value||''):'';
+  _closeInjectionTimeEditor();
+  if(id) await _setInjectionTime(id, v);
+}
+// iOS gives no way to empty a native time wheel, so clearing needs its own button.
+async function clearInjectionTime(){
+  var id=_injTimeEditId;
+  _closeInjectionTimeEditor();
+  if(id) await _setInjectionTime(id, '');
+}
+async function _setInjectionTime(id, hhmm){
+  var row=_findCachedInjection(id);
+  if(!row) return;
+  var stamp=null;
+  if(hhmm){
+    var t=String(hhmm).split(':'), d=String(row.date||'').split('-');
+    if(d.length===3){
+      // Built on the DOSE's date, not today's, so _injLoggedStamp reads the UTC
+      // offset that was in force on that day rather than the one in force now.
+      stamp=_injLoggedStamp(new Date(+d[0], +d[1]-1, +d[2],
+                                     parseInt(t[0],10)||0, parseInt(t[1],10)||0, 0));
+    }
+  }
+  var prev=(row.logged_at===undefined)?null:row.logged_at;
+  var redraw=function(){
+    if(_viewDate){ showDayInline(_viewDate, document.querySelector('.week-day.selected-day')); }
+    else { buildToday(); }
+  };
+  row.logged_at=stamp;
+  redraw();
+  try{
+    var r=await fetch(AGENT_URL+'/injections/'+id,{method:'PUT',
+      headers:authHeaders({'Content-Type':'application/json'}),
+      body:JSON.stringify({logged_at:stamp})});
+    if(!r.ok){
+      _logHttp('injTime', r.status, '/injections/'+id);
+      row.logged_at=prev; redraw();
+    }
+  }catch(e){
+    _logErr('injTime', e);
+    row.logged_at=prev; redraw();
+  }
+}
+// ── When a dose was actually administered ────────────────────────────────────
+// `date` is a local calendar day and `time_of_day` is a slot — AM/MID/PM — so
+// until now the record said WHICH DAY a dose was taken and never WHEN. The
+// backend has carried a `logged_at` field since the schema was written
+// (routers/injections.py, InjectionEntry and PatchPayload) and nothing has ever
+// populated it: of the 57 logged rows in the first half of September 2026, 0 had
+// a timestamp. A field the writer never fills is not a record, it is a promise.
+//
+// The tick writes one now. Local time with the offset spelled out, not UTC: the
+// day a dose belongs to is the LOCAL day, and a bare UTC instant read back from
+// another timezone or the other side of a DST change disagrees with the `date`
+// sitting next to it.
+//
+// ⚠️ THE CURVE STILL WORKS IN WHOLE DAYS. T-Calc bins every dose by `date` and
+// nothing here changes that. At the ester half-lives this app models — Nebido
+// ~56 d, enanthate ~4.5 d — a few hours is far inside the uncertainty of the
+// anchor blood draw, so consuming this field in the PK model would imply a
+// precision the inputs do not have. It is a record for the user, and for
+// compounds where timing genuinely matters (a short propionate, a GH schedule),
+// not a model input. If the curve is ever given sub-day resolution that must be
+// a deliberate change with its own justification — not a silent consequence of
+// the field finally having values in it.
+function _injLoggedStamp(d){
+  var t=d||new Date();
+  function p(n){return (n<10?'0':'')+n;}
+  var off=-t.getTimezoneOffset(), sign=(off<0?'-':'+'), a=Math.abs(off);
+  return t.getFullYear()+'-'+p(t.getMonth()+1)+'-'+p(t.getDate())
+    +'T'+p(t.getHours())+':'+p(t.getMinutes())+':'+p(t.getSeconds())
+    +sign+p(Math.floor(a/60))+':'+p(a%60);
+}
+async function toggleInjection(id,currentLogged){var newLogged=!currentLogged;var _prevAt,_stamp=newLogged?_injLoggedStamp():null;Object.keys(_injectionsCache).forEach(function(dk){(_injectionsCache[dk]||[]).forEach(function(e){if(e.id===id){if(_prevAt===undefined)_prevAt=(e.logged_at||null);e.logged=newLogged;e.logged_at=_stamp;}});});if(typeof _tlNoteInjection==='function')_tlNoteInjection(id,newLogged);if(_viewDate){var activeTile=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,activeTile);}else{buildToday();}buildWeekStrip();try{var r=await fetch(AGENT_URL+'/injections/'+id,{method:'PUT',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({logged:newLogged,logged_at:_stamp})});if(!r.ok){_logHttp('toggleInj',r.status,'/injections/'+id);Object.keys(_injectionsCache).forEach(function(dk){(_injectionsCache[dk]||[]).forEach(function(e){if(e.id===id){e.logged=currentLogged;e.logged_at=(_prevAt===undefined?null:_prevAt);}});});if(typeof _tlNoteInjection==='function')_tlNoteInjection(id,currentLogged);if(_viewDate){var activeTile=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,activeTile);}else{buildToday();}}else if(typeof _tcFetchHistory==='function'){/* THE RECORD CHANGED — RE-READ IT, DO NOT GUESS. _tcHistory is fetched once per session: _tcFetchHistory returns early on a warm cache and buildTCalc only calls it while the state is 'idle'. Every other source the curve rests on (_injectionsCache, _tcp.manualLog) is rebuilt from the backend on each refresh, so the moment a logged flag changes here the two disagree for the rest of the session. Ticking moved a dose out of the plan without moving it into the history (_tcProtocolInjections and _tcLoadLogFromStack both skip logged rows) and the curve LOST it; unticking left it in the history after it had left the record and the curve KEPT it. Display-only and cleared on restart, which is what made it hard to place: six unticks left the curve frozen at 31 doses / first 16 Jul / peak 1225 pmol/L against a true 25 / 28 Jul / 1018 (2026-08-15). Forced, because the cache is warm by definition at this point. _tcFetchHistory ends in buildTCalc(), so the redraw comes with it; only the success path needs this — a failed PUT left the record untouched and the rollback below restores the cache. */await _tcFetchHistory(true);}}catch(e){_logErr('toggleInj',e);Object.keys(_injectionsCache).forEach(function(dk){(_injectionsCache[dk]||[]).forEach(function(e){if(e.id===id){e.logged=currentLogged;e.logged_at=(_prevAt===undefined?null:_prevAt);}});});if(typeof _tlNoteInjection==='function')_tlNoteInjection(id,currentLogged);}}
 async function syncPeptideLogFromAgent(){try{const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders()});if(!r.ok){_syncPending=false;buildToday();return;}window._peptideLog=await r.json();
   window._peptideLog.forEach(function(entry){
     if(!entry.doses)return;
@@ -237,7 +405,7 @@ function detectCycleStart(){
 }
 function getPastDoses(d){if(!window._peptideLog)return null;const dk=dateKey(d);const entry=window._peptideLog.find(e=>_normDt(e.date)===dk);return entry?entry.doses.map(_normDoseId):null;}
 function buildHistory(){const tab=document.getElementById('tab-history');if(!tab)return;const log=window._peptideLog||[];if(!log.length){tab.innerHTML='<div class="content"><div class="empty"><div class="empty-icon">💊</div>No history yet</div></div>';return;}const days=[...log].reverse();tab.innerHTML='<div class="content">'+days.map(entry=>{const d=new Date(entry.date.replace(/-/g,'/'));const label=d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"});const count=entry.doses.length;return'<div class="card" style="margin-bottom:10px"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent3)"></div><div class="card-title">'+label.toUpperCase()+'</div></div><span class="card-badge badge-done">'+count+' doses</span></div><div class="checklist">'+entry.doses.map(id=>{const name=id.replace(/_\d{4}-\d+-\d+$/,'').replace('glow-1','GLOW Stack').replace('glow-2','GLOW 2nd dose').replace('glow','GLOW Stack').replace('reta-sun','Retatrutide').replace('reta-wed','Retatrutide').replace('retatrutide','Retatrutide').replace('cjc-ipa-am','CJC/IPA AM').replace('cjc-ipa-pm','CJC/IPA PM').replace('cjc-am','CJC/IPA AM').replace('cjc-pm','CJC/IPA PM').replace(/^testo_\d+$/,'Testoviron');return'<div class="check-item checked-item"><div class="check-box checked"><svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="check-main"><div class="check-name" style="color:var(--accent3)">'+name+'</div></div></div>';}).join('')+'</div></div>';}).join('')+'</div>';}
-function resetToday(){Object.keys(_injectionsCache).forEach(function(dk){if(dk===dateKey(NOW)){(_injectionsCache[dk]||[]).forEach(function(e){e.logged=false;if(typeof _tlNoteInjection==='function')_tlNoteInjection(e.id,false);});}});buildToday();var todayKey=dateKey(NOW);(_injectionsCache[todayKey]||[]).filter(function(e){return e.active;}).forEach(function(e){fetch(AGENT_URL+'/injections/'+e.id,{method:'PUT',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({logged:false})}).catch(function(err){_logErr('resetToday',err);});});}
+function resetToday(){Object.keys(_injectionsCache).forEach(function(dk){if(dk===dateKey(NOW)){(_injectionsCache[dk]||[]).forEach(function(e){e.logged=false;e.logged_at=null;if(typeof _tlNoteInjection==='function')_tlNoteInjection(e.id,false);});}});buildToday();var todayKey=dateKey(NOW);(_injectionsCache[todayKey]||[]).filter(function(e){return e.active;}).forEach(function(e){fetch(AGENT_URL+'/injections/'+e.id,{method:'PUT',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({logged:false,logged_at:null})}).catch(function(err){_logErr('resetToday',err);});});}
 // Surface an available update where the user goes to look for one: the Version row
 // in Settings. Same target and same action as the Check button next to it, so a
 // version found on load and a version found by pressing Check land identically.
@@ -251,7 +419,7 @@ function _markUpdateAvailable(version){
 }
 async function checkAppVersion(){try{const r=await fetch((IS_STAGING?'https://viritasorg.github.io/peptidetracker-staging':'https://viritasorg.github.io/peptidetracker')+'/version.json?t='+Date.now());if(!r.ok){_logHttp('checkAppVersion',r.status,'/version.json');return;}const {version}=await r.json();const current=VERSION;if(version!==current){/* NO BOTTOM BANNER. Henrik, 2026-08-19: "Remove the bottom of screen banners, they block navigation menu in apps. Also stuff like this should already live in Settings" — a fixed bar at bottom:0 sits on top of .navbar, which is also at bottom:0 and a lower z-index, so the app's own navigation was unreachable behind it. Settings already carries the version row and its Check button; a detected update marks THAT, and nothing covers the navbar. */_markUpdateAvailable(version);}}catch(e){_logErr('checkAppVersion',e);}}
 async function checkForUpdate(){const btn=document.getElementById('s-update-btn');if(btn){btn.textContent='Checking…';btn.disabled=true;btn.style.borderColor='var(--border)';btn.style.color='var(--muted2)';}try{const r=await fetch((IS_STAGING?'https://viritasorg.github.io/peptidetracker-staging':'https://viritasorg.github.io/peptidetracker')+'/version.json?t='+Date.now());if(!r.ok)throw new Error('HTTP '+r.status);const {version}=await r.json();if(version===VERSION){if(btn){btn.textContent='Up to date ✓';btn.style.color='var(--accent3)';btn.style.borderColor='var(--accent3)';setTimeout(()=>{btn.textContent='Check';btn.style.color='var(--muted2)';btn.style.borderColor='var(--border)';btn.disabled=false;},2500);}}else{if(btn){btn.textContent='Update to v'+version;btn.style.background='var(--accent4)';btn.style.color='#000';btn.style.border='none';btn.style.borderRadius='20px';btn.disabled=false;btn.onclick=()=>{window.location.href=location.pathname+'?t='+Date.now()};}}}catch(e){if(btn){btn.textContent='Failed';btn.disabled=false;setTimeout(()=>{btn.textContent='Check';},2000);}}}
-function showDayInline(date,tileEl){const d=new Date(date);const isToday=d.toDateString()===NOW.toDateString();if(isToday){_viewDate=null;document.querySelectorAll('.week-day').forEach(e=>e.classList.remove('selected-day'));buildToday();return;}if(typeof renderTodaySupplements==='function')renderTodaySupplements(d);const dk=dateKey(d);var doses=_dedupInjectionSlots((_injectionsCache[dk]||[]).filter(function(e){return e.active;}));if(!doses.length){var _pld=getPastDoses(d);if(_pld&&_pld.length){doses=_pld.map(function(doseId){var bid=doseId.substring(0,doseId.lastIndexOf('_'));var inf=_findWeeklyItemInfo(bid);return{id:doseId,compound_id:bid,compound_name:inf?inf.name:bid,dose:'',unit:'',dot:inf?inf.dot:'#888',time_of_day:inf?inf.time:null,logged:true,active:true,tier:'peptide'};});}}const list=document.getElementById('today-checklist');const badge=document.getElementById('today-badge');const label=d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}).toUpperCase();if(!doses.length){list.innerHTML='<div class="empty"><div class="empty-icon">✓</div>Nothing scheduled</div>';badge.textContent=label;return;}_viewDate=d;if(_syncPending){list.innerHTML='<div class="today-spinner"><div class="today-spinner-dot"></div></div>';badge.textContent=label;badge.className='card-badge badge-today';document.querySelectorAll('.week-day').forEach(function(e){e.classList.remove('selected-day');});if(tileEl)tileEl.classList.add('selected-day');return;}const order=(typeof TIME_RANK!=='undefined')?TIME_RANK:{'AM':0,'null':1,'PM':2};doses.sort(function(a,b){return(order[a.time_of_day]??1)-(order[b.time_of_day]??1);});list.innerHTML='';doses.forEach(function(dose){var isChk=dose.logged;var item=document.createElement('div');item.className='check-item'+(isChk?' checked-item':'');item.onclick=function(){toggleInjection(dose.id,dose.logged);};var box=document.createElement('div');box.className='check-box'+(isChk?' checked':'');box.innerHTML='<svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';var main=document.createElement('div');main.className='check-main';var nameEl=document.createElement('div');nameEl.className='check-name';nameEl.style.color=(dose.tier==='trt'?'#e05050':dose.dot);nameEl.textContent=dose.compound_name;var detailEl=document.createElement('div');detailEl.className='check-detail';detailEl.textContent=dose.dose+(dose.unit?' '+(UNIT_LABELS[dose.unit]||dose.unit):'');main.appendChild(nameEl);main.appendChild(detailEl);item.appendChild(box);item.appendChild(main);if(dose.time_of_day){var timeEl=document.createElement('div');timeEl.className='check-time';timeEl.textContent=(typeof _slotLabel==='function')?_slotLabel(dose.time_of_day):dose.time_of_day;item.appendChild(timeEl);}var cId=dose.compound_id;if(dose.tier==='peptide'){var _pc=PEPTIDE_CAT.find(function(c){return c.id===cId;});if(_pc){var _b=document.createElement('button');_b.className='info-btn';_b.textContent='ℹ';(function(_id){_b.onclick=function(e){e.stopPropagation();showPeptideCard(_id);};}(cId));item.appendChild(_b);}}else if(dose.tier==='enhanced'){var _ec=(ENHANCEMENT_COMPOUNDS||[]).find(function(c){return c.id===cId;});if(_ec){var _b=document.createElement('button');_b.className='info-btn';_b.textContent='ℹ';(function(_id){_b.onclick=function(e){e.stopPropagation();showEnhancedCard(_id);};}(cId));item.appendChild(_b);}}list.appendChild(item);});badge.textContent=label;badge.className='card-badge badge-upcoming';var titleEl=document.getElementById('today-title');if(titleEl)titleEl.textContent=d.getDate()+'/'+(d.getMonth()+1);document.querySelectorAll('.week-day').forEach(e=>e.classList.remove('selected-day'));if(tileEl)tileEl.classList.add('selected-day');}
+function showDayInline(date,tileEl){const d=new Date(date);const isToday=d.toDateString()===NOW.toDateString();if(isToday){_viewDate=null;document.querySelectorAll('.week-day').forEach(e=>e.classList.remove('selected-day'));buildToday();return;}if(typeof renderTodaySupplements==='function')renderTodaySupplements(d);const dk=dateKey(d);var doses=_dedupInjectionSlots((_injectionsCache[dk]||[]).filter(function(e){return e.active;}));if(!doses.length){var _pld=getPastDoses(d);if(_pld&&_pld.length){doses=_pld.map(function(doseId){var bid=doseId.substring(0,doseId.lastIndexOf('_'));var inf=_findWeeklyItemInfo(bid);return{id:doseId,compound_id:bid,compound_name:inf?inf.name:bid,dose:'',unit:'',dot:inf?inf.dot:'#888',time_of_day:inf?inf.time:null,logged:true,active:true,tier:'peptide'};});}}const list=document.getElementById('today-checklist');const badge=document.getElementById('today-badge');const label=d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}).toUpperCase();if(!doses.length){list.innerHTML='<div class="empty"><div class="empty-icon">✓</div>Nothing scheduled</div>';badge.textContent=label;return;}_viewDate=d;if(_syncPending){list.innerHTML='<div class="today-spinner"><div class="today-spinner-dot"></div></div>';badge.textContent=label;badge.className='card-badge badge-today';document.querySelectorAll('.week-day').forEach(function(e){e.classList.remove('selected-day');});if(tileEl)tileEl.classList.add('selected-day');return;}const order=(typeof TIME_RANK!=='undefined')?TIME_RANK:{'AM':0,'null':1,'PM':2};doses.sort(function(a,b){return(order[a.time_of_day]??1)-(order[b.time_of_day]??1);});list.innerHTML='';doses.forEach(function(dose){var isChk=dose.logged;var item=document.createElement('div');item.className='check-item'+(isChk?' checked-item':'');item.onclick=function(){toggleInjection(dose.id,dose.logged);};var box=document.createElement('div');box.className='check-box'+(isChk?' checked':'');box.innerHTML='<svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';var main=document.createElement('div');main.className='check-main';var nameEl=document.createElement('div');nameEl.className='check-name';nameEl.style.color=(dose.tier==='trt'?'#e05050':dose.dot);nameEl.textContent=dose.compound_name;var detailEl=document.createElement('div');detailEl.className='check-detail';detailEl.textContent=dose.dose+(dose.unit?' '+(UNIT_LABELS[dose.unit]||dose.unit):'');main.appendChild(nameEl);main.appendChild(detailEl);item.appendChild(box);item.appendChild(main);_todayTimeCell(item,dose);var cId=dose.compound_id;if(dose.tier==='peptide'){var _pc=PEPTIDE_CAT.find(function(c){return c.id===cId;});if(_pc){var _b=document.createElement('button');_b.className='info-btn';_b.textContent='ℹ';(function(_id){_b.onclick=function(e){e.stopPropagation();showPeptideCard(_id);};}(cId));item.appendChild(_b);}}else if(dose.tier==='enhanced'){var _ec=(ENHANCEMENT_COMPOUNDS||[]).find(function(c){return c.id===cId;});if(_ec){var _b=document.createElement('button');_b.className='info-btn';_b.textContent='ℹ';(function(_id){_b.onclick=function(e){e.stopPropagation();showEnhancedCard(_id);};}(cId));item.appendChild(_b);}}list.appendChild(item);});badge.textContent=label;badge.className='card-badge badge-upcoming';var titleEl=document.getElementById('today-title');if(titleEl)titleEl.textContent=d.getDate()+'/'+(d.getMonth()+1);document.querySelectorAll('.week-day').forEach(e=>e.classList.remove('selected-day'));if(tileEl)tileEl.classList.add('selected-day');}
 function showDayModal(date){const d=new Date(date);const dk=dateKey(d);var doses=_dedupInjectionSlots((_injectionsCache[dk]||[]).filter(function(e){return e.active;}));const order=(typeof TIME_RANK!=='undefined')?TIME_RANK:{'AM':0,'null':1,'PM':2};doses.sort(function(a,b){return(order[a.time_of_day]??1)-(order[b.time_of_day]??1);});const overlay=document.createElement('div');overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:300;display:flex;align-items:flex-end;justify-content:center;';overlay.onclick=e=>{if(e.target===overlay)document.body.removeChild(overlay);};const sheet=document.createElement('div');sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;max-height:80vh;overflow-y:auto;';const rows=doses.length?doses.map(function(dose){return'<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(dose.tier==='trt'?'#e05050':dose.dot)+';flex-shrink:0"></div><div style="flex:1"><div style="font-size:14px;font-weight:500;color:var(--text)">'+dose.compound_name+'</div><div style="font-size:11px;color:var(--muted2);margin-top:2px">'+dose.dose+(dose.unit?' '+(UNIT_LABELS[dose.unit]||dose.unit):'')+'</div></div>'+(dose.time_of_day?'<div style="font-family:var(--font-display);font-size:14px;color:var(--muted2)">'+((typeof _slotLabel==='function')?_slotLabel(dose.time_of_day):dose.time_of_day)+'</div>':'')+'</div>';}).join(''):'<div style="color:var(--muted2);font-size:13px;text-align:center;padding:20px">Nothing scheduled</div>';sheet.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--accent)">'+d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}).toUpperCase()+'</div><button onclick="document.body.removeChild(this.closest(chr91+chr39+chr115+chr116+chr121+chr108+chr101+chr42+chr61+chr102+chr105+chr120+chr101+chr100+chr39+chr93))" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;line-height:1">×</button></div>'+rows;overlay.appendChild(sheet);document.body.appendChild(overlay);}
 
 // ── PLASMA Today hero: adherence rings + streak ───────────────────────────────
