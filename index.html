@@ -176,6 +176,7 @@
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Protocol format</span><button id="s-migrate-tier-btn" onclick="migrateProtocolsToCompounds()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font-ui)">Merge tiers</button></div>
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);"><span style="font-size:13px;color:var(--muted2)">Orphaned doses</span><span style="display:flex;align-items:center;gap:8px;"><span style="font-size:13px;" id="s-orphan-doses">—</span><button id="s-orphan-btn" onclick="cleanupOrphanDoses()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font-ui)">Clean up</button></span></div>
       <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;color:var(--muted2)">Local dose logs → backend</span><button id="peptide-sync-btn" onclick="pushAllPeptideToBackend()" style="background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font-ui)">Sync</button></div>
+      <div style="padding:12px 16px;border-top:1px solid var(--border);"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span style="font-size:13px;color:var(--muted2)">Repair lost doses<span style="display:block;font-size:10px;color:var(--muted2);opacity:0.75;margin-top:2px">Temporary — for the 2026-09 prune</span></span><button id="repair-scan-btn" onclick="repairScanLostDoses(this)" style="background:var(--surface2);color:var(--accent4);border:1px solid var(--accent4);border-radius:8px;padding:7px 14px;font-size:12px;font-weight:800;letter-spacing:0.4px;cursor:pointer;font-family:inherit;flex-shrink:0">SCAN</button></div><div id="repair-out" style="margin-top:10px"></div></div>
       </div>
     </div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:14px;">
@@ -732,6 +733,97 @@ var _lsDbgKeys=[];
 // and it has to keep working while the backend is unreachable, which is exactly when
 // it matters. A backend-backed error log would be empty in the one case it is for.
 var DIAG_KEY='pep-diag-log', DIAG_MAX=60;
+// ── TEMPORARY: REPAIR THE DOSES A PROTOCOL REWRITE PRUNED ───────────────────
+// ⚠️ DELETE THIS WHEN THE REPAIR IS DONE. It exists for one historical incident and has
+// no business being a permanent feature — a standing "restore my data" button invites
+// being pressed at random. The backend endpoint is idempotent and dry-runs by default,
+// so leaving it a while is safe; leaving it forever is clutter with a write behind it.
+//
+// Background: until 2026-09-16 a protocol rewrite pruned UNLOGGED rows from the plan's
+// start date forward, past ones included. An unlogged row means one of two things the
+// record cannot tell apart — not taken, or taken and not ticked yet — so 19 PM HGH doses
+// Henrik had taken were deleted when the protocol's HGH changed. The rule is fixed
+// (backend #274); this recovers what was already gone.
+//
+// The scan is a DRY RUN and writes nothing. It shows every row it would restore, and
+// which backup each came from, so the list can be checked against memory before anything
+// is written. Restoring needs a second, explicit press.
+// The request itself lives in inj-writer.js — one module owns every write to the
+// injection record, and the suite enforces it. This is the UI around it.
+async function _repairCall(dry){
+  if(typeof injRepairPruned !== 'function') return null;
+  return await injRepairPruned(!!dry, 'repairPruned');
+}
+function _repairRender(res, restored){
+  var host = document.getElementById('repair-out');
+  if(!host) return;
+  host.innerHTML = '';
+  if(!res){ host.textContent = 'Could not reach the backend. Nothing was changed.'; return; }
+  var rows = res.rows || [];
+  if(!rows.length){
+    host.innerHTML = '<div style="font-size:12px;color:var(--muted2);line-height:1.5">'
+      + 'Nothing to repair \u2014 every dose your backups hold is already in the record.</div>';
+    return;
+  }
+  // Built with textContent, not innerHTML: every value here comes from stored records.
+  var box = document.createElement('div');
+  box.style.cssText = 'background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px';
+  var hdr = document.createElement('div');
+  hdr.style.cssText = 'font-size:12px;font-weight:700;color:' + (restored ? 'var(--accent3)' : 'var(--accent4)') + ';margin-bottom:6px';
+  hdr.textContent = restored
+    ? ('Restored ' + rows.length + ' dose' + (rows.length===1?'':'s') + ', as taken.')
+    : (rows.length + ' dose' + (rows.length===1?'':'s') + ' in your backups but not in the record:');
+  box.appendChild(hdr);
+  rows.forEach(function(r){
+    var line = document.createElement('div');
+    line.style.cssText = 'font-size:11px;color:var(--muted2);line-height:1.6';
+    line.textContent = r.date + '  \u00b7  ' + (r.compound_name || r.compound_id)
+      + '  ' + (r.dose||'') + ' ' + (r.unit||'')
+      + (r.time_of_day ? ('  (' + r.time_of_day + ')') : '');
+    box.appendChild(line);
+  });
+  var src = document.createElement('div');
+  src.style.cssText = 'font-size:10px;color:var(--muted2);opacity:0.75;margin-top:8px;line-height:1.5';
+  src.textContent = 'Read from backup ' + ((rows[0]||{}).from_backup || '?')
+    + '. Nothing here is invented \u2014 each row is a record your backups hold.';
+  box.appendChild(src);
+  if(!restored){
+    var warn = document.createElement('div');
+    warn.style.cssText = 'font-size:11px;color:var(--muted2);margin-top:8px;line-height:1.5';
+    warn.textContent = 'Check this list against what you actually took. Restoring marks them '
+      + 'as TAKEN; anything you did not take can be unticked in Today afterwards.';
+    box.appendChild(warn);
+    var btn = document.createElement('button');
+    btn.style.cssText = 'width:100%;margin-top:10px;background:var(--accent);color:#000;border:none;'
+      + 'border-radius:8px;padding:10px;font-size:12px;font-weight:800;letter-spacing:0.4px;'
+      + 'cursor:pointer;font-family:inherit';
+    btn.textContent = 'RESTORE ' + rows.length + ' DOSE' + (rows.length===1?'':'S');
+    btn.onclick = function(){ repairApplyLostDoses(btn); };
+    box.appendChild(btn);
+  }
+  host.appendChild(box);
+}
+async function repairScanLostDoses(btn){
+  if(btn){ btn.disabled = true; btn.textContent = 'SCANNING\u2026'; }
+  var res = await _repairCall(true);
+  if(btn){ btn.disabled = false; btn.textContent = 'SCAN'; }
+  _repairRender(res, false);
+}
+async function repairApplyLostDoses(btn){
+  var n = btn ? btn.textContent.replace(/\D+/g,'') : '';
+  if(typeof confirm === 'function' && !confirm('Restore ' + n + ' dose(s) as TAKEN?\n\n'
+      + 'They are written to your account, so they appear on every device. Anything you '
+      + 'did not actually take can be unticked in Today afterwards.')) return;
+  if(btn){ btn.disabled = true; btn.textContent = 'RESTORING\u2026'; }
+  var res = await _repairCall(false);
+  _repairRender(res, true);
+  // The record changed underneath every view that reads it.
+  if(typeof refreshInjectionsCache === 'function') await refreshInjectionsCache();
+  if(typeof _tcFetchHistory === 'function'){ try{ await _tcFetchHistory(true); }catch(e){} }
+  if(typeof buildToday === 'function') buildToday();
+  if(typeof buildWeekStrip === 'function') buildWeekStrip();
+}
+
 function _diagPush(rec){
   // Called from the error handlers themselves, so it must never throw.
   try{

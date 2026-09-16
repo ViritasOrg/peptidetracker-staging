@@ -66,6 +66,35 @@ async function injWriteOne(row, tag){
   }catch(e){ _injLogErr(tag || 'injWriteOne', e); return null; }
 }
 
+// POST /injections/repair-pruned — reinstate rows a protocol rewrite deleted.
+//
+// A RECORD write, not a planning one, which is why it belongs here rather than in the
+// tick's exception: it restores doses that were administered and whose rows were pruned
+// while still unticked (backend #274 fixed the rule; #276 is the recovery). The backend
+// reads them back out of the user's own backups and refuses to invent anything.
+//
+// This lives in inj-writer because the invariant is structural: the suite forbids any
+// other module POSTing to /injections, and it caught this on the first try when the call
+// sat in index.html. Widening the exception list would have been the easy answer and the
+// wrong one — the rule is there so that every write to the record is in one file.
+//
+// dryRun is the default. A scan writes nothing and returns what it WOULD restore, which
+// is the step that lets the list be checked before anything is committed.
+async function injRepairPruned(dryRun, tag){
+  try{
+    var r = await fetch(AGENT_URL + '/injections/repair-pruned', {
+      method:'POST',
+      headers: authHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({dry_run: dryRun !== false})
+    });
+    if(!r.ok){
+      _injLogHttp(tag || 'injRepairPruned', r.status, '/injections/repair-pruned');
+      return null;
+    }
+    return await r.json();
+  }catch(e){ _injLogErr(tag || 'injRepairPruned', e); return null; }
+}
+
 // DELETE /injections/<id> — remove ONE stored row, addressed by its id.
 //
 // Distinct from injClearFuture below, which clears a range: this one names exactly the

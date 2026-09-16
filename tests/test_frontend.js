@@ -6855,6 +6855,48 @@ console.log('\n── The price of an injection ──────────�
   check('the default floor is a tenth of a millilitre', G._TC_MIN_ML===0.1,
     String(G._TC_MIN_ML));
 
+  // ── THE TEMPORARY REPAIR TOOL ────────────────────────────────────────────
+  // Henrik, 2026-09-16: "I am on my phone, so add this as a temporary feature under
+  // settings." The CLI repair script is no use from a phone; this drives the same
+  // reconstruction (backend #276) from Settings ▸ Data.
+  {
+    const _rpSrc = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+    // ⚠️ THE SCAN MUST BE A DRY RUN. It is the step that shows the list to be checked
+    // against memory, and a scan that wrote would make the check pointless.
+    check('the repair scan is a dry run and the restore is a separate press',
+      /_repairCall\(true\)/.test(_rpSrc) && /_repairCall\(false\)/.test(_rpSrc) &&
+      /function repairScanLostDoses/.test(_rpSrc) &&
+      /function repairApplyLostDoses/.test(_rpSrc));
+    check('  …and writing asks first', /repairApplyLostDoses[\s\S]{0,400}?confirm\(/.test(_rpSrc));
+    // ⚠️ AND THE REQUEST ITSELF LIVES IN inj-writer.js. The first cut built it in
+    // index.html and the write-invariant test caught it on the first run — one module
+    // owns every write to the injection record. Widening the exception list would have
+    // been the easy answer and the wrong one.
+    const _iwSrc4 = fs.readFileSync(path.join(__dirname, '../inj-writer.js'), 'utf8');
+    check('  …with the request in inj-writer, not the page',
+      /async function injRepairPruned\(/.test(_iwSrc4) &&
+      /injRepairPruned\(!!dry/.test(_rpSrc) &&
+      !/fetch\(AGENT_URL \+ '\/injections\/repair-pruned'/.test(_rpSrc));
+    // Scoped by the session, so there is no app or namespace argument to get wrong from
+    // a phone — staging repairs staging, prod repairs prod.
+    check('  …with no namespace to pick, because the session decides it',
+      /'\/injections\/repair-pruned'/.test(_iwSrc4) &&
+      !/repair-pruned[^\n]*app=/.test(_iwSrc4));
+    // The record changed under every view that reads it.
+    check('  …and a restore refreshes the views that read the record',
+      /repairApplyLostDoses[\s\S]{0,900}?refreshInjectionsCache[\s\S]{0,300}?buildToday/.test(_rpSrc));
+    // ⚠️ TEMPORARY, AND SAYING SO IN BOTH PLACES. A standing "restore my data" button
+    // invites being pressed at random; this one is for one historical incident.
+    check('  …and is labelled temporary in the UI and marked for deletion in the source',
+      /Temporary \u2014 for the 2026-09 prune|Temporary — for the 2026-09 prune/.test(_rpSrc) &&
+      /DELETE THIS WHEN THE REPAIR IS DONE/.test(_rpSrc));
+    // Rows come from stored records and are rendered as text, not markup — the same rule
+    // the diagnostics card follows, and for the same reason.
+    check('  …rendering restored rows as text rather than markup',
+      /_repairRender[\s\S]{0,2000}?line\.textContent/.test(_rpSrc) &&
+      !/_repairRender[\s\S]{0,2000}?line\.innerHTML/.test(_rpSrc));
+  }
+
   // ── SAVING WARNS BEFORE IT REPLACES A DOSE YOU MAY HAVE TAKEN ────────────
   // Henrik, 2026-09-16, after 19 past PM HGH rows were pruned by a protocol rewrite:
   // "Add a warning that saving a new protocol might prune unchecked doses."
