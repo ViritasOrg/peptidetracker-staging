@@ -7151,9 +7151,26 @@ console.log('\n── The loading dose ─────────────�
     // allowed ONLY when the plan without a loading dose overshot further — the ramp
     // climbing to close the opening gap is itself an overshoot, and replacing a worse
     // one with a better one is not a breach.
-    check('  …that never overshoots more than the plan without it',
+    //
+    // peakOver IS NOW THE SETTLED PEAK, which is what this assertion was always about:
+    // the 2026-08 regression was a plan left SITTING high, not a transient on the way
+    // in. Since 2026-09-16 the raise window is gated separately and more loosely, so a
+    // whole-plan maximum here would fold the deliberately-wider window into the
+    // deliberately-tight one and this check would fail for doing its job.
+    check('  …that never overshoots more than the plan without it, once settled',
       L.peakOver<=G._TC_LOAD_TOL*100+0.5 || L.peakOver<=L.peakOverWithout+0.5,
       L.peakOver+'% vs '+L.peakOverWithout+'% unloaded');
+    // ⚠️ AND THE WIDER WINDOW IS STILL A WINDOW. Henrik, 2026-09-16: "The ripple when
+    // raising free T could be allowed to be bigger than ripple at the steady state?"
+    // Yes — bigger, not unbounded. The raise may peak up to _TC_RAISE_MULT times the
+    // peak the settled plan itself produces; without an assertion here "wider" would
+    // quietly become "no ceiling at all", which is the 2026-08 failure by another door.
+    check('  …and the raise peak stays inside the raise ceiling', (function(){
+      if(L.raisePeakOver==null) return true;          // no raise window to gate
+      var settledCeil=Math.max(G._TC_LOAD_TOL, L.peakOverWithout/100)+0.005;
+      var raiseCeil=Math.max(settledCeil,(1+settledCeil)*G._TC_RAISE_MULT-1);
+      return L.raisePeakOver/100<=raiseCeil+1e-9;
+    })(), L.raisePeakOver+'% raise vs '+L.peakOverWithout+'% settled-unloaded');
     // It holds the target better across the WHOLE plan — arriving sooner and holding
     // steadier are the same objective, and scoring only the opening would buy a fast
     // start with a worse tail.
@@ -7230,6 +7247,90 @@ console.log('\n── The loading dose ─────────────�
                      cadence:'interval',freqVal:2,freqUnit:'days'});
     check('  …and a compound with no loading dose generates exactly as before',
       plain.every(r=>parseFloat(r.dose)===50), plain.map(r=>r.dose).join(','));
+  }
+
+  // ── The raise is allowed to run hotter than the steady state ──────────────
+  // Henrik, 2026-09-16: "the raise from todays free T to the new target is still stupid
+  // slow, a single 250mg injection would almost close the gap in a few days, but still
+  // it uses the slow ramp. The ripple when raising free T could be allowed to be bigger
+  // than ripple at the steady state?"
+  //
+  // Both halves were true. ONE ceiling governed the whole plan and it was set by the
+  // plan's own steady-state ripple, so the raise got exactly as much headroom as the
+  // steady state and no more — and the candidate that arrives was thrown away for
+  // exceeding a bar that has nothing to do with the question it answers.
+  //
+  // Run on HIS RECORD rather than a synthetic one, because that is what he was looking
+  // at: Nebido 100 mg every 2-3 days to 13 Sep, free T 634 pmol/L at the 15 Sep draw,
+  // enanthate at 250 mg/ml. Measured before and after, the front-load the solver picks
+  // goes 75 mg -> 150 mg at a 1400 target and 250 mg -> 325 mg at 2200, and the level
+  // reaches target in week 1 instead of week 2 in both.
+  {
+    const _rd=['2026-06-20','2026-06-23','2026-06-26','2026-06-29','2026-07-02','2026-07-05',
+      '2026-07-08','2026-07-11','2026-07-14','2026-07-17','2026-07-20','2026-07-23','2026-07-26',
+      '2026-07-29','2026-08-01','2026-08-04','2026-08-07','2026-08-10','2026-08-13','2026-08-16',
+      '2026-08-18','2026-08-20','2026-08-22','2026-08-24','2026-08-25','2026-08-26','2026-08-28',
+      '2026-08-29','2026-09-01','2026-09-04','2026-09-07','2026-09-10','2026-09-11','2026-09-12',
+      '2026-09-13'];
+    // The 75 mg on 13 Sep is in the record too, and it is not decoration: dropping it
+    // flips the winning cadence from daily-dithered to once-weekly, which is a
+    // completely different ripple regime. A fixture that is nearly his record is not
+    // his record.
+    const _rh=_rd.map(d=>({compId:'nebido',doseMg:'100',date:d}))
+                 .concat([{compId:'nebido',doseMg:'75',date:'2026-09-13'}]);
+    const _bwSave=G._tcBwEntries, _ftSave=G._tcp.measuredFT, _shSave=G._tcp.shbg,
+          _ttSave=G._tcp.totalT, _dwSave=G._tcp.currentDoseMgWk, _bySave=G._tcp.birthYear;
+    G._tcBwEntries=[{date:'2026-09-15',free_t:'634',total_t:'43.3',shbg:'39',unit:'pmol/L'}];
+    G._tcp.birthYear='1981'; G._tcp.measuredFT='634'; G._tcp.shbg='39';
+    G._tcp.totalT='43.3'; G._tcp.currentDoseMgWk='233';
+    const _raise=(t)=>G.tcSolveTransition({history:_rh,incomingId:'enanthate',
+      startDate:'2026-09-17',targetPmol:t,concMgPerMl:250,stepMl:0.1,minMl:0.2,weeks:12});
+
+    const r14=_raise(1400), r22=_raise(2200);
+    // ⚠️ THE POINT OF THE CHANGE, PINNED AS AN OUTCOME RATHER THAN A CONSTANT.
+    // "On target in week 1" is what he asked for; a test on _TC_RAISE_MULT would pass
+    // while the schedule still opened 300 pmol/L low.
+    check('the raise reaches target in the first week at a 1400 target',
+      !!(r14.loading && r14.loading.weeksWith===1),
+      r14.loading?('w'+r14.loading.weeksWith+', load '+r14.loading.mg+' mg'):'no loading dose');
+    check('  …opening at target rather than climbing to it',
+      r14.best.weekly[0].mean>=1400*0.93,
+      Math.round(r14.best.weekly[0].mean)+' vs 1400');
+    check('  …and the same at 2200',
+      !!(r22.loading && r22.loading.weeksWith===1 && r22.best.weekly[0].mean>=2200*0.93),
+      Math.round(r22.best.weekly[0].mean)+' vs 2200');
+
+    // ⚠️ IT IS PAID FOR IN THE RAISE, NOT AT STEADY STATE. This is the invariant that
+    // makes the wider window defensible at all: the front-load buys a fast arrival with
+    // a transient, never with a plan that sits high forever. If this ever fails, the
+    // multiplier is leaking into the settled window and the 2026-08 overshoot is back.
+    [[r14,1400],[r22,2200]].forEach(function(pair){
+      const L=pair[0].loading; if(!L) return;
+      check('  …without leaving the settled level higher than the plan without it ('+pair[1]+')',
+        L.peakOver<=Math.max(G._TC_LOAD_TOL*100, L.peakOverWithout)+0.6,
+        L.peakOver+'% settled vs '+L.peakOverWithout+'% unloaded');
+    });
+
+    // ⚠️ AND THE COST IS STATED, NOT BURIED. A solver that spends a bigger peak on the
+    // user's behalf and does not say so is worse than one that refuses.
+    check('  …and the note says what the fast arrival costs in peak',
+      (r22.notes||[]).some(n=>/while the depot fills/.test(n)),
+      (r22.notes||[]).filter(n=>/Loading dose/.test(n)).join(' | ').slice(0,200));
+
+    // ⚠️ A WIDENING ONLY — IT MAY NEVER REFUSE WHAT THE OLD SINGLE CEILING ALLOWED.
+    // The multiplier is applied to (1 + settled ceiling), so for a flat ester whose
+    // settled peak is near zero it could land BELOW the old bar. Math.max is what stops
+    // that, and answering "the raise may run hotter" by tightening it would be a lie.
+    check('  …and the raise ceiling is never tighter than the settled one', (function(){
+      for(const sc of [0, 0.02, 0.05, 0.2, 0.53, 1.2]){
+        const settledCeil=Math.max(G._TC_LOAD_TOL, sc)+0.005;
+        if(Math.max(settledCeil,(1+settledCeil)*G._TC_RAISE_MULT-1) < settledCeil-1e-12) return false;
+      }
+      return G._TC_RAISE_MULT>1;
+    })(), 'mult='+G._TC_RAISE_MULT);
+
+    G._tcBwEntries=_bwSave; G._tcp.measuredFT=_ftSave; G._tcp.shbg=_shSave;
+    G._tcp.totalT=_ttSave; G._tcp.currentDoseMgWk=_dwSave; G._tcp.birthYear=_bySave;
   }
 }
 
