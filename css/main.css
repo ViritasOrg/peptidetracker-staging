@@ -90,6 +90,10 @@
   .check-detail{font-size:13px;color:var(--muted2);margin-top:2px;}
   .check-item.checked-item .check-name{text-decoration:line-through;}
   .check-time{font-family:var(--font-mono);font-size:15px;letter-spacing:1px;color:var(--muted2);}
+  /* A taken dose carries the clock time it went in, and that time is editable —
+     the dotted rule is what says so. Tapping it opens the editor; tapping anywhere
+     else on the row still ticks the dose. */
+  .check-time-set{border-bottom:1px dashed var(--border-strong);padding-bottom:1px;cursor:pointer;}
   .week-strip{display:flex;gap:6px;padding:0 20px 8px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
   .week-day{flex:0 0 44px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;border-radius:10px;background:var(--surface);border:1px solid var(--border);font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);}
   .week-day.today{border-color:var(--accent);}.week-day.selected-day{background:var(--surface2);border-color:var(--accent4);}

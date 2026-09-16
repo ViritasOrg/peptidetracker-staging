@@ -2185,6 +2185,134 @@ console.log('\n── Injection timestamps ────────────�
 }
 
 
+// ── The administered time is editable ────────────────────────────────────────
+// The tick stamps the moment you TICK, which is the right default and the wrong
+// record for a dose ticked the next morning — and for every row already logged,
+// which has no time at all. So the stamp is editable and a missing one can be
+// filled in. Henrik, 2026-09-16, asked for both halves ("Both").
+console.log('\n── Editing when a dose was taken ──────────────────────────');
+{
+  const _etJs = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+
+  // One renderer, called by both checklists. Today and the day-inline view build the
+  // same rows from the same cache and each used to carry its own copy of this cell;
+  // a dose must not show its clock time on one screen and its AM/MID/PM slot on the
+  // other. Asserting on the CALLS, because the old inline block is what drifted.
+  check('both checklists render the time column from one function',
+    (_etJs.match(/_todayTimeCell\(item,dose\)/g) || []).length === 2 &&
+    !/timeEl\.textContent=\(typeof _slotLabel/.test(_etJs));
+
+  const _mk = (o) => Object.assign({id:'et1', compound_id:'nebido', compound_name:'Nebido',
+    tier:'trt', cycle_id:'c1', date:'2026-09-14', dose:'100', unit:'mg',
+    time_of_day:'AM', active:true, logged:true,
+    logged_at:'2026-09-14T08:42:00+03:00'}, o || {});
+  // The suite's shared mock element swallows className and textContent (both are
+  // no-op setters), which is fine for code that only builds markup and fatal for
+  // assertions about what the cell says. This block gets elements that remember.
+  const _etDoc = G.document;
+  const _etEl = () => ({style:{}, className:'', textContent:'', title:'', onclick:null});
+  G.document = Object.assign({}, _etDoc, {createElement:() => _etEl()});
+  const _cell = (dose) => {
+    const kids = [];
+    G._todayTimeCell({appendChild:(el)=>kids.push(el)}, dose);
+    return kids[0] || null;
+  };
+
+  check('a taken dose shows the clock time it went in, not the plan slot',
+    _cell(_mk()).textContent === '08:42', String((_cell(_mk())||{}).textContent));
+  check('  …and says so by being tappable',
+    /check-time-set/.test(_cell(_mk()).className) &&
+    typeof _cell(_mk()).onclick === 'function');
+  // An untaken dose has no administration time because it has not been administered.
+  // This is the row the old cell rendered, and it must not have changed.
+  const _due = _cell(_mk({logged:false, logged_at:null}));
+  check('an untaken dose still shows its slot, unchanged and not editable',
+    _due.textContent === G._slotLabel('AM') && !/check-time-set/.test(_due.className) &&
+    !_due.onclick, String(_due.textContent) + '/' + _due.className);
+  // Ticked before the app kept a time: editable, so it can be filled in.
+  const _old = _cell(_mk({logged_at:null}));
+  check('a dose logged before timestamps existed shows its slot and can still be set',
+    _old.textContent === G._slotLabel('AM') && /check-time-set/.test(_old.className));
+  // The legacy peptide-log fallback rows showDayInline builds have synthetic ids and
+  // no cycle_id. There is no record row behind them; an edit would 404 in silence.
+  const _synth = _cell({id:'reta-sun_2026-09-14', compound_id:'reta-sun', logged:true,
+                        time_of_day:'AM'});
+  check('a legacy log row with no record behind it is not offered an edit',
+    !/check-time-set/.test(_synth.className) && !_synth.onclick);
+  check('a taken dose with neither a time nor a slot renders no cell at all',
+    _cell(_mk({time_of_day:null, logged_at:null})) === null);
+
+  G.document = _etDoc;              // the redraws below go through the real stub
+
+  // The write.
+  const _etSave = {f:G.fetch, c:G._injectionsCache, vd:G._viewDate};
+  const _etPuts = [];
+  G._viewDate = null;
+  G._injectionsCache = {'2026-09-14': [_mk()]};
+  const _row = () => G._injectionsCache['2026-09-14'][0];
+
+  await (async () => {
+    G.fetch = async (url, opt) => {
+      if (opt && opt.method === 'PUT') _etPuts.push({url:String(url), body:JSON.parse(opt.body)});
+      return {ok:true, status:200, json:async()=>({})};
+    };
+    await G._setInjectionTime('et1', '19:05');
+    check('saving a time PUTs logged_at and nothing else',
+      _etPuts.length === 1 && Object.keys(_etPuts[0].body).length === 1 &&
+      typeof _etPuts[0].body.logged_at === 'string',
+      JSON.stringify(_etPuts[0] && _etPuts[0].body));
+    // Built on the DOSE's date. Stamping it onto today's date would move the dose to
+    // another day in every reader that trusts the timestamp.
+    check('  …on the day the dose belongs to, not today',
+      _etPuts[0].body.logged_at.slice(0, 16) === '2026-09-14T19:05',
+      _etPuts[0].body.logged_at);
+    check('  …and the row shows it immediately',
+      G._injClockLabel(_row().logged_at) === '19:05', String(_row().logged_at));
+
+    await G._setInjectionTime('et1', '');
+    check('clearing a time sends an explicit null, which the backend now honours',
+      _etPuts.length === 2 && 'logged_at' in _etPuts[1].body &&
+      _etPuts[1].body.logged_at === null, JSON.stringify(_etPuts[1].body));
+
+    // The edit must never touch `logged`. A dose does not become untaken because its
+    // time was wrong, and a PUT that carried logged:false would untake it.
+    check('no edit path ever sends a logged flag',
+      _etPuts.every(p => !('logged' in p.body)));
+
+    _row().logged_at = '2026-09-14T08:42:00+03:00';
+    G.fetch = async () => ({ok:false, status:500, json:async()=>({})});
+    await G._setInjectionTime('et1', '23:59');
+    check('a failed save puts the old time back rather than keeping the new one',
+      _row().logged_at === '2026-09-14T08:42:00+03:00', String(_row().logged_at));
+
+    G.fetch = _etSave.f; G._injectionsCache = _etSave.c; G._viewDate = _etSave.vd;
+  })();
+
+  // Only the TIME is editable. Offering the date here would be offering to move the
+  // dose to another day — a different operation, with consequences for the schedule,
+  // the curve and the overlap rules.
+  check('the editor offers a time and not a date',
+    /type="time" id=|id="inj-time-input" type="time"/.test(_etJs) &&
+    !/inj-date-input|type="date"/.test(_etJs.slice(_etJs.indexOf('function openInjectionTimeEditor'),
+                                                  _etJs.indexOf('async function saveInjectionTime'))));
+  // iOS gives no way to empty a native time wheel, so clearing needs its own button.
+  check('  …and a way to clear a time that should not be there',
+    /function clearInjectionTime/.test(_etJs) && /CLEAR TIME/.test(_etJs));
+  // The field is read before the close removes it from the document.
+  check('  …reading the field before the modal is torn down',
+    /var v=inp\?String\(inp\.value\|\|''\):'';\s*\n\s*_closeInjectionTimeEditor\(\);/.test(_etJs));
+  // The dotted rule is the only thing telling the user the cell is tappable.
+  const _cssSrc = fs.readFileSync(path.join(__dirname, '../css/main.css'), 'utf8');
+  check('  …and the tappable cell is marked as such in the stylesheet',
+    /\.check-time-set\{[^}]*cursor:pointer/.test(_cssSrc));
+
+  // Still true after all of the above: the curve reads days, not clocks.
+  const _tcJs2 = fs.readFileSync(path.join(__dirname, '../tab-tcalc.js'), 'utf8');
+  check('editing a time does not give T-Calc sub-day resolution',
+    !/logged_at/.test(_tcJs2));
+}
+
+
 // ── Evidence grades + research citations ─────────────────────────────────────
 // Henrik, 2026-08-12: "this app will basically have research citations and t-calc
 // as its USP." So a dose recommendation must never render without (a) how well
@@ -16894,11 +17022,16 @@ console.log('\n── One writer for injections ──────────�
   check('nothing outside inj-writer.js writes an injection', _offenders.length === 0,
         _offenders.join(' | '));
 
-  // …and the exception is still exactly two ticks, not a door left open.
+  // …and the exception is still exactly the three record-writes, not a door left
+  // open. Each one PUTs a field that describes a dose the user has already taken —
+  // the tick, the Reset Today bulk untick, and the administration-time edit. None of
+  // them POSTs, DELETEs, or otherwise plans. Raise this number only for another
+  // write of that same kind, and name it here.
   const _todaySrc = _fs2.readFileSync(_p2.join(__dirname, '../tab-today.js'), 'utf8');
   check('  …except Today\'s tick, which records rather than plans',
-    (_todaySrc.match(/method:'PUT'/g) || []).length === 2 &&
-    /body:JSON.stringify\(\{logged:newLogged,logged_at:_stamp\}\)/.test(_todaySrc));
+    (_todaySrc.match(/method:'PUT'/g) || []).length === 3 &&
+    /body:JSON.stringify\(\{logged:newLogged,logged_at:_stamp\}\)/.test(_todaySrc) &&
+    /body:JSON.stringify\(\{logged_at:stamp\}\)/.test(_todaySrc));
 
   // Behavioural: drive the writer against a stubbed fetch. The stub is re-armed
   // immediately before each call — this block runs after the synchronous suite, and
