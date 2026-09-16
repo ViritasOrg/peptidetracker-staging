@@ -337,6 +337,20 @@ function _labStatusChip(entry){
   return '<span style="font-size:9px;font-weight:800;letter-spacing:0.5px;color:'+col
     +';border:1px solid '+col+';border-radius:5px;padding:2px 6px;flex-shrink:0">'+txt+'</span>';
 }
+// ⚠️ ONE BLOOD TEST PER DATE, AND ONE PLACE THAT DECIDES SO.
+// Both the LOG DRAW button and the ADD sheet have to answer "is there already an entry
+// for this day", and they answered it in different places — LOG DRAW refused a second
+// tap, ADD did not look at all. So adding results to a draw that was already logged
+// created a SECOND row, and 15 Sep 2026 ended up listed twice: one "DRAWN, waiting for
+// results" and one carrying the results. Reported the same day, with a screenshot.
+//
+// Beyond the duplicate in the list, two rows on one date give the free-T curve two
+// candidate anchors for a single measurement — and the pending one carries no values,
+// so which of them wins is decided by ordering rather than by data.
+function _labEntryOnDate(d){
+  if(!d) return null;
+  return (_tcBwEntries || []).filter(function(e){ return e && e.date === d; })[0] || null;
+}
 // Shared by the Labs header and the Today button, so the two cannot record a draw
 // differently. Dates default to today; the picker lets a draw be back-dated, which is
 // the normal case when it is remembered a day later.
@@ -347,7 +361,7 @@ async function logBloodDraw(dateStr){
   if(!h){ alert('Sign in required.'); return false; }
   // One draw per day. A second tap is a mis-tap, not a second blood test, and two
   // entries on one date would give the curve two anchors for the same measurement.
-  var existing = (_tcBwEntries || []).filter(function(e){ return e && e.date === d; })[0];
+  var existing = _labEntryOnDate(d);
   if(existing){
     if(typeof switchTab==='function'){ var _b=document.getElementById('tab-btn-labs'); if(_b)switchTab('labs',_b); }
     return false;
@@ -668,9 +682,18 @@ async function _labConfirmAdd() {
   };
   var h = (typeof authHeaders === 'function') ? authHeaders() : null;
   if (!h) { alert('Sign in required.'); return; }
+  // ⚠️ RESULTS FOR A DRAW ALREADY LOGGED ARE AN UPDATE, NOT A NEW BLOOD TEST.
+  // A pending draw is a real row with a real id — it is the same blood test, entered
+  // before its numbers came back. POSTing here is what put 15 Sep in the list twice.
+  //
+  // Only a PENDING entry is filled in. An entry on this date that already HAS results
+  // is a different situation: silently overwriting real numbers is worse than the
+  // duplicate this fixes, so that case is left creating a second row as before.
+  var _pending = (typeof _labEntryOnDate === 'function') ? _labEntryOnDate(date) : null;
+  if (_pending && (_labDrawStatus(_pending) === 'done' || !_pending.id)) _pending = null;
   try {
-    var r = await fetch(AGENT_URL + '/bloodwork', {
-      method: 'POST',
+    var r = await fetch(AGENT_URL + '/bloodwork' + (_pending ? ('/' + encodeURIComponent(_pending.id)) : ''), {
+      method: _pending ? 'PUT' : 'POST',
       headers: Object.assign({ 'Content-Type': 'application/json' }, h),
       body: JSON.stringify(entry)
     });
