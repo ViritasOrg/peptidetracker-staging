@@ -6864,10 +6864,25 @@ console.log('\n── The price of an injection ──────────�
     // ⚠️ THE SCAN MUST BE A DRY RUN. It is the step that shows the list to be checked
     // against memory, and a scan that wrote would make the check pointless.
     check('the repair scan is a dry run and the restore is a separate press',
-      /_repairCall\(true\)/.test(_rpSrc) && /_repairCall\(false\)/.test(_rpSrc) &&
+      /_repairCall\(true\)/.test(_rpSrc) && /_repairCall\(false,/.test(_rpSrc) &&
       /function repairScanLostDoses/.test(_rpSrc) &&
-      /function repairApplyLostDoses/.test(_rpSrc));
-    check('  …and writing asks first', /repairApplyLostDoses[\s\S]{0,400}?confirm\(/.test(_rpSrc));
+      /function repairApplyGroup/.test(_rpSrc));
+    check('  …and writing asks first', /repairApplyGroup[\s\S]{0,500}?confirm\(/.test(_rpSrc));
+    // ⚠️ ONE BUTTON PER GROUP, NEVER ONE FOR EVERYTHING.
+    // The first cut listed every row it found and offered a single RESTORE for all of
+    // them. On a real record that is dozens of rows across several retired protocols,
+    // and only one group had evidence behind it. "Scheduled once and later pruned" is
+    // not "administered" — most of a scan is superseded plan, which is exactly what
+    // SHOULD have been pruned, and restoring it as taken invents doses.
+    check('  …restoring a group at a time, not all of it at once',
+      /function _repairGroupCard\(g\)/.test(_rpSrc) &&
+      /repairApplyGroup\(g, b\)/.test(_rpSrc) &&
+      !/function repairApplyLostDoses/.test(_rpSrc));
+    check('  …naming the compound and slot in the write',
+      /compoundId: g\.compound_id, slot: g\.time_of_day/.test(_rpSrc));
+    // The reader is told what most of the list actually is, or the count reads as loss.
+    check('  …and says most of what it found is old plans, not missed doses',
+      /MOST OF THESE ARE OLD PLANS/.test(_rpSrc));
     // ⚠️ AND THE REQUEST ITSELF LIVES IN inj-writer.js. The first cut built it in
     // index.html and the write-invariant test caught it on the first run — one module
     // owns every write to the injection record. Widening the exception list would have
@@ -6884,7 +6899,7 @@ console.log('\n── The price of an injection ──────────�
       !/repair-pruned[^\n]*app=/.test(_iwSrc4));
     // The record changed under every view that reads it.
     check('  …and a restore refreshes the views that read the record',
-      /repairApplyLostDoses[\s\S]{0,900}?refreshInjectionsCache[\s\S]{0,300}?buildToday/.test(_rpSrc));
+      /repairApplyGroup[\s\S]{0,1400}?refreshInjectionsCache[\s\S]{0,300}?buildToday/.test(_rpSrc));
     // ⚠️ TEMPORARY, AND SAYING SO IN BOTH PLACES. A standing "restore my data" button
     // invites being pressed at random; this one is for one historical incident.
     check('  …and is labelled temporary in the UI and marked for deletion in the source',
@@ -6892,9 +6907,23 @@ console.log('\n── The price of an injection ──────────�
       /DELETE THIS WHEN THE REPAIR IS DONE/.test(_rpSrc));
     // Rows come from stored records and are rendered as text, not markup — the same rule
     // the diagnostics card follows, and for the same reason.
+    // Rows come from stored records and are rendered as text, not markup — the same rule
+    // the diagnostics card follows, and for the same reason.
+    //
+    // ⚠️ ASSERTED ON THE FUNCTION BODY, NOT A CHARACTER WINDOW. The first cut matched
+    // `_repairGroupCard[\s\S]{0,1600}?…`, which both under- and over-reaches: the body is
+    // longer than the window, and the window spills into the next function, so the
+    // no-innerHTML half was reading a different function's markup. A distance is not a
+    // scope.
+    const _rgc = (function(){
+      const i = _rpSrc.indexOf('function _repairGroupCard(g){');
+      if (i < 0) return '';
+      const j = _rpSrc.indexOf('\nfunction ', i + 1);
+      return _rpSrc.slice(i, j < 0 ? _rpSrc.length : j);
+    })();
     check('  …rendering restored rows as text rather than markup',
-      /_repairRender[\s\S]{0,2000}?line\.textContent/.test(_rpSrc) &&
-      !/_repairRender[\s\S]{0,2000}?line\.innerHTML/.test(_rpSrc));
+      _rgc.length > 0 && /dates\.textContent/.test(_rgc) && !/\.innerHTML/.test(_rgc),
+      _rgc.length ? 'body ' + _rgc.length + ' chars' : 'function not found');
   }
 
   // ── SAVING WARNS BEFORE IT REPLACES A DOSE YOU MAY HAVE TAKEN ────────────

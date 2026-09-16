@@ -80,12 +80,19 @@ async function injWriteOne(row, tag){
 //
 // dryRun is the default. A scan writes nothing and returns what it WOULD restore, which
 // is the step that lets the list be checked before anything is committed.
-async function injRepairPruned(dryRun, tag){
+// ⚠️ A RESTORE NAMES ITS GROUP. The backend refuses one that does not, and it is right
+// to: a scan turns up every row the backups hold, and most of them are SUPERSEDED PLANS
+// — scheduled once, pruned when the protocol changed, never administered. Restoring
+// those as taken would put doses in the record that never went into anyone.
+async function injRepairPruned(dryRun, opts, tag){
+  var o = opts || {};
   try{
     var r = await fetch(AGENT_URL + '/injections/repair-pruned', {
       method:'POST',
       headers: authHeaders({'Content-Type':'application/json'}),
-      body: JSON.stringify({dry_run: dryRun !== false})
+      body: JSON.stringify({dry_run: dryRun !== false,
+                            compound_id: o.compoundId || null,
+                            time_of_day: (o.slot === undefined ? null : o.slot)})
     });
     if(!r.ok){
       _injLogHttp(tag || 'injRepairPruned', r.status, '/injections/repair-pruned');

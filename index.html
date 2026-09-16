@@ -750,73 +750,88 @@ var DIAG_KEY='pep-diag-log', DIAG_MAX=60;
 // is written. Restoring needs a second, explicit press.
 // The request itself lives in inj-writer.js — one module owns every write to the
 // injection record, and the suite enforces it. This is the UI around it.
-async function _repairCall(dry){
+async function _repairCall(dry, group){
   if(typeof injRepairPruned !== 'function') return null;
-  return await injRepairPruned(!!dry, 'repairPruned');
+  return await injRepairPruned(!!dry, group || {}, 'repairPruned');
 }
-function _repairRender(res, restored){
+// ⚠️ THE SCAN IS A SURVEY, NOT A SHOPPING LIST WITH ONE BUTTON.
+// The first cut listed every row it found and offered a single RESTORE for all of them.
+// On a real record that is dozens of rows across several retired protocols, and only one
+// group of them had any evidence behind it. "Scheduled once and later pruned" is not
+// "administered": most of what a scan turns up is a superseded plan, which is exactly
+// what SHOULD have been pruned. Restoring it as taken would put doses in the record that
+// never went into anyone, and the free-T curve reads that record.
+//
+// So each GROUP — one compound, one slot — gets its own button and its own date range,
+// and the reader decides group by group. A count alone is not a decision; "19 HGH in the
+// evening slot, 6 Aug to 13 Sep" is a claim that can be checked against memory, and
+// memory is the only thing that can tell a lost dose from a retired plan.
+function _repairGroupCard(g){
+  var card = document.createElement('div');
+  card.style.cssText = 'background:var(--surface2);border:1px solid var(--border);'
+    + 'border-radius:8px;padding:10px 12px;margin-bottom:8px';
+  var t = document.createElement('div');
+  t.style.cssText = 'font-size:12px;font-weight:700;color:var(--text)';
+  t.textContent = (g.compound_name || g.compound_id) + '  ' + (g.dose||'') + ' ' + (g.unit||'')
+    + (g.time_of_day ? ('  (' + g.time_of_day + ')') : '  (no slot)');
+  card.appendChild(t);
+  var sub = document.createElement('div');
+  sub.style.cssText = 'font-size:11px;color:var(--muted2);margin-top:3px;line-height:1.5';
+  sub.textContent = g.count + ' dose' + (g.count===1?'':'s') + ', ' + g.first
+    + (g.first===g.last ? '' : (' \u2192 ' + g.last));
+  card.appendChild(sub);
+  var dates = document.createElement('div');
+  dates.style.cssText = 'font-size:10px;color:var(--muted2);opacity:0.8;margin-top:4px;line-height:1.5';
+  dates.textContent = (g.dates || []).join(', ');
+  card.appendChild(dates);
+  var b = document.createElement('button');
+  b.style.cssText = 'width:100%;margin-top:8px;background:var(--surface);color:var(--accent4);'
+    + 'border:1px solid var(--accent4);border-radius:8px;padding:9px;font-size:11px;'
+    + 'font-weight:800;letter-spacing:0.4px;cursor:pointer;font-family:inherit';
+  b.textContent = 'RESTORE THESE ' + g.count + ' AS TAKEN';
+  b.onclick = function(){ repairApplyGroup(g, b); };
+  card.appendChild(b);
+  return card;
+}
+function _repairRender(res){
   var host = document.getElementById('repair-out');
   if(!host) return;
   host.innerHTML = '';
   if(!res){ host.textContent = 'Could not reach the backend. Nothing was changed.'; return; }
-  var rows = res.rows || [];
-  if(!rows.length){
+  var groups = res.groups || [];
+  if(!groups.length){
     host.innerHTML = '<div style="font-size:12px;color:var(--muted2);line-height:1.5">'
       + 'Nothing to repair \u2014 every dose your backups hold is already in the record.</div>';
     return;
   }
-  // Built with textContent, not innerHTML: every value here comes from stored records.
-  var box = document.createElement('div');
-  box.style.cssText = 'background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px';
-  var hdr = document.createElement('div');
-  hdr.style.cssText = 'font-size:12px;font-weight:700;color:' + (restored ? 'var(--accent3)' : 'var(--accent4)') + ';margin-bottom:6px';
-  hdr.textContent = restored
-    ? ('Restored ' + rows.length + ' dose' + (rows.length===1?'':'s') + ', as taken.')
-    : (rows.length + ' dose' + (rows.length===1?'':'s') + ' in your backups but not in the record:');
-  box.appendChild(hdr);
-  rows.forEach(function(r){
-    var line = document.createElement('div');
-    line.style.cssText = 'font-size:11px;color:var(--muted2);line-height:1.6';
-    line.textContent = r.date + '  \u00b7  ' + (r.compound_name || r.compound_id)
-      + '  ' + (r.dose||'') + ' ' + (r.unit||'')
-      + (r.time_of_day ? ('  (' + r.time_of_day + ')') : '');
-    box.appendChild(line);
-  });
-  var src = document.createElement('div');
-  src.style.cssText = 'font-size:10px;color:var(--muted2);opacity:0.75;margin-top:8px;line-height:1.5';
-  src.textContent = 'Read from backup ' + ((rows[0]||{}).from_backup || '?')
-    + '. Nothing here is invented \u2014 each row is a record your backups hold.';
-  box.appendChild(src);
-  if(!restored){
-    var warn = document.createElement('div');
-    warn.style.cssText = 'font-size:11px;color:var(--muted2);margin-top:8px;line-height:1.5';
-    warn.textContent = 'Check this list against what you actually took. Restoring marks them '
-      + 'as TAKEN; anything you did not take can be unticked in Today afterwards.';
-    box.appendChild(warn);
-    var btn = document.createElement('button');
-    btn.style.cssText = 'width:100%;margin-top:10px;background:var(--accent);color:#000;border:none;'
-      + 'border-radius:8px;padding:10px;font-size:12px;font-weight:800;letter-spacing:0.4px;'
-      + 'cursor:pointer;font-family:inherit';
-    btn.textContent = 'RESTORE ' + rows.length + ' DOSE' + (rows.length===1?'':'S');
-    btn.onclick = function(){ repairApplyLostDoses(btn); };
-    box.appendChild(btn);
-  }
-  host.appendChild(box);
+  var lead = document.createElement('div');
+  lead.style.cssText = 'font-size:11px;color:var(--muted2);line-height:1.55;margin-bottom:10px';
+  lead.textContent = res.count + ' dose' + (res.count===1?'':'s') + ' in your backups are not in '
+    + 'the record. MOST OF THESE ARE OLD PLANS, not missed doses \u2014 a protocol that '
+    + 'changed correctly drops the doses it no longer schedules. Restore only a group you '
+    + 'recognise as something you actually took.';
+  host.appendChild(lead);
+  groups.forEach(function(g){ host.appendChild(_repairGroupCard(g)); });
 }
 async function repairScanLostDoses(btn){
   if(btn){ btn.disabled = true; btn.textContent = 'SCANNING\u2026'; }
   var res = await _repairCall(true);
   if(btn){ btn.disabled = false; btn.textContent = 'SCAN'; }
-  _repairRender(res, false);
+  _repairRender(res);
 }
-async function repairApplyLostDoses(btn){
-  var n = btn ? btn.textContent.replace(/\D+/g,'') : '';
-  if(typeof confirm === 'function' && !confirm('Restore ' + n + ' dose(s) as TAKEN?\n\n'
-      + 'They are written to your account, so they appear on every device. Anything you '
-      + 'did not actually take can be unticked in Today afterwards.')) return;
+async function repairApplyGroup(g, btn){
+  var label = (g.compound_name || g.compound_id) + (g.time_of_day ? (' ' + g.time_of_day) : '');
+  if(typeof confirm === 'function' && !confirm('Restore ' + g.count + ' ' + label
+      + ' dose(s) as TAKEN?\n\n' + g.first + ' to ' + g.last
+      + '\n\nOnly do this if you actually took them \u2014 doses that were merely '
+      + 'scheduled and later dropped are supposed to be gone. Anything wrong can be '
+      + 'unticked in Today afterwards.')) return;
   if(btn){ btn.disabled = true; btn.textContent = 'RESTORING\u2026'; }
-  var res = await _repairCall(false);
-  _repairRender(res, true);
+  var res = await _repairCall(false, {compoundId: g.compound_id, slot: g.time_of_day});
+  if(btn){
+    btn.disabled = false;
+    btn.textContent = res ? ('RESTORED ' + (res.count||0)) : 'FAILED \u2014 nothing written';
+  }
   // The record changed underneath every view that reads it.
   if(typeof refreshInjectionsCache === 'function') await refreshInjectionsCache();
   if(typeof _tcFetchHistory === 'function'){ try{ await _tcFetchHistory(true); }catch(e){} }
