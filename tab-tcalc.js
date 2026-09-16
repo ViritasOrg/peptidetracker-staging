@@ -2936,7 +2936,22 @@ function _tcFreeTSeries(sorted, hooks) {
 // tracks the decay. Measured on the same solve: 0.1 ml holds 1367-1557 with four
 // consecutive falling weeks, 0.05 ml holds 1398-1553, and 0.01 ml holds 1487-1553
 // with no meaningful sag at all. The vial concentration never changed.
-var _TC_SOLVE_STEP_ML   = 0.05;
+// ⚠️ 0.1 ml, BECAUSE THAT IS WHAT A SYRINGE CAN ACTUALLY BE DRAWN TO.
+// Henrik, 2026-09-16: "A normal 1ml (smallest) syringe is hard to draw with precision
+// smaller than 0,1 ml steps."
+//
+// This was 0.05, and the panel offered 0.025, on a measurement that is real and was
+// beside the point: finer steps genuinely do reduce drift in the model — 0.1 → 0.05 →
+// 0.01 ml took one solve from 13% to 10% to 4% — which is why a comment here called the
+// step "the lever that matters". It is not a lever if the hand holding the syringe
+// cannot move it. Solving to a precision the user cannot draw does not produce a better
+// schedule, it produces a worse one described more confidently: the plan says 0.125 ml,
+// the barrel gets 0.1 or 0.15, and the model is now wrong about a dose it chose itself.
+//
+// The honest lever is the CONCENTRATION. A thinner vial puts the same milligrams in more
+// millilitres, which is a real gain in resolution rather than a claimed one, and the
+// note in _tcSolveSchedule already points at it.
+var _TC_SOLVE_STEP_ML   = 0.1;
 var _TC_SOLVE_MAX_ITER  = 40;    // bisection depth; ~1e-6 mg on a 0–2000 bracket
 var _TC_SOLVE_HI_MG     = 2000;  // upper bracket per injection
 var _TC_SOLVE_DAMPING   = 0.5;   // see the note in the iteration loop  // upper bracket per injection
@@ -3214,7 +3229,15 @@ var _TC_HOLD_TOL = 0.06;
 // under the floor is excluded, so the solver reaches for a longer interval and a bigger
 // draw — it does not round the dose up, which would silently overdose to satisfy a
 // convenience rule. Same shape as maxInjPerWeek, and for the same reason.
-var _TC_MIN_ML = 0.1;
+// ⚠️ 0.2 ml. Henrik, 2026-09-16, giving it per concentration: "With 250mg/mil 50mg is a
+// reasonable minimum lowest dose for a single injection. For a 200mg/mil 40mg and
+// 100mg/ml 20mg." All three are the same draw — 50/250, 40/200 and 20/100 are each
+// 0.2 ml — so the floor is volumetric and the milligrams are what it looks like at the
+// vial in hand. Stored in ml for that reason; the panel shows the mg.
+//
+// Was 0.1, which was half of what he meant: "set min injection to 0,1ml" was the size he
+// could no longer measure, not the smallest he would inject.
+var _TC_MIN_ML = 0.2;
 var _TC_IV_CANDIDATES = [1, 2, 3, 4, 5, 7, 10, 14];
 // A dose below this many syringe steps cannot be set accurately enough to be worth
 // scheduling — two steps means a ±½-step rounding error is ≤25% of the dose.
