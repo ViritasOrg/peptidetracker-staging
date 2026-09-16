@@ -2973,7 +2973,62 @@ function _tcSolveDayKey(d){
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
 // Injection dates for one cadence over [start, start+weeks), as Date objects.
-function _tcSolveDates(cad, startDate, weeks){
+// ── A CAP ON INJECTIONS COUNTS THE ONES ALREADY TAKEN ───────────────────────
+// Henrik, 2026-09-16: "Still setting injections to max 3 per week adds 3 more this week
+// even though I already done 2."
+//
+// The cap chose which CADENCE could win and nothing else. A three-a-week cadence run
+// from the plan's own start date lays three into the opening week regardless of what is
+// already in the record for those same days, so a plan applied mid-week stacked its
+// first week on top of two doses that had already gone in. The steady state was right
+// all along; only the opening double-counted.
+//
+// ⚠️ NO CALENDAR WEEK. "Three a week" is enforced as "no 7-day window holds more than
+// three". That needs no Monday and no agreement about where a week starts — and it is
+// the stronger reading anyway: three on Friday, Saturday, Sunday and three again on
+// Monday, Tuesday, Wednesday satisfies any calendar rule and is six injections in six
+// days.
+//
+// ⚠️ ONE FUNCTION, BOTH SIDES. The solver calls this to score the schedule it proposes
+// and the generator calls it to write the rows, so the curve and the record cannot
+// disagree about which days carry a dose. Trimming in the generator alone would have
+// been the quick fix and would have broken the rule at the top of CLAUDE.md: the plan
+// would have been scored on days it never wrote.
+//
+// `takenMs` is the already-administered doses of THIS compound — the cap is per
+// compound (Henrik, 2026-09-16: "3 testosterone"), not a budget of needles across
+// everything scheduled that day.
+function _injCapTrim(dates, takenMs, cap){
+  if(!(cap>0)) return (dates||[]).slice();
+  var win=(takenMs||[]).slice().sort(function(a,b){ return a-b; });
+  var out=[];
+  (dates||[]).forEach(function(d){
+    var t=(d&&typeof d.getTime==='function')?d.getTime()
+         :new Date(String(d)+'T12:00:00').getTime();
+    if(!isFinite(t)) return;
+    var lo=t-6*86400000;                       // the 7 days ENDING on this one
+    var n=0;
+    for(var i=0;i<win.length;i++) if(win[i]>=lo&&win[i]<=t) n++;
+    if(n>=cap) return;                          // no room left in the window; skip it
+    win.push(t);
+    out.push(d);
+  });
+  return out;
+}
+// The already-taken doses of one compound, as epoch ms at local noon, from the logged
+// record. Only the days around the plan's opening matter — the trim cannot bite once
+// the schedule is running at its own cadence — so the curve log is plenty.
+function _injTakenMs(compId, log){
+  var cid=(typeof _tcCanonCompId==='function')?_tcCanonCompId(compId):compId;
+  return (log||[]).filter(function(e){
+    if(!e||!e.date) return false;
+    var eid=(typeof _tcCanonCompId==='function')?_tcCanonCompId(e.compId||e.compound_id):(e.compId||e.compound_id);
+    return eid===cid;
+  }).map(function(e){ return new Date(e.date+'T12:00:00').getTime(); })
+    .filter(function(t){ return isFinite(t); });
+}
+
+function _tcSolveDates(cad, startDate, weeks, opts){
   var out=[], start=new Date(startDate+'T12:00:00');
   var end=new Date(start.getTime()+weeks*7*86400000);
   if(cad.days&&cad.days.length){
@@ -2983,6 +3038,8 @@ function _tcSolveDates(cad, startDate, weeks){
     var step=cad.freqUnit==='weeks'?cad.freqVal*7:cad.freqVal;
     for(var t=new Date(start); t<end; t.setDate(t.getDate()+step)) out.push(new Date(t));
   }
+  // The cap counts what is already in the record, not just what this schedule adds.
+  if(opts&&opts.cap>0) out=_injCapTrim(out, opts.takenMs, opts.cap);
   return out;
 }
 // Free-T series (pmol/L per day) for a set of injection events.
@@ -3606,7 +3663,8 @@ function _tcSolveDailyDither(ctx, opts){
 function _tcSolveForCadence(ctx, cad, opts){
   opts=opts||{};
   var stepMg=ctx.concMgPerMl*(ctx.stepMl||_TC_SOLVE_STEP_ML);
-  var dates=_tcSolveDates(cad, ctx.startDate, ctx.weeks);
+  var dates=_tcSolveDates(cad, ctx.startDate, ctx.weeks,
+    {cap:ctx.maxInjPerWeek, takenMs:_injTakenMs(ctx.incomingId, ctx.history)});
   if(!dates.length) return null;
   var W=ctx.weeks;
 
