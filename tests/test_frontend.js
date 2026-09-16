@@ -13783,6 +13783,83 @@ if (typeof G._labDrawStatus === 'function') {
   check('  …both going through the same recorder', /async function logBloodDraw\(dateStr\)/.test(_ldSrc) &&
     /async function logBloodDrawFromToday/.test(_ldSrc));
 
+  // ── ADDING RESULTS FILLS IN THE DRAW, IT DOES NOT MAKE A SECOND TEST ──────
+  // Reported 2026-09-16, with a screenshot: "I added results but app kept the Draw
+  // waiting for results as well as the added results" — 15 Sep listed twice, one row
+  // reading DRAWN and one carrying the results.
+  //
+  // Both surfaces have to answer "is there already an entry for this day", and they
+  // answered it in different places: LOG DRAW refused a second tap, the ADD sheet did
+  // not look at all. Beyond the duplicate in the list, two rows on one date give the
+  // free-T curve two candidate anchors for one measurement — and the pending one has no
+  // values, so which wins is decided by ordering rather than by data.
+  check('one helper decides whether a date already has a blood test',
+    /function _labEntryOnDate\(d\)/.test(_ldSrc) &&
+    (_ldSrc.match(/_labEntryOnDate\(/g) || []).length >= 3);
+  check('  …and the draw recorder asks it rather than filtering its own',
+    /var existing = _labEntryOnDate\(d\);/.test(_ldSrc));
+
+  if (typeof G._labConfirmAdd === 'function') {
+    // ⚠️ ASSERTED SYNCHRONOUSLY, AND THIS BLOCK CANNOT `await`.
+    // It sits in the suite's synchronous section, so there is no await available here —
+    // and none is needed: _labConfirmAdd builds the entry and ISSUES the request before
+    // its first await, so the stub has recorded the call by the time the promise is
+    // returned. The continuation (refresh, re-render) is what the promise is for and is
+    // not what is under test. .catch absorbs it so a floating rejection cannot take the
+    // run down after the stubs are put back.
+    const _caSave = {f:G.fetch, bw:G._tcBwEntries, add:G._labAdd, al:G.alert,
+                     fetchBw:G._tcFetchBwEntries, bl:G.buildLabs, close:G._labCloseAddSheet};
+    const _sent = [];
+    G.alert = () => {};
+    G._tcFetchBwEntries = async () => {};
+    G.buildLabs = () => {};
+    G._labCloseAddSheet = () => {};
+    G.fetch = async (url, opt) => {
+      _sent.push({url:String(url), method:(opt||{}).method,
+                  body:(opt&&opt.body)?JSON.parse(opt.body):null});
+      return {ok:true, status:200, json:async()=>({})};
+    };
+    const _run = (entries, d) => {
+      _sent.length = 0;
+      G._tcBwEntries = entries;
+      G._labAdd = {date:d, dose:'', values:{free_t:{value:'1180', unit:''}}};
+      const p = G._labConfirmAdd();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+      return _sent.map(x => x.method + ' ' + x.url).join(' | ');
+    };
+
+    // A draw is pending on that date → fill it in. This is the reported bug.
+    let _got = _run([{id:'draw-1', date:'2026-09-15'}], '2026-09-15');
+    check('adding results to a logged draw updates it instead of creating a second row',
+      _sent.length === 1 && _sent[0].method === 'PUT' && /\/bloodwork\/draw-1$/.test(_sent[0].url),
+      _got);
+    check('  …carrying the results into that same row',
+      !!(_sent[0] && _sent[0].body && _sent[0].body.free_t === 1180),
+      JSON.stringify(_sent[0] && _sent[0].body));
+
+    // No entry on that date → an ordinary new test.
+    _got = _run([{id:'other', date:'2026-06-26', free_t:217}], '2026-09-15');
+    check('  …while a date with no draw logged still creates one',
+      _sent.length === 1 && _sent[0].method === 'POST' && /\/bloodwork$/.test(_sent[0].url), _got);
+
+    // ⚠️ ONLY A PENDING ENTRY IS FILLED IN. An entry that already HAS results is a
+    // different situation, and silently overwriting real numbers would be worse than
+    // the duplicate this fixes.
+    _got = _run([{id:'done-1', date:'2026-09-15', free_t:1180,
+                  markers:{free_t:{value:1180}}}], '2026-09-15');
+    check('  …and a date whose results are already in is never overwritten',
+      _sent.length === 1 && _sent[0].method === 'POST', _got);
+
+    // An entry with no id cannot be addressed; fall back rather than PUT to /bloodwork/.
+    _got = _run([{date:'2026-09-15'}], '2026-09-15');
+    check('  …and a draw with no id is posted, not PUT to a missing path',
+      _sent.length === 1 && _sent[0].method === 'POST' && /\/bloodwork$/.test(_sent[0].url), _got);
+
+    G.fetch = _caSave.f; G._tcBwEntries = _caSave.bw; G._labAdd = _caSave.add;
+    G.alert = _caSave.al; G._tcFetchBwEntries = _caSave.fetchBw;
+    G.buildLabs = _caSave.bl; G._labCloseAddSheet = _caSave.close;
+  }
+
   // ── THE LIST IS TWO LINES PER DRAW, DETAIL BEHIND A TAP ──────────────────
   // "each lab test on a single line (can be two rows but no more) ... Clicking a line
   // opens a detailed view". With 10+ draws and a growing marker set, rendering every
