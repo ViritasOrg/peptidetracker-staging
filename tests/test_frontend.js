@@ -6526,6 +6526,121 @@ console.log('\n── The price of an injection ──────────�
     !(solve().notes||[]).some(n=>/were excluded for needing/.test(n)));
 }
 
+// ── The loading dose ─────────────────────────────────────────────────────────
+// Henrik, 2026-09-16: "I am currently at 1100pmol/l and raising to 2200. Why is the
+// initial raise done with daily micro injections? Wouldn't a single bigger just bring
+// me to the new level in days instead of weeks?"
+//
+// It would, and the app was refusing for the wrong reason. Both iterative solvers carry
+// a note reading "NEVER INVERT AGAINST A LOADING-PHASE SENSITIVITY … that is the week-0
+// loading spike and the overshoot behind it". Correct about its own bug — the old code
+// divided week 0's whole gap by week 0's sensitivity, demanding a dose big enough to
+// close the gap INSIDE week 0, which is several times a loading dose — but the fix
+// clamped loading off entirely rather than computing it properly, and nothing
+// downstream could tell the two calculations apart.
+console.log('\n── The loading dose ───────────────────────────────────────');
+{
+  // A TAIL LIGHT ENOUGH TO LEAVE A GAP. With a heavy outgoing tail there is nothing to
+  // load — the level already opens at target, which is its own assertion further down.
+  const lh=[]; const ll=new Date('2026-08-20T12:00:00');
+  for(let i=0;i<6;i++){const d=new Date(ll.getTime()-i*14*86400000);
+    lh.push({compId:'nebido',doseMg:'250',
+      date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+  const lr=G.tcSolveTransition({history:lh,incomingId:'enanthate',startDate:'2026-08-27',
+    targetPmol:2200,concMgPerMl:250,stepMl:0.05,weeks:12});
+  const L=lr&&lr.loading;
+
+  check('a solve with a real opening gap reports a loading dose', !!(L&&L.mg>0),
+    L?JSON.stringify(L):'none');
+
+  if(L){
+    // ⚠️ IT MUST NOT MAKE THE OVERSHOOT WORSE. This is the entire reason loading was
+    // clamped off in 2026-08 and the guard that version never had. Above the ceiling is
+    // allowed ONLY when the plan without a loading dose overshot further — the ramp
+    // climbing to close the opening gap is itself an overshoot, and replacing a worse
+    // one with a better one is not a breach.
+    check('  …that never overshoots more than the plan without it',
+      L.peakOver<=G._TC_LOAD_TOL*100+0.5 || L.peakOver<=L.peakOverWithout+0.5,
+      L.peakOver+'% vs '+L.peakOverWithout+'% unloaded');
+    // It holds the target better across the WHOLE plan — arriving sooner and holding
+    // steadier are the same objective, and scoring only the opening would buy a fast
+    // start with a worse tail.
+    check('  …and holds the target closer than the schedule alone',
+      L.missWith<L.missWithout, L.missWith+' vs '+L.missWithout+' pmol/L mean miss');
+    check('  …reaching target no later than without it',
+      L.weeksWithout===0 || (L.weeksWith>0 && L.weeksWith<=L.weeksWithout),
+      L.weeksWith+' vs '+L.weeksWithout);
+    // ⚠️ ONE BIGGER INJECTION, NOT AN EXTRA ONE.
+    check('  …carried by the first dose rather than added beside it',
+      L.firstDoseMg>L.maintenanceMg &&
+      Math.abs(L.firstDoseMg-(L.maintenanceMg+L.mg))<0.2,
+      L.maintenanceMg+'+'+L.mg+'='+L.firstDoseMg);
+    // BOUNDED BY PHYSIOLOGY. Filling a depot to its steady-state contents is
+    // (mg/day)/k; far past that is the old overshoot returning by another route.
+    check('  …and sized like a depot fill, not a spike', (function(){
+      const wk=lr.best.weekly||[];
+      const settled=wk.length?wk[wk.length-1]:null;
+      if(!settled) return false;
+      const perDay=(settled.mg||0)*((lr.best.cadence||{}).perWeek||7)/7;
+      return L.mg<=(perDay*4.5/Math.LN2)*2.2;
+    })(), L.mg+' mg');
+    check('  …and is stated in the plan notes',
+      (lr.notes||[]).some(n=>/Loading dose/.test(n)));
+    // ⚠️ THE RAMP SHOWN MUST BE THE ONE THAT ASSUMES THE LOADING DOSE.
+    // Displaying a schedule solved for a gap the front-load has already closed, and
+    // then telling the user to add the front-load, is precisely the overshoot this
+    // feature exists to avoid. The plan is re-solved around the dose and replaces it.
+    check('  …and the schedule shown was re-solved around it', (function(){
+      const wk=(lr.best.weekly||[]).map(x=>x.mean);
+      if(!wk.length) return false;
+      return wk[0]>=2200*0.90;        // opens at target, not climbing toward it
+    })(), (lr.best.weekly||[]).slice(0,4).map(x=>Math.round(x.mean)).join(','));
+  }
+
+  // ⚠️ NO FRONT-LOAD WHERE THERE IS NOTHING TO LOAD. A heavy outgoing tail already
+  // holds the level; a bigger first needle for nothing is not an improvement.
+  const heavy=[]; const hl0=new Date('2026-08-20T12:00:00');
+  for(let i=0;i<60;i++){const d=new Date(hl0.getTime()-i*2*86400000);
+    heavy.push({compId:'nebido',doseMg:'100',
+      date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});}
+  const flat=G.tcSolveTransition({history:heavy,incomingId:'nebido',startDate:'2026-08-27',
+    targetPmol:700,concMgPerMl:250,stepMl:0.05,weeks:12});
+  check('a plan that already opens at or above target gets no loading dose',
+    !flat||!flat.loading||!(flat.loading.mg>0),
+    flat&&flat.loading?JSON.stringify(flat.loading):'none');
+
+  // ── It reaches the record as ONE bigger first injection ───────────────────
+  // Stored as a plain mg on the compound, applied by the generator to the compound's
+  // first scheduled day.
+  {
+    const gen=(c,extra)=>G._genInjBatches(Object.assign({cycle_start:'2026-09-01',
+      cycle_length:4, trt:{enabled:true,compounds:[c]}}, extra||{}),'cyc-load')
+      .filter(b=>b.compound_id===c.id).flatMap(b=>b.entries);
+    const comp={id:'enanthate',name:'Test E',dose:'50',unit:'mg',
+                cadence:'interval',freqVal:2,freqUnit:'days',load_mg:'150'};
+    const rows=gen(comp);
+    check('the loading dose lands on the first scheduled injection',
+      rows.length>1 && parseFloat(rows[0].dose)===200 && parseFloat(rows[1].dose)===50,
+      rows.slice(0,3).map(r=>r.date+':'+r.dose).join(' '));
+    check('  …and on no other',
+      rows.slice(1).every(r=>parseFloat(r.dose)===50),
+      rows.map(r=>r.dose).join(','));
+    // ⚠️ A FORWARD REGENERATION MUST NOT FRONT-LOAD AGAIN. The first day is computed
+    // from the PROTOCOL start, never from where the rewrite resumes — otherwise every
+    // edit would add a second loading dose on whatever day it happened to restart.
+    const later=G._genInjBatches({cycle_start:'2026-09-01',cycle_length:4,
+      trt:{enabled:true,compounds:[comp]}},'cyc-load',new Date('2026-09-10T12:00:00'))
+      .filter(b=>b.compound_id==='enanthate').flatMap(b=>b.entries);
+    check('  …and a regeneration from mid-plan does not load a second time',
+      later.every(r=>parseFloat(r.dose)===50), later.map(r=>r.date+':'+r.dose).join(' '));
+    // No load_mg is the ordinary case and must be untouched.
+    const plain=gen({id:'enanthate',name:'Test E',dose:'50',unit:'mg',
+                     cadence:'interval',freqVal:2,freqUnit:'days'});
+    check('  …and a compound with no loading dose generates exactly as before',
+      plain.every(r=>parseFloat(r.dose)===50), plain.map(r=>r.dose).join(','));
+  }
+}
+
 
   // ── Typing must not tear out the field being typed into ───────────────────
   // Reported 2026-08-27: "entering a target level hides the keyboard for each

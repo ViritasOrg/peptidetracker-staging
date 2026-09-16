@@ -1143,6 +1143,14 @@ function trtSolveApply(scope,id,which){
   var _lone=_mapped.length===1&&!(_mapped[0].iv>0)&&!(_mapped[0].pattern&&_mapped[0].pattern.length);
   if(_lone)delete comp.dose_phases;   // also clears a stale ramp from an earlier solve
   else comp.dose_phases=_mapped;
+  // ── THE LOADING DOSE COMES WITH THE PLAN IT WAS SIZED FOR ────────────────
+  // A front-load is computed against the maintenance rate of ONE schedule — the depot
+  // it has to fill is that schedule's depot. Applying a different option must therefore
+  // not carry the winner's loading dose across, and must clear any left over from an
+  // earlier solve, or the protocol keeps a front-load sized for a plan it no longer runs.
+  var _load=(pick===st.result.best)?st.result.loading:null;
+  if(_load&&_load.mg>0) comp.load_mg=String(_load.mg);
+  else delete comp.load_mg;
   comp.unit='mg';
   // Keep the flat dose in step with the maintenance dose, so turning the ramp OFF
   // later lands on the held dose rather than whatever was in the box beforehand.
@@ -1295,6 +1303,27 @@ function _renderTRTSolve(c,selData,scope,hideRun){
         })();
     h+='<button onclick="'+q('trtSolveApply',",'best'")+'" style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:11px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Apply cadence + ramp</button>';
     h+='</div>';
+    // ── THE LOADING DOSE IS A DIFFERENT INSTRUCTION AND GETS ITS OWN BOX ─────
+    // Every other number on this card is "do this repeatedly". This one is "do this
+    // once, first", and folding it into the ramp table is how it would be missed or —
+    // far worse — repeated. It sits above the schedule because it happens before it.
+    h+=(function(){
+      var L=r.loading;
+      if(!L||!(L.mg>0))return '';
+      return '<div style="background:rgba(90,209,176,0.10);border:1px solid rgba(90,209,176,0.45);'
+        +'border-radius:8px;padding:10px 12px;margin-bottom:8px">'
+        +'<div style="font-size:12px;font-weight:700;color:#5ad1b0;margin-bottom:3px">'
+        +'Loading dose &mdash; once, on '+_esc(L.date)+'</div>'
+        +'<div style="font-size:11px;color:var(--muted2);line-height:1.55">'
+        +'Make that first injection <b>'+L.firstDoseMg+' mg</b> ('+L.ml+' ml more than the '
+        +L.maintenanceMg+' mg the schedule calls for), then carry on as below. '
+        +'It fills the depot to the level this plan maintains instead of waiting for it '
+        +'to fill at the maintenance rate, so you reach target in '
+        +(L.weeksWith?('about week '+L.weeksWith):'the first week')+' rather than '
+        +(L.weeksWithout?('week '+L.weeksWithout):'not at all inside this plan')+'.'
+        +'<br><b>One bigger injection, not an extra one.</b> Applying this plan writes it '
+        +'into the first dose for you.</div></div>';
+    })();
     h+='<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:8px;padding:10px 12px">'
       +'<div style="font-size:12px;font-weight:700;color:var(--accent);margin-bottom:2px">'+_esc(b.cadence.label)+'</div>'
       +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:8px">'
@@ -4938,6 +4967,30 @@ function _nextDay(d){
   return n;
 }
 
+// ── A LOADING DOSE RIDES ON THE FIRST INJECTION, AND ONLY ON IT ─────────────
+// Held as a plain mg on the compound rather than as a dated row. A date would have to
+// be kept in step with the ramp's cycle_start offset, with the compound's own
+// start_date, and with every edit to either — and a stale one would front-load the
+// wrong day silently.
+//
+// ⚠️ THE FIRST DAY IS COMPUTED FROM THE PROTOCOL START, NEVER FROM genStart.
+// Regeneration resumes from a date in the middle of a plan (a forward rewrite after an
+// edit). Taking the first day from there would re-apply the front-load on whatever day
+// the rewrite happened to start — a second loading dose, weeks in, every time anything
+// was edited. Off the protocol start it resolves to the same calendar day every time,
+// and that day falls outside a forward rewrite's window, so the rewrite simply does
+// not include it.
+function _trtLoadFirstDay(c,cycleStart,cycleEnd){
+  if(!(parseDec(c&&c.load_mg)>0))return null;
+  var from=c.start_date
+    ? new Date(Math.max(parseLocalDate(c.start_date).getTime(),cycleStart.getTime()))
+    : new Date(cycleStart);
+  for(var d=new Date(from); d<=cycleEnd; d=_nextDay(d)){
+    if(_phasedHitsDay(c,d,cycleStart,_trtHitsDay))return dateKey(d);
+  }
+  return null;
+}
+
 function _genInjBatches(stack,cycleId,fromDate){
   if(!stack||!stack.cycle_start)return[];
   var cycleStart=parseLocalDate(stack.cycle_start);
@@ -5044,6 +5097,7 @@ function _genInjBatches(stack,cycleId,fromDate){
       var cStart=c.start_date?new Date(Math.max(parseLocalDate(c.start_date).getTime(),genStart.getTime())):new Date(genStart);
       var cEnd=c.end_date?new Date(Math.min(parseLocalDate(c.end_date).getTime(),cycleEnd.getTime())):new Date(cycleEnd);
       var compEntries=[];
+      var _loadDay=_trtLoadFirstDay(c,cycleStart,cycleEnd), _loadMg=parseDec(c.load_mg)||0;
       for(var d=new Date(cStart);d<=cEnd;d=_nextDay(d)){
         var daysSince=Math.floor((d-cycleStart)/86400000);
         var hit=false;
@@ -5077,7 +5131,13 @@ function _genInjBatches(stack,cycleId,fromDate){
         // stayed invisible while every testosterone arrived pre-filled from the
         // catalogue — which is the thing being removed here.
         if(!(parseDec(_dpd.dose)>0))continue;
-        compEntries.push({cycle_id:cycleId,date:dateKey(d),compound_id:c.id,compound_name:c.name,tier:'trt',dose:_dpd.dose||'',unit:_dpd.unit||'mg',dot:dot,time_of_day:(c.time==='PM'?'PM':'AM'),active:true,logged:false});
+        // The front-load is added to this dose rather than scheduled beside it: one
+        // bigger injection, not two on the same day. Guarded on mg because a loading
+        // dose in milligrams has no meaning against an IU or ml dose.
+        var _dOut=_dpd.dose;
+        if(_loadDay&&_loadMg>0&&dateKey(d)===_loadDay&&(_dpd.unit||'mg')==='mg')
+          _dOut=String(Math.round((parseDec(_dpd.dose)+_loadMg)*10)/10);
+        compEntries.push({cycle_id:cycleId,date:dateKey(d),compound_id:c.id,compound_name:c.name,tier:'trt',dose:_dOut||'',unit:_dpd.unit||'mg',dot:dot,time_of_day:(c.time==='PM'?'PM':'AM'),active:true,logged:false});
       }
       // Empty batches are pushed too — see the note in the peptide branch above.
       batches.push({compound_id:c.id,from_date:dateKey(cStart),entries:compEntries});
