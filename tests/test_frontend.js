@@ -6082,14 +6082,90 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     check('  …and for the wizard scope',                        /trtSetDate\('wiz'/.test(wHtml));
     check('  …with neither leaking the other\'s scope',
       !/'wiz'/.test(eHtml) && !/'edit'/.test(wHtml));
-    check('  …both offering the window and the ramp',
-      ['Transition window','Dose ramp','trtToggleRamp','trtAddPhase','trtRemovePhase','trtSetPhase']
+    check('  …both offering the window', ['Transition window','trtSetDate']
         .every(k=>eHtml.includes(k)&&wHtml.includes(k)));
 
-    // The flat Dose field is IGNORED while a ramp is on. Saying so is the whole guard
-    // against editing Dose and seeing nothing change.
-    check('  …and stating that the ramp overrides the Dose field',
-      /overrides the Dose field/.test(eHtml)&&/overrides the Dose field/.test(wHtml));
+    // ── ONE PLANNING STRATEGY AT A TIME ──────────────────────────────────────
+    // Henrik, 2026-09-16: "It needs a tripple switch to decide on active planning
+    // strategy and only show the chosen model. Showing all three like this is retarded
+    // and nonone would understand it."
+    //
+    // The ramp editor and the solver moved out of the transition panel and behind the
+    // switch, so the scope and parity checks follow them. The window stays where it is:
+    // it is not a fourth strategy, it is when this compound runs.
+    const ePlan=(m)=>G._renderTRTPlan({id:'enanthate'},Object.assign({},comp,{plan_mode:m}),'edit',
+      '<div class="cfg-row"><div class="cfg-lbl">Dose</div><input oninput="editSetTRTDose()"></div>');
+    const wPlan=(m)=>G._renderTRTPlan({id:'enanthate'},Object.assign({},comp,{plan_mode:m}),'wiz',
+      '<div class="cfg-row"><div class="cfg-lbl">Dose</div><input oninput="wizSetTRTDose()"></div>');
+    check('the plan switch offers exactly the three strategies', (function(){
+      const h=ePlan('fixed');
+      return ['Fixed dose','Dose ramp','Target free T'].every(k=>h.includes(k))
+          && G._TRT_PLAN_MODES.length===3;
+    })());
+    check('  …in both scopes, neither leaking the other\'s',
+      /trtSetPlanMode\('edit'/.test(ePlan('fixed')) && !/'wiz'/.test(ePlan('fixed')) &&
+      /trtSetPlanMode\('wiz'/.test(wPlan('fixed'))  && !/'edit'/.test(wPlan('fixed')));
+    // ⚠️ THE GUARANTEE THAT REPLACED A SENTENCE. This used to assert the panel SAID
+    // "while the ramp is on it overrides the Dose field above" — a caption apologising
+    // for showing an editable control that does nothing. The control is simply not
+    // rendered now, so the guard is structural instead of typographical: pin that, not
+    // the prose, or the caption could come back without the field ever going away.
+    check('  …showing the flat Dose field only in fixed mode', (function(){
+      const doseShown=(h)=>/cfg-lbl">Dose</.test(h);
+      return doseShown(ePlan('fixed')) && !doseShown(ePlan('ramp')) && !doseShown(ePlan('target'))
+          && doseShown(wPlan('fixed')) && !doseShown(wPlan('ramp')) && !doseShown(wPlan('target'));
+    })());
+    check('  …the ramp editor only in ramp mode', (function(){
+      const rampShown=(h)=>['trtAddPhase','trtSetPhase','trtRemovePhase'].every(k=>h.includes(k));
+      return rampShown(ePlan('ramp')) && !rampShown(ePlan('fixed')) && !rampShown(ePlan('target'))
+          && rampShown(wPlan('ramp'));
+    })());
+    check('  …and the solver only in target mode', (function(){
+      const solveShown=(h)=>/trtSolveRun/.test(h);
+      return solveShown(ePlan('target')) && !solveShown(ePlan('fixed')) && !solveShown(ePlan('ramp'));
+    })());
+
+    // ⚠️ NOTHING SAVED BEFORE THE SWITCH EXISTED CHANGES MEANING. plan_mode is new; the
+    // ramp's on/off state has always been "does dose_phases exist", so that is what an
+    // unset mode must read. A protocol opened after this ships shows the strategy it was
+    // already running, rather than silently reverting to a flat dose.
+    check('a compound saved before the switch keeps the strategy it was running',
+      G._trtPlanMode({id:'x',dose:'100',dose_phases:[{w:0,d:'50',u:'mg'}]})==='ramp' &&
+      G._trtPlanMode({id:'x',dose:'100'})==='fixed' &&
+      G._trtPlanMode({id:'x',dose:'100',dose_phases:[],plan_mode:'target'})==='target');
+
+    // ⚠️ SWITCHING MODE MUST NOT DESTROY THE OTHER MODE'S WORK — the rule the cadence
+    // switch in this file already carries, and it matters more here: a ramp can be a
+    // dozen phases a solver spent thirty simulations arriving at, and this switch is one
+    // tap. The generator's contract is untouched (a ramp runs iff dose_phases exists), so
+    // Fixed dose stashes the phases rather than deleting them.
+    {
+      const _sv=G._editBuf;
+      G._editBuf={trt:{compounds:[{id:'enanthate',dose:'100',unit:'mg',
+                                   dose_phases:[{w:0,d:'50',u:'mg'},{w:6,d:'75',u:'mg'}]}]}};
+      const _c=()=>G._editBuf.trt.compounds[0];
+      G.trtSetPlanMode('edit','enanthate','fixed');
+      check('choosing a flat dose puts the ramp away rather than deleting it',
+        !_c().dose_phases && (_c().ramp_stash||[]).length===2 && _c().plan_mode==='fixed',
+        JSON.stringify(_c()));
+      G.trtSetPlanMode('edit','enanthate','ramp');
+      check('  …and choosing the ramp again gets back exactly what was put away',
+        (_c().dose_phases||[]).length===2 && _c().dose_phases[1].d==='75' && !_c().ramp_stash,
+        JSON.stringify(_c().dose_phases));
+      // A compound that never had a ramp still seeds week 0 from the flat dose, so
+      // turning one on changes nothing until a phase is actually edited.
+      G._editBuf={trt:{compounds:[{id:'enanthate',dose:'120',unit:'mg'}]}};
+      G.trtSetPlanMode('edit','enanthate','ramp');
+      check('  …while a compound with no ramp seeds week 0 from its flat dose',
+        (_c().dose_phases||[]).length===1 && _c().dose_phases[0].d==='120'
+          && _c().dose_phases[0].w===0);
+      // Target mode must not invent a ramp — the solver writes one when it is applied.
+      G._editBuf={trt:{compounds:[{id:'enanthate',dose:'120',unit:'mg'}]}};
+      G.trtSetPlanMode('edit','enanthate','target');
+      check('  …and target mode invents no ramp before a solve is applied',
+        !_c().dose_phases && _c().plan_mode==='target');
+      G._editBuf=_sv;
+    }
 
     // An inverted window warns in the UI as well as generating nothing.
     check('  …warning on an inverted window',
