@@ -3145,6 +3145,19 @@ var _TC_INJ_COST = 0.01;
 // that actually holds the level. 6% of target, matching the band the suite asserts a
 // winner must hold.
 var _TC_HOLD_TOL = 0.06;
+// THE SMALLEST DRAW WORTH SCHEDULING, in ml. Henrik, 2026-09-16: "Also set min injection
+// to 0,1ml."
+//
+// Below this the syringe stops being the instrument the plan assumes. Detachable-needle
+// dead space is ~0.07-0.10 ml, so a 0.05 ml dose leaves more oil in the hub than it
+// delivers, and the graduations on a 1 ml barrel cannot be read to a fraction of it
+// either. The model would go on treating it as an exact number.
+//
+// It constrains the CADENCE, never the dose. A schedule whose per-injection draw falls
+// under the floor is excluded, so the solver reaches for a longer interval and a bigger
+// draw — it does not round the dose up, which would silently overdose to satisfy a
+// convenience rule. Same shape as maxInjPerWeek, and for the same reason.
+var _TC_MIN_ML = 0.1;
 var _TC_IV_CANDIDATES = [1, 2, 3, 4, 5, 7, 10, 14];
 // A dose below this many syringe steps cannot be set accurately enough to be worth
 // scheduling — two steps means a ±½-step rounding error is ≤25% of the dose.
@@ -4081,7 +4094,8 @@ function tcSolveTransition(opts){
     // So injections now cost ripple. maxInjPerWeek is the hard override for a user who
     // simply will not do daily; injCost is the standing price everything pays.
     maxInjPerWeek: parseDec(opts.maxInjPerWeek)||0,       // 0 = no cap
-    injCost:     (opts.injCost==null)?_TC_INJ_COST:(parseDec(opts.injCost)||0)
+    injCost:     (opts.injCost==null)?_TC_INJ_COST:(parseDec(opts.injCost)||0),
+    minMl:       (opts.minMl==null)?_TC_MIN_ML:(parseDec(opts.minMl)||0)
   };
   if(!ctx.incomingId||!ctx.startDate||!(ctx.targetPmol>0)) return null;
 
@@ -4186,6 +4200,24 @@ function tcSolveTransition(opts){
     if(_fits.length){ _capped=results.length-_fits.length; results=_fits; }
     else _capped=-1;
   }
+  // ⚠️ THE FLOOR IS ON THE DRAW, AND IT EXCLUDES CADENCES RATHER THAN ROUNDING DOSES UP.
+  // Rounding a 0.06 ml dose to 0.1 would be a 67% overdose applied to satisfy a
+  // convenience rule — the constraint has to be met by injecting LESS OFTEN and more at
+  // a time, which is the only direction that keeps the weekly milligrams where the solve
+  // put them. Measured on the SETTLED doses, because a ramp's opening weeks are
+  // legitimately small while the outgoing ester is still carrying the level.
+  var _minMg=ctx.minMl>0?ctx.concMgPerMl*ctx.minMl:0;
+  var _tooSmall=null;
+  var _drawOf=function(r){
+    var d=(r.doses||[]).filter(function(x){ return x>0; });
+    if(!d.length) return Infinity;              // nothing scheduled: not a small draw
+    return d[d.length-1];                       // the dose it settles at
+  };
+  if(_minMg>0){
+    var _bigEnough=results.filter(function(r){ return _drawOf(r)>=_minMg-1e-9; });
+    if(_bigEnough.length){ _tooSmall=results.length-_bigEnough.length; results=_bigEnough; }
+    else _tooSmall=-1;
+  }
   // ⚠️ HOLDING THE TARGET IS NOT FOR SALE, AND _TIE IS TOO WIDE TO PROTECT IT ALONE.
   // The keys below are ordered so that target-holding decides first and everything else
   // only breaks its ties — but a 0.03 tie band is 42 pmol/L at a 1400 target, and a
@@ -4280,6 +4312,16 @@ function tcSolveTransition(opts){
     }else if(_capped>0){
       notes.push(_capped+' schedule'+(_capped===1?' was':'s were')+' excluded for needing '
         +'more than '+ctx.maxInjPerWeek+' injection'+(ctx.maxInjPerWeek===1?'':'s')+' a week.');
+    }
+    if(_tooSmall===-1){
+      notes.push('No schedule keeps every draw at or above '+ctx.minMl+' ml at this target '
+        +'and concentration, so that floor was not applied. A thinner vial would fix it: '
+        +'the same milligrams in more millilitres is a bigger, more accurate draw.');
+    }else if(_tooSmall>0){
+      notes.push(_tooSmall+' schedule'+(_tooSmall===1?' was':'s were')+' excluded for asking '
+        +'for a draw under '+ctx.minMl+' ml ('+Math.round(_minMg*10)/10+' mg at '
+        +ctx.concMgPerMl+' mg/ml). Below that, syringe dead space is a bigger share of the '
+        +'dose than the dose, and the barrel cannot be read that finely.');
     }
     if(!best) return;
     var bw=perWeekOf(best);
