@@ -1244,15 +1244,26 @@ function _renderTRTSolve(c,selData,scope,hideRun){
     // THE STEP IS THE LEVER THAT MATTERS, so it is a control rather than a constant.
     // At 250 mg/ml — the standard vial — 0.1 ml steps are 25 mg, which is too coarse
     // to track a decaying tail and is what makes the level sag between steps.
-    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'
-      +'<span style="font-size:11px;color:var(--muted2);min-width:56px">Draw to</span>'
+    //
+    // ⚠️ THIS IS ROUNDING, NOT A DOSE. "Draw to 0.025 ml" was read as "inject 0.025 ml"
+    // — reported 2026-09-16, sitting one row above the 0.1 ml floor and appearing to
+    // contradict it. It does not: a 0.025 ml step with a 0.1 ml floor yields 0.100,
+    // 0.125, 0.150 … every one of them at or above the floor, and the finer grid is what
+    // lets the weekly load land where the solve wants it (measured: 0.1 → 0.05 → 0.01 ml
+    // steps take one solve from 13% drift to 10% to 4%). The two controls do different
+    // jobs and now say which.
+    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
+      +'<span style="font-size:11px;color:var(--muted2);min-width:70px">Round to</span>'
       +'<select class="unit-sel" onchange="'+q('trtSolveSet',",'step',this.value")+'">'
       +[['0.1','0.1 ml'],['0.05','0.05 ml'],['0.025','0.025 ml']].map(function(o){
           return '<option value="'+o[0]+'"'+(String(st.step||'0.05')===o[0]?' selected':'')+'>'+o[1]+'</option>';
         }).join('')
       +'</select>'
-      +'<span style="font-size:11px;color:var(--muted2)">= '
-      +(Math.round((parseDec(conc)||250)*(parseDec(st.step)||0.05)*10)/10)+' mg per step</span></div>'
+      +'<span style="font-size:11px;color:var(--muted2)">steps of '
+      +(Math.round((parseDec(conc)||250)*(parseDec(st.step)||0.05)*10)/10)+' mg</span></div>'
+    +'<div style="font-size:10px;color:var(--muted2);opacity:0.8;margin:0 0 10px 76px;line-height:1.45">'
+      +'How finely a dose can be sized \u2014 not how much you inject. The floor below '
+      +'sets the smallest injection.</div>'
     // ── HOW OFTEN YOU ARE WILLING TO INJECT IS AN INPUT, NOT AN OUTPUT ───────
     // Henrik, 2026-09-16, on a plan that asked for a 25 mg jab every day: "I do loose
     // oil since the syringe and needle head still contains some oil that gets wasted.
@@ -1276,16 +1287,19 @@ function _renderTRTSolve(c,selData,scope,hideRun){
     // ~0.07-0.10 ml, so the hub keeps more than the muscle gets, and a 1 ml barrel
     // cannot be read to a fraction of it. The solver meets this by injecting less often
     // and more at a time, never by rounding a dose up.
-    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'
-      +'<span style="font-size:11px;color:var(--muted2);min-width:56px">No less than</span>'
+    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
+      +'<span style="font-size:11px;color:var(--muted2);min-width:70px">Never inject less than</span>'
       +'<select class="unit-sel" onchange="'+q('trtSolveSet',",'minMl',this.value")+'">'
       +[['0.1','0.1 ml'],['0.05','0.05 ml'],['0.15','0.15 ml'],['0.2','0.2 ml'],['','no floor']]
         .map(function(o){
           return '<option value="'+o[0]+'"'+(String(st.minMl===''?'':(st.minMl||'0.1'))===o[0]?' selected':'')+'>'+o[1]+'</option>';
         }).join('')
       +'</select>'
-      +'<span style="font-size:11px;color:var(--muted2)">per injection ('
+      +'<span style="font-size:11px;color:var(--muted2)">at a time ('
       +(Math.round((parseDec(conc)||250)*(parseDec(st.minMl)||0)*10)/10)+' mg)</span></div>'
+    +'<div style="font-size:10px;color:var(--muted2);opacity:0.8;margin:0 0 10px 76px;line-height:1.45">'
+      +'The smallest single injection the plan may ask for. Met by injecting less often, '
+      +'never by rounding a dose up.</div>'
     +'<button onclick="'+q('trtSolveRun')+'"'+(st.running?' disabled':'')
       +' style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.5px;'+(st.running?'opacity:0.6;':'')+'">'
       +(st.running?'Solving…':'Generate schedule')+'</button>';
