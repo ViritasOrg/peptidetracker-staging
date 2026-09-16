@@ -193,7 +193,7 @@ async function wizSave(){
   var res=await saveStacksToBackend();
   updateWEEKLY();
   var _savedStack=_wiz.stackIndex>=0?_userStacks[_wiz.stackIndex]:null;
-  if(_savedStack&&_savedStack.cycle_start){var _today0=new Date(NOW);_today0.setHours(0,0,0,0);await generateAndPushInjections(_savedStack,_today0);await refreshInjectionsCache();}
+  if(_savedStack&&_savedStack.cycle_start&&confirmSavePrune(_savedStack)){var _today0=new Date(NOW);_today0.setHours(0,0,0,0);await generateAndPushInjections(_savedStack,_today0);await refreshInjectionsCache();}
   buildWeekStrip();
   buildToday();
   buildSchedule();
@@ -1693,8 +1693,10 @@ async function saveEditBuf(){
         await injClearFuture(_cycId,_oldProtoCids[_pi],dateKey(_editToday0),{tag:'delOrphanInj'});
       }
     }
-    await generateAndPushInjections(_editBuf,_editToday0);
-    await refreshInjectionsCache();
+    if(confirmSavePrune(_editBuf)){
+      await generateAndPushInjections(_editBuf,_editToday0);
+      await refreshInjectionsCache();
+    }
   }
   buildWeekStrip();buildToday();buildSchedule();
   buildStackStore();
@@ -5258,6 +5260,63 @@ function _injPkMeta(tier,id){
     }
   }catch(e){}
   return {ester:ester,half_life_days:(hl&&isFinite(hl)&&hl>0)?hl:null};
+}
+
+// ── SAY SO BEFORE A SAVE REPLACES A DOSE YOU MAY HAVE TAKEN ─────────────────
+// Henrik, 2026-09-16, after 19 past PM HGH rows were pruned by a protocol rewrite:
+// "Add a warning that saving a new protocol might prune unchecked doses."
+//
+// Saving regenerates the plan from today, which replaces this protocol's UNCHECKED rows
+// from today on. Past rows are safe now (backend #274 — an unticked past dose is not a
+// plan), so what is left at risk is the narrow, real case: a dose scheduled for TODAY or
+// YESTERDAY that was taken and not ticked yet. The record cannot tell that apart from one
+// that was skipped, so a rewrite that drops the compound or the slot takes it with it.
+//
+// ⚠️ IT DOES NOT WARN ABOUT THE FORWARD PLAN, and that is the whole design. A thirteen
+// week protocol has ninety unchecked doses in it by definition — they are the plan, and
+// replacing them is what saving MEANS. A dialog announcing that on every save is noise,
+// and noise is what gets clicked through. This fires only when something is genuinely
+// unrecoverable, which is rare enough to be read.
+//
+// Yesterday is included because the backend's prune boundary is yesterday, deliberately,
+// so a server running ahead of the user's local day cannot treat their current day as
+// past. The warning covers exactly what the prune can still reach.
+function _injAtRiskOnSave(stack){
+  if(!stack||typeof _injectionsCache==='undefined'||!_injectionsCache) return [];
+  var cid=_stackCycleId(stack);
+  var t0=new Date(NOW); t0.setHours(0,0,0,0);
+  var from=dateKey(new Date(t0.getTime()-86400000)), to=dateKey(t0);
+  var out=[];
+  Object.keys(_injectionsCache).forEach(function(dk){
+    if(dk<from||dk>to) return;
+    (_injectionsCache[dk]||[]).forEach(function(e){
+      if(!e||e.logged) return;
+      if((e.cycle_id||'')!==cid) return;
+      out.push({date:e.date, name:e.compound_name||e.compound_id, slot:e.time_of_day||''});
+    });
+  });
+  out.sort(function(a,b){ return a.date<b.date?-1:a.date>b.date?1:0; });
+  return out;
+}
+// Returns false only when the user actively declines. Nothing to warn about, or no
+// confirm available, proceeds — a save must not be blocked by the absence of a dialog.
+function confirmSavePrune(stack){
+  var at=_injAtRiskOnSave(stack);
+  if(!at.length) return true;
+  if(typeof confirm!=='function') return true;
+  var t0=dateKey(NOW);
+  var lines=at.slice(0,6).map(function(r){
+    return '  \u2022 ' + (r.date===t0?'today':r.date) + ' \u2014 ' + r.name
+         + (r.slot?(' ('+r.slot+')'):'');
+  }).join('\n');
+  if(at.length>6) lines+='\n  \u2022 \u2026and '+(at.length-6)+' more';
+  return confirm(
+    'Saving replaces this protocol\'s unchecked doses from today.\n\n'
+    + at.length + ' unchecked dose' + (at.length===1?'':'s') + ' from today or yesterday '
+    + 'will be rewritten:\n' + lines + '\n\n'
+    + 'If you have already taken any of them, tick them first \u2014 an unchecked dose '
+    + 'cannot be told apart from one you skipped, and if the new plan does not schedule '
+    + 'it, the record of it is gone.\n\nSave anyway?');
 }
 
 async function generateAndPushInjections(stack,fromDate){
