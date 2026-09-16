@@ -319,6 +319,35 @@ async function _setInjectionTime(id, hhmm){
 // not a model input. If the curve is ever given sub-day resolution that must be
 // a deliberate change with its own justification — not a silent consequence of
 // the field finally having values in it.
+// ⚠️ A BACK-FILLED DOSE IS STAMPED ON ITS OWN DAY, NOT ON THE DAY IT WAS TICKED.
+// Henrik, 2026-09-16: "Back filling doses must work, suggest using the AM/PM setting to
+// just fabricate a time and still allow edit if needed (uncommon)."
+//
+// The first cut of logged_at called _injLoggedStamp() with no argument — the wall clock
+// at the moment of the tick. For today's doses that is exactly right and it is what this
+// still does. For a dose ticked days later it is wrong in the worst way available: the
+// stamp's DATE half then disagrees with the row's own `date`, so the record says a dose
+// dated the 14th was administered on the 16th. Two fields, one event, contradicting each
+// other — which is the thing the whole `logged_at` note in this file is about.
+//
+// So a dose ticked on any other day is stamped on ITS date, at the hour its slot stands
+// for. That is a fabricated clock time and it is not pretending otherwise: it is
+// accurate to the slot the user planned it in, which is the only timing information that
+// exists for a dose nobody wrote a time down for, and it is editable afterwards
+// (openInjectionTimeEditor) for the uncommon case where the real time is known and
+// matters. A whole-hour stamp is the tell — real ticks land on arbitrary seconds.
+//
+// A slot-less dose gets midday: it says "this day, time unknown" without claiming a
+// morning or an evening the record cannot support.
+var _INJ_SLOT_HOUR = {AM: 8, MID: 13, PM: 20};
+function _injStampFor(entry){
+  var today = (typeof dateKey === 'function' && typeof NOW !== 'undefined') ? dateKey(NOW) : '';
+  if(!entry || !entry.date || entry.date === today) return _injLoggedStamp();
+  var p = String(entry.date).split('-');
+  if(p.length !== 3) return _injLoggedStamp();
+  var h = _INJ_SLOT_HOUR[entry.time_of_day];
+  return _injLoggedStamp(new Date(+p[0], (+p[1]) - 1, +p[2], (h == null ? 12 : h), 0, 0));
+}
 function _injLoggedStamp(d){
   var t=d||new Date();
   function p(n){return (n<10?'0':'')+n;}
@@ -327,7 +356,7 @@ function _injLoggedStamp(d){
     +'T'+p(t.getHours())+':'+p(t.getMinutes())+':'+p(t.getSeconds())
     +sign+p(Math.floor(a/60))+':'+p(a%60);
 }
-async function toggleInjection(id,currentLogged){var newLogged=!currentLogged;var _prevAt,_stamp=newLogged?_injLoggedStamp():null;Object.keys(_injectionsCache).forEach(function(dk){(_injectionsCache[dk]||[]).forEach(function(e){if(e.id===id){if(_prevAt===undefined)_prevAt=(e.logged_at||null);e.logged=newLogged;e.logged_at=_stamp;}});});if(typeof _tlNoteInjection==='function')_tlNoteInjection(id,newLogged);if(_viewDate){var activeTile=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,activeTile);}else{buildToday();}buildWeekStrip();try{var r=await fetch(AGENT_URL+'/injections/'+id,{method:'PUT',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({logged:newLogged,logged_at:_stamp})});if(!r.ok){_logHttp('toggleInj',r.status,'/injections/'+id);Object.keys(_injectionsCache).forEach(function(dk){(_injectionsCache[dk]||[]).forEach(function(e){if(e.id===id){e.logged=currentLogged;e.logged_at=(_prevAt===undefined?null:_prevAt);}});});if(typeof _tlNoteInjection==='function')_tlNoteInjection(id,currentLogged);if(_viewDate){var activeTile=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,activeTile);}else{buildToday();}}else if(typeof _tcFetchHistory==='function'){/* THE RECORD CHANGED — RE-READ IT, DO NOT GUESS. _tcHistory is fetched once per session: _tcFetchHistory returns early on a warm cache and buildTCalc only calls it while the state is 'idle'. Every other source the curve rests on (_injectionsCache, _tcp.manualLog) is rebuilt from the backend on each refresh, so the moment a logged flag changes here the two disagree for the rest of the session. Ticking moved a dose out of the plan without moving it into the history (_tcProtocolInjections and _tcLoadLogFromStack both skip logged rows) and the curve LOST it; unticking left it in the history after it had left the record and the curve KEPT it. Display-only and cleared on restart, which is what made it hard to place: six unticks left the curve frozen at 31 doses / first 16 Jul / peak 1225 pmol/L against a true 25 / 28 Jul / 1018 (2026-08-15). Forced, because the cache is warm by definition at this point. _tcFetchHistory ends in buildTCalc(), so the redraw comes with it; only the success path needs this — a failed PUT left the record untouched and the rollback below restores the cache. */await _tcFetchHistory(true);}}catch(e){_logErr('toggleInj',e);Object.keys(_injectionsCache).forEach(function(dk){(_injectionsCache[dk]||[]).forEach(function(e){if(e.id===id){e.logged=currentLogged;e.logged_at=(_prevAt===undefined?null:_prevAt);}});});if(typeof _tlNoteInjection==='function')_tlNoteInjection(id,currentLogged);}}
+async function toggleInjection(id,currentLogged){var newLogged=!currentLogged;var _row=null;Object.keys(_injectionsCache).forEach(function(dk){(_injectionsCache[dk]||[]).forEach(function(e){if(e.id===id)_row=e;});});var _prevAt,_stamp=newLogged?_injStampFor(_row):null;var _wrote=false;Object.keys(_injectionsCache).forEach(function(dk){(_injectionsCache[dk]||[]).forEach(function(e){if(e.id===id){if(_prevAt===undefined)_prevAt=(e.logged_at||null);e.logged=newLogged;e.logged_at=_stamp;}});});if(typeof _tlNoteInjection==='function')_tlNoteInjection(id,newLogged);if(_viewDate){var activeTile=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,activeTile);}else{buildToday();}buildWeekStrip();try{var r=await fetch(AGENT_URL+'/injections/'+id,{method:'PUT',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({logged:newLogged,logged_at:_stamp})});if(r&&r.ok)_wrote=true;if(!r.ok){_logHttp('toggleInj',r.status,'/injections/'+id);Object.keys(_injectionsCache).forEach(function(dk){(_injectionsCache[dk]||[]).forEach(function(e){if(e.id===id){e.logged=currentLogged;e.logged_at=(_prevAt===undefined?null:_prevAt);}});});if(typeof _tlNoteInjection==='function')_tlNoteInjection(id,currentLogged);if(_viewDate){var activeTile=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,activeTile);}else{buildToday();}}else if(typeof _tcFetchHistory==='function'){/* THE RECORD CHANGED — RE-READ IT, DO NOT GUESS. _tcHistory is fetched once per session: _tcFetchHistory returns early on a warm cache and buildTCalc only calls it while the state is 'idle'. Every other source the curve rests on (_injectionsCache, _tcp.manualLog) is rebuilt from the backend on each refresh, so the moment a logged flag changes here the two disagree for the rest of the session. Ticking moved a dose out of the plan without moving it into the history (_tcProtocolInjections and _tcLoadLogFromStack both skip logged rows) and the curve LOST it; unticking left it in the history after it had left the record and the curve KEPT it. Display-only and cleared on restart, which is what made it hard to place: six unticks left the curve frozen at 31 doses / first 16 Jul / peak 1225 pmol/L against a true 25 / 28 Jul / 1018 (2026-08-15). Forced, because the cache is warm by definition at this point. _tcFetchHistory ends in buildTCalc(), so the redraw comes with it; only the success path needs this — a failed PUT left the record untouched and the rollback below restores the cache. */await _tcFetchHistory(true);}}catch(e){_logErr('toggleInj',e);/* ⚠️ ONLY UNDO A WRITE THAT DID NOT LAND. The PUT is awaited, but so is the _tcFetchHistory re-read that follows it on the success path — and that runs the whole curve rebuild. A throw ANYWHERE in there used to land here and roll the tick back, so a dose that was saved correctly appeared to un-tick itself: tap, blink, gone, with the server holding the opposite of what the screen showed until the next reload. Reported 2026-09-16 as "they just blink". The rollback exists for a failed write, and a failed re-read is not one. */if(!_wrote){Object.keys(_injectionsCache).forEach(function(dk){(_injectionsCache[dk]||[]).forEach(function(e){if(e.id===id){e.logged=currentLogged;e.logged_at=(_prevAt===undefined?null:_prevAt);}});});if(typeof _tlNoteInjection==='function')_tlNoteInjection(id,currentLogged);}if(_viewDate){var _rt=document.querySelector('.week-day.selected-day');showDayInline(_viewDate,_rt);}else{buildToday();}}}
 async function syncPeptideLogFromAgent(){try{const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders()});if(!r.ok){_syncPending=false;buildToday();return;}window._peptideLog=await r.json();
   window._peptideLog.forEach(function(entry){
     if(!entry.doses)return;

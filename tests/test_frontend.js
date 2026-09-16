@@ -2168,6 +2168,91 @@ console.log('\n── Injection timestamps ────────────�
     G._viewDate = _atSave.vd; G._tcFetchHistory = _atSave.tf;
   })();
 
+  // ── BACK-FILLING A DOSE ──────────────────────────────────────────────────
+  // Henrik, 2026-09-16: "Cant tick doses in Stage, I try and they just blink … Back
+  // filling doses must work, suggest using the AM/PM setting to just fabricate a time
+  // and still allow edit if needed (uncommon)."
+  await (async () => {
+    const _bfSave = {f:G.fetch, c:G._injectionsCache, vd:G._viewDate, tf:G._tcFetchHistory};
+    const _bfPuts = [];
+    G._viewDate = null;
+    G._tcFetchHistory = async () => {};
+    G.fetch = async (url, opt) => {
+      if (opt && opt.method === 'PUT') _bfPuts.push({url:String(url), body:JSON.parse(opt.body)});
+      return {ok:true, status:200, json:async()=>({})};
+    };
+    const _today = G.dateKey(new Date());
+    const _past = (n) => { const t = new Date(); t.setDate(t.getDate()-n); return G.dateKey(t); };
+
+    // ⚠️ STAMPED ON THE DOSE'S OWN DAY. The first cut used the wall clock at the moment
+    // of the tick, so a dose dated the 14th ticked on the 16th recorded the 16th — the
+    // stamp's date half contradicting the row's own `date`, two fields describing one
+    // event and disagreeing.
+    G._injectionsCache = {};
+    G._injectionsCache[_past(2)] = [{id:'bf1', compound_id:'hgh', cycle_id:'c1',
+      date:_past(2), dose:'3', unit:'IU', time_of_day:'PM', active:true, logged:false}];
+    _bfPuts.length = 0;
+    await G.toggleInjection('bf1', false);
+    check('back-filling a past dose stamps it on that day, not on today',
+      _bfPuts.length === 1 && _bfPuts[0].body.logged_at.slice(0,10) === _past(2),
+      _bfPuts[0] && _bfPuts[0].body.logged_at);
+    // The slot is the only timing information that exists for a dose nobody wrote a
+    // time down for, so it is what the fabricated clock time comes from.
+    check('  …at the hour its AM/MID/PM slot stands for',
+      /T20:00:00/.test(_bfPuts[0].body.logged_at), _bfPuts[0].body.logged_at);
+    check('  …and the tick still lands in the cache',
+      G._injectionsCache[_past(2)][0].logged === true);
+
+    G._injectionsCache[_past(3)] = [{id:'bf2', compound_id:'hgh', cycle_id:'c1',
+      date:_past(3), dose:'3', unit:'IU', time_of_day:'AM', active:true, logged:false}];
+    _bfPuts.length = 0;
+    await G.toggleInjection('bf2', false);
+    check('  …a morning slot gives a morning time', /T08:00:00/.test(_bfPuts[0].body.logged_at),
+      _bfPuts[0].body.logged_at);
+
+    // No slot means "this day, time unknown" — midday, rather than claiming a morning
+    // or an evening the record cannot support.
+    G._injectionsCache[_past(4)] = [{id:'bf3', compound_id:'mast_e', cycle_id:'c1',
+      date:_past(4), dose:'100', unit:'mg', time_of_day:null, active:true, logged:false}];
+    _bfPuts.length = 0;
+    await G.toggleInjection('bf3', false);
+    check('  …and a dose with no slot is stamped midday, not morning',
+      /T12:00:00/.test(_bfPuts[0].body.logged_at), _bfPuts[0].body.logged_at);
+
+    // Today's doses keep the real wall clock — that is a record, not a reconstruction.
+    G._injectionsCache[_today] = [{id:'bf4', compound_id:'hgh', cycle_id:'c1',
+      date:_today, dose:'3', unit:'IU', time_of_day:'PM', active:true, logged:false}];
+    _bfPuts.length = 0;
+    await G.toggleInjection('bf4', false);
+    check('  …while a dose ticked on its own day keeps the real clock time',
+      _bfPuts[0].body.logged_at.slice(0,10) === _today &&
+      !/T20:00:00/.test(_bfPuts[0].body.logged_at), _bfPuts[0].body.logged_at);
+
+    // ⚠️ THE BLINK. A throw in the _tcFetchHistory re-read that follows a SUCCESSFUL PUT
+    // used to land in the catch and roll the tick back, so a dose saved correctly
+    // appeared to un-tick itself — tap, blink, gone, with the server holding the
+    // opposite of what the screen showed until the next reload.
+    G._injectionsCache[_past(5)] = [{id:'bf5', compound_id:'hgh', cycle_id:'c1',
+      date:_past(5), dose:'3', unit:'IU', time_of_day:'PM', active:true, logged:false}];
+    G._tcFetchHistory = async () => { throw new Error('curve rebuild blew up'); };
+    _bfPuts.length = 0;
+    await G.toggleInjection('bf5', false);
+    check('a failed curve re-read does not undo a tick that was saved',
+      _bfPuts.length === 1 && G._injectionsCache[_past(5)][0].logged === true,
+      'logged=' + G._injectionsCache[_past(5)][0].logged);
+    // …and the rollback still happens for the thing it exists for: a failed write.
+    G._tcFetchHistory = async () => {};
+    G._injectionsCache[_past(6)] = [{id:'bf6', compound_id:'hgh', cycle_id:'c1',
+      date:_past(6), dose:'3', unit:'IU', time_of_day:'PM', active:true, logged:false}];
+    G.fetch = async () => { throw new Error('offline'); };
+    await G.toggleInjection('bf6', false);
+    check('  …but a write that never landed is still rolled back',
+      G._injectionsCache[_past(6)][0].logged === false);
+
+    G.fetch = _bfSave.f; G._injectionsCache = _bfSave.c;
+    G._viewDate = _bfSave.vd; G._tcFetchHistory = _bfSave.tf;
+  })();
+
   // The bulk untick is the same event sixteen times over; it must clear too.
   const _todayJs = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
   check('Reset Today clears the stamps along with the flags',
