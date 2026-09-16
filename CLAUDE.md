@@ -36,6 +36,23 @@ CI passing is not delivery.
 - Until then the only accurate phrasing is "on a branch, **not delivered**".
 - This applies to docs-only changes too.
 
+### 🛑 OPENING THE PR IS NOT DELIVERY EITHER. MERGING IS NOT HENRIK'S HOMEWORK.
+Added 2026-09-16 after Claude opened **five** PRs in one session, merged none, and closed
+the reply with a *"suggested merge order"* for Henrik to run. Same failure as 2026-09-10
+above in a better suit: **handing Henrik the last step and calling the job finished.**
+
+- A PR is the mechanism, not the outcome. Neither opening it, nor green CI, nor a good
+  description, is delivery.
+- **Never end a reply with a merge order or "ready to merge."** If Claude can work out the
+  order it can execute it — writing it down and stopping is *more* work than merging.
+- **Rebasing stacked PRs is Claude's job.** "These will want a rebase" names the remaining
+  work; it does not excuse leaving it. Land one, rebase the next, re-run, merge.
+- All of it or none: landing three of five has delivered nothing that can be called done.
+- Only a failure **this change caused** blocks a merge — fix it. A pre-existing red on
+  `main` is not a blocker: name it and merge.
+- Before ending any session that touched code, `git fetch origin main` and confirm every
+  branch it created is merged, or abandoned with a stated reason.
+
 If something genuinely needs Henrik's input, finish everything that does not
 depend on the answer, land it on stage, and end the reply with a **numbered
 list of questions**. Do not bury a question inside a long explanation — it will
