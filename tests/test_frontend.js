@@ -7211,6 +7211,29 @@ console.log('\n── The loading dose ─────────────�
       return o===c && /id="trt-solve-res-enanthate"/.test(h2);
     })());
 
+    // ⚠️ THE STEP AND THE FLOOR DO DIFFERENT JOBS AND MUST SAY SO.
+    // Henrik, 2026-09-16: "You didnt remove the below 0,1ml injection size" — pointing
+    // at the ROUNDING control offering 0.05 and 0.025 while the floor beside it read
+    // 0.1 ml. Read as a contradiction, and the labels invited it: "Draw to 0.025 ml"
+    // sounds exactly like "inject 0.025 ml".
+    //
+    // It is not a contradiction. A 0.025 ml step under a 0.1 ml floor yields 0.100,
+    // 0.125, 0.150 … every one at or above the floor, and the finer grid is what lets
+    // the weekly load land where the solve wants it — 0.1 → 0.05 → 0.01 ml steps take
+    // one solve from 13% drift to 10% to 4%. Removing the sub-floor steps would cost
+    // that for no safety gained, so the labels changed instead.
+    check('the rounding control does not read as a dose', (function(){
+      const st = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
+      return /Round to/.test(st) && !/>Draw to</.test(st) &&
+             /not how much you inject/.test(st);
+    })());
+    check('  …and the floor reads as the smallest injection',
+      (function(){
+        const st = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
+        return /Never inject less than/.test(st) &&
+               /smallest single injection the plan may ask for/.test(st);
+      })());
+
     // The step size is a control now, so the blurb must not name one.
     check('the blurb does not hardcode a step size', (function(){
       const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-stack.js'),'utf8');
