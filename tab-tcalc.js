@@ -3826,6 +3826,195 @@ function _tcSolveForCadence(ctx, cad, opts){
           events:fin.events, stepMg:stepMg, baseWeekly:base.weekly};
 }
 
+// ── THE LOADING DOSE ────────────────────────────────────────────────────────
+// Henrik, 2026-09-16: "I am currently at 1100pmol/l and raising to 2200. Why is the
+// initial raise done with daily micro injections? Wouldn't a single bigger just bring
+// me to the new level in days instead of weeks?"
+//
+// Yes, and the reason the app was not doing it is a clamp rather than a calculation.
+//
+// WHAT A LOADING DOSE IS. For a depot ester the serum level tracks the appearance rate,
+// and the appearance rate tracks how much drug is still sitting in the depot. Steady
+// state is just "the depot has filled to the point where what leaks out each day equals
+// what you put in". Waiting three weeks on a 4.5-day ester is waiting for the depot to
+// fill at the maintenance rate. Put its steady-state contents in on day one and the
+// wait is over: a depot of exactly the right size releases at exactly the maintenance
+// rate from the first day, so the ideal front-load is a STEP, not a spike. The size is
+// (mg/day) ÷ k, which is why the search below is bounded by physiology rather than open
+// ended. Nebido's own label does this — a second 1000 mg at week 6 instead of the
+// maintenance 10-14 — so it is standard practice, not a trick.
+//
+// WHY THE SOLVER REFUSED. Both iterative solvers carry a note reading "NEVER INVERT
+// AGAINST A LOADING-PHASE SENSITIVITY … that is the week-0 loading spike and the
+// overshoot behind it". That note is correct about its own bug: the old code divided
+// week 0's whole gap by week 0's sensitivity, demanding a dose big enough to close the
+// gap INSIDE week 0, which is far larger than a loading dose and overshoots badly. The
+// fix clamped loading off entirely. A loading dose and that broken inversion are not
+// the same calculation, and nothing downstream could tell them apart.
+//
+// ⚠️ SO THIS IS MEASURED, NEVER INVERTED. No sensitivity, no division, no formula
+// trusted to be right: every candidate front-load is simulated through the same model
+// as the schedule it rides on, and the one that lands closest is kept. The analytic
+// depot size is used ONLY to bound the search. A front-load that pushes any week's peak
+// past _TC_LOAD_TOL over target is rejected outright — which is the guard the 2026-08
+// version never had.
+var _TC_LOAD_TOL = 0.05;        // a front-load may never put any week's peak this far over target
+var _TC_LOAD_MIN_GAIN = 0.15;   // …and must close this much of the gap to be worth proposing
+var _TC_LOAD_GRID = 12;         // simulations spent looking for it
+
+// Weekly stats for an arbitrary event list — the tail of _tcSolveEvaluate, reusable.
+function _tcSolveWeeklyOf(ctx, evts){
+  var ser=_tcSolveSeries(evts);
+  if(!ser) return null;
+  var startMs=new Date(ctx.startDate+'T12:00:00').getTime();
+  var out=[];
+  for(var w=0;w<ctx.weeks;w++){
+    var f=startMs+w*7*86400000;
+    out.push(_tcSolveWindowStats(ser, f, f+7*86400000));
+  }
+  return out;
+}
+
+function _tcSolveLoadingDose(ctx, best){
+  if(!best||best.degenerate||!best.events||!best.events.length) return null;
+  if(!(ctx.targetPmol>0)) return null;
+  var stepMg=best.stepMg||ctx.concMgPerMl*(ctx.stepMl||_TC_SOLVE_STEP_ML);
+  if(!(stepMg>0)) return null;
+
+  // ⚠️ A LOADING DOSE IS NOT AN EXTRA INJECTION — IT IS THE FIRST ONE MADE BIGGER.
+  // Answering "my daily 25 mg jabs waste oil and syringes" with one more needle would
+  // be answering the wrong question.
+  var firstDate=null;
+  best.events.forEach(function(e){
+    if(!e||e.compId!==ctx.incomingId||!e.date||e.date<ctx.startDate) return;
+    if(firstDate===null||e.date<firstDate) firstDate=e.date;
+  });
+  if(!firstDate) return null;
+
+  // ⚠️ THE RAMP IS RE-SOLVED AROUND THE FRONT-LOAD, NOT LEFT TO SIT ON TOP OF IT.
+  // The first cut bolted a front-load onto the finished schedule and then refused
+  // almost every one it computed, for a reason worth keeping: the ramp ALREADY
+  // front-loads, crudely, by climbing too hard early to close the week-0 gap. A 2200
+  // target solved to weekly means of 1630, 2183, 2330, 2336 — overshooting 6% in week 2
+  // before any loading dose existed. Adding a depot fill on top of that pushes an
+  // already-high week higher, so every candidate breached the ceiling and the answer
+  // was always "no loading dose" — while the plan went on overshooting anyway.
+  //
+  // The overshoot and the slow start are the same problem: a schedule closing a gap
+  // with the only instrument it has. Give it the right instrument and it does not need
+  // to climb. So each candidate front-load is put into the base events and the cadence
+  // is SOLVED AGAIN around it, and what is compared is two complete plans — not a plan
+  // against itself-plus-a-dose. The ramp comes back gentler, which is the whole point.
+  var solveWith=function(extraMg){
+    var c2=Object.assign({}, ctx, {
+      scheduled: (ctx.scheduled||[]).concat(
+        extraMg>0 ? [{compId:ctx.incomingId, doseMg:String(extraMg), date:firstDate}] : [])
+    });
+    var r;
+    if(best.cadence&&best.cadence.dithered)      r=_tcSolveDailyDither(c2,{iters:6});
+    else if(best.cadence&&best.cadence.variable) r=_tcSolveVariable(c2,{iters:6});
+    else                                         r=_tcSolveForCadence(c2,best.cadence,{iters:6});
+    return (r&&!r.degenerate&&r.weekly&&r.weekly.length)?r:null;
+  };
+  // ONE OBJECTIVE, OVER THE WHOLE PLAN: how far the level sits from target, averaged
+  // across every week. Arriving sooner and holding steadier both reduce it, which is
+  // exactly the trade a loading dose is making — scoring only the settling weeks would
+  // buy a fast start with a worse tail.
+  var missOf=function(r){
+    var wk=r.weekly||[], m=0;
+    for(var w=0;w<wk.length;w++) m+=Math.abs(wk[w].mean-ctx.targetPmol);
+    return wk.length?m/wk.length:Infinity;
+  };
+  var overOf=function(r){
+    var wk=r.weekly||[], o=0;
+    for(var w=0;w<wk.length;w++){
+      var d=(wk[w].peak-ctx.targetPmol)/ctx.targetPmol;
+      if(d>o) o=d;
+    }
+    return o;
+  };
+  var reach=function(r){
+    var wk=r.weekly||[];
+    for(var w=0;w<wk.length;w++){ if(wk[w].mean>=ctx.targetPmol*0.95) return w+1; }
+    return 0;                                   // never gets there inside the plan
+  };
+
+  var zero=solveWith(0);
+  if(!zero) return null;
+  var zeroMiss=missOf(zero);
+  if(zeroMiss<=ctx.targetPmol*0.02) return null;        // already arrives on target
+
+  // Bounded by physiology, not by search: filling a depot to its steady-state contents
+  // is (mg/day)/k, so 1.5x that is already past any useful answer.
+  var info=(typeof _tcCompInfo==='function')?_tcCompInfo(ctx.incomingId):null;
+  var hl=(info&&info.halfLifeDays)||4.5;
+  var startMs=new Date(ctx.startDate+'T12:00:00').getTime();
+  var endMs=startMs+ctx.weeks*7*86400000, winMs=endMs-28*86400000, tot=0;
+  best.events.forEach(function(e){
+    if(!e||e.compId!==ctx.incomingId||!e.date) return;
+    var t=new Date(e.date+'T12:00:00').getTime();
+    if(t>=winMs&&t<endMs) tot+=parseDec(e.doseMg)||0;
+  });
+  var mgPerDay=tot/28;
+  if(!(mgPerDay>0)) return null;
+  var cap=Math.max(stepMg, (mgPerDay*hl/Math.LN2)*1.5);
+
+  // ⚠️ THE CEILING, AND WHY IT IS NOT "STRICTLY BETTER THAN BASELINE".
+  // A plan that overshoots is worse than one that arrives late: with a long ester the
+  // level coming back down is not something a schedule can do quickly. So no candidate
+  // may peak above _TC_LOAD_TOL over target — unless the plan WITHOUT a loading dose
+  // already does, in which case that is the bar instead, because the ramp climbing to
+  // close the opening gap is itself an overshoot and it is not this feature's to fix.
+  //
+  // The slack is load-bearing, not sloppiness. The first cut demanded the loaded plan
+  // peak strictly BELOW the unloaded one and rejected every candidate on a transition
+  // that wanted a 125 mg front-load: the unloaded plan peaked 8.03% over, the loaded
+  // one 8.04%, and a hundredth of a point of iterative-solver noise threw away a
+  // schedule that cut the mean miss from 71 to 39 pmol/L. Each candidate is a fresh
+  // re-solve, and re-solves wobble; a guard that cannot tell noise from a real increase
+  // is not measuring what it claims to.
+  var ceilOver=Math.max(_TC_LOAD_TOL, overOf(zero))+0.005;
+  var bestL=0, bestPlan=zero, bestMiss=zeroMiss, seen={};
+  for(var g=1; g<=_TC_LOAD_GRID; g++){
+    var L=_tcSolveSnap(cap*g/_TC_LOAD_GRID, stepMg);
+    if(!(L>0)||seen[L]) continue;
+    seen[L]=true;
+    var r=solveWith(L);
+    if(!r) continue;
+    // NOT `break`. Overshoot would rise monotonically with the front-load if the
+    // schedule were fixed, but it is re-solved for every candidate — measured on one
+    // transition the series ran 8.0, 8.0, 8.0, 9.5, 8.0, 10.6, so stopping at the first
+    // breach would have skipped the answer.
+    if(overOf(r)>ceilOver) continue;
+    var m=missOf(r);
+    if(m<bestMiss){ bestMiss=m; bestPlan=r; bestL=L; }
+  }
+  if(!(bestL>0)) return null;
+  // Worth a bigger needle? A front-load that shaves a few percent off the climb is not.
+  if((zeroMiss-bestMiss) < zeroMiss*_TC_LOAD_MIN_GAIN) return null;
+
+  return {loading:{mg:Math.round(bestL*10)/10,
+                   ml:Math.round((bestL/ctx.concMgPerMl)*100)/100,
+                   date:firstDate,
+                   maintenanceMg:Math.round((bestPlan.doses&&bestPlan.doses[0]!=null
+                                             ?bestPlan.doses[0]:0)*10)/10,
+                   firstDoseMg:Math.round(((bestPlan.doses&&bestPlan.doses[0]!=null
+                                            ?bestPlan.doses[0]:0)+bestL)*10)/10,
+                   weeksWithout:reach(zero), weeksWith:reach(bestPlan),
+                   peakOver:Math.round(overOf(bestPlan)*1000)/10,
+                   // Reported so the ceiling rule is auditable from the outside. A
+                   // front-load may exceed _TC_LOAD_TOL only when the plan WITHOUT it
+                   // overshot further — the ramp climbing to close the gap is itself an
+                   // overshoot, and replacing a worse one with a better one is not a
+                   // breach. peakOverWithout is what it is being compared against.
+                   peakOverWithout:Math.round(overOf(zero)*1000)/10,
+                   missWithout:Math.round(zeroMiss), missWith:Math.round(bestMiss)},
+          // ⚠️ THE PLAN SHOWN MUST BE THE ONE THAT ASSUMES THE LOADING DOSE.
+          // Displaying the ramp solved WITHOUT it and then telling the user to add a
+          // front-load is how you get the overshoot this feature exists to avoid.
+          plan:bestPlan};
+}
+
 // The candidate schedule must start after the calibration anchor, or the solve is
 // self-cancelling (see the note above). Returns a warning string, or ''.
 function _tcSolveAnchorGuard(ctx){
@@ -4187,11 +4376,44 @@ function tcSolveTransition(opts){
     notes.push(msg);
   }
 
+  // ── AND HOW TO GET THERE, NOT ONLY WHERE TO END UP ───────────────────────
+  // Computed against the schedule that WON, because a front-load is sized to the plan
+  // it rides on: the maintenance rate decides the depot, and the depot decides the
+  // dose. Computed last for the same reason.
+  var loading=null;
+  try{
+    var _ld=_tcSolveLoadingDose(ctx, best);
+    if(_ld&&_ld.loading&&_ld.plan){
+      loading=_ld.loading;
+      // The ramp that assumes the front-load REPLACES the one that does not. Anything
+      // else shows a schedule solved for a gap the loading dose has already closed.
+      best=_ld.plan;
+    }
+  }
+  catch(e){ if(typeof _logErr==='function')_logErr('tcSolveLoadingDose',e); }
+  if(loading){
+    var _ln='Loading dose: make the first injection on '+loading.date+' '
+      +loading.firstDoseMg+' mg instead of '+loading.maintenanceMg+' mg — an extra '
+      +loading.mg+' mg ('+loading.ml+' ml), as ONE bigger injection rather than a second '
+      +'one. It fills the depot to the level this schedule maintains instead of waiting '
+      +'for it to fill at the maintenance rate, so you open at target instead of '
+      +'climbing to it: across the plan the level sits about '+loading.missWith
+      +' pmol/L from target on average, against '+loading.missWithout+' without it.';
+    if(loading.peakOverWithout>loading.peakOver+0.5){
+      _ln+=' The ramp is also gentler for it — without the loading dose the schedule has '
+        +'to climb hard to close the opening gap and overshoots '+loading.peakOverWithout
+        +'% in the middle of the plan; with it, '+loading.peakOver+'%.';
+    }
+    _ln+=' The whole schedule below was re-solved assuming this dose, so do not apply '
+      +'one without the other.';
+    notes.push(_ln);
+  }
+
   return {
     // results already has `best` removed above — slicing again silently dropped the
     // next-ranked option, which is how the variable-interval solve came 2nd and was
     // never shown.
-    best: best, alternatives: results, target: ctx.targetPmol,
+    best: best, alternatives: results, target: ctx.targetPmol, loading: loading,
     concMgPerMl: ctx.concMgPerMl, stepMl: ctx.stepMl, weeks: ctx.weeks,
     incomingId: ctx.incomingId, startDate: ctx.startDate, notes: notes,
     // dose_phases, in the shape the generator and the ramp editor already consume.
