@@ -6855,6 +6855,77 @@ console.log('\n── The price of an injection ──────────�
   check('the default floor is a tenth of a millilitre', G._TC_MIN_ML===0.1,
     String(G._TC_MIN_ML));
 
+  // ── SAVING WARNS BEFORE IT REPLACES A DOSE YOU MAY HAVE TAKEN ────────────
+  // Henrik, 2026-09-16, after 19 past PM HGH rows were pruned by a protocol rewrite:
+  // "Add a warning that saving a new protocol might prune unchecked doses."
+  if (typeof G._injAtRiskOnSave === 'function') {
+    const _wSave = {c:G._injectionsCache, cf:G.confirm, us:G._userStacks};
+    // ⚠️ NOT G.NOW. `NOW` is `const NOW=new Date()` in index.html, and the suite only
+    // rewrites a named list of consts to var — so NOW stays a lexical binding the
+    // sandbox never exposes, G.NOW is undefined, and new Date(undefined) is an Invalid
+    // Date whose dateKey is "NaN-NaN-NaN". The fixture keys silently stopped matching
+    // the real dates the app computes, and the helper correctly found nothing in them.
+    const t0=new Date(); t0.setHours(0,0,0,0);
+    const today=G.dateKey(t0), yest=G.dateKey(new Date(t0.getTime()-86400000));
+    const older=G.dateKey(new Date(t0.getTime()-5*86400000));
+    const soon=G.dateKey(new Date(t0.getTime()+3*86400000));
+    const stack={id:'wp1', name:'P', cycle_start:older};
+    const cid=G._stackCycleId(stack);
+
+    G._injectionsCache={};
+    G._injectionsCache[today]=[
+      {id:'w1',cycle_id:cid,date:today,compound_id:'hgh',compound_name:'HGH',time_of_day:'PM',logged:false,active:true},
+      {id:'w2',cycle_id:cid,date:today,compound_id:'hgh',compound_name:'HGH',time_of_day:'AM',logged:true,active:true}];
+    G._injectionsCache[yest]=[
+      {id:'w3',cycle_id:cid,date:yest,compound_id:'glow',compound_name:'Glow',time_of_day:'PM',logged:false,active:true}];
+    G._injectionsCache[older]=[
+      {id:'w4',cycle_id:cid,date:older,compound_id:'hgh',compound_name:'HGH',time_of_day:'PM',logged:false,active:true}];
+    G._injectionsCache[soon]=[
+      {id:'w5',cycle_id:cid,date:soon,compound_id:'hgh',compound_name:'HGH',time_of_day:'PM',logged:false,active:true}];
+
+    const at=G._injAtRiskOnSave(stack).map(r=>r.date+'/'+r.name);
+    check('the save warning counts unchecked doses from today and yesterday',
+      at.length===2 && at.some(x=>x.startsWith(today)) && at.some(x=>x.startsWith(yest)),
+      at.join(','));
+    // ⚠️ NOT THE FORWARD PLAN. A 13-week protocol has ninety unchecked doses in it by
+    // definition — they ARE the plan, and replacing them is what saving means. A dialog
+    // announcing that on every save is noise, and noise gets clicked through.
+    check('  …and not the forward plan, which is what saving is for',
+      !at.some(x=>x.startsWith(soon)), at.join(','));
+    // Past rows are safe already (backend #274), so warning about them would be a lie.
+    check('  …nor rows further back, which the backend no longer prunes',
+      !at.some(x=>x.startsWith(older)), at.join(','));
+    check('  …and never a dose already ticked',
+      !G._injAtRiskOnSave(stack).some(r=>r.name==='HGH'&&r.slot==='AM'));
+    // Another protocol's doses are not this save's business.
+    G._injectionsCache[today].push({id:'w6',cycle_id:'other',date:today,compound_id:'hgh',
+      compound_name:'HGH',time_of_day:'MID',logged:false,active:true});
+    check('  …and only this protocol\'s own rows',
+      G._injAtRiskOnSave(stack).length===2);
+
+    // The dialog decides whether the save proceeds — and declining must stop it.
+    let asked=0;
+    G.confirm=(msg)=>{ asked++; return false; };
+    check('a save with doses at risk asks before rewriting them',
+      G.confirmSavePrune(stack)===false && asked===1);
+    G.confirm=()=>true;
+    check('  …and proceeds when confirmed', G.confirmSavePrune(stack)===true);
+    // Nothing at risk must not interrupt an ordinary save.
+    asked=0; G.confirm=()=>{ asked++; return false; };
+    G._injectionsCache={};
+    G._injectionsCache[soon]=[{id:'w7',cycle_id:cid,date:soon,compound_id:'hgh',
+      compound_name:'HGH',time_of_day:'PM',logged:false,active:true}];
+    check('  …and an ordinary save is never interrupted',
+      G.confirmSavePrune(stack)===true && asked===0, 'asked ' + asked);
+
+    // ⚠️ THE SAVE IS GATED ON IT, or the warning is decoration.
+    const _wpSrc=fs.readFileSync(path.join(__dirname,'../tab-stack.js'),'utf8');
+    check('  …and both protocol-save paths are gated on the answer',
+      (_wpSrc.match(/confirmSavePrune\(/g)||[]).length>=3);
+
+    G._injectionsCache=_wSave.c; G.confirm=_wSave.cf; G._userStacks=_wSave.us;
+  }
+
   // ── A CAP COUNTS THE DOSES ALREADY TAKEN ─────────────────────────────────
   // Henrik, 2026-09-16: "Still setting injections to max 3 per week adds 3 more this
   // week even though I already done 2." The cap chose the cadence and nothing else, so
