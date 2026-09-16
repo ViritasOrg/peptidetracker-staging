@@ -3082,6 +3082,45 @@ function _tcSolveWindowStats(ser,fromMs,toMs){
   return {mean:n?sum/n:0, peak:pk, trough:isFinite(tr)?tr:0};
 }
 
+// ⚠️ THE FLOOR APPLIES TO EVERY DOSE IN THE PLAN, NOT JUST THE ONE IT SETTLES AT.
+// Henrik, 2026-09-16: "0,2ml is non negotiable."
+//
+// The candidate filter measured the floor on the SETTLED dose, on the reasoning that
+// "a ramp's opening weeks are legitimately small while the outgoing ester is still
+// carrying the level". That was true of a tapering ramp and false the moment a loading
+// dose existed: a front-load is followed by a compensation week where the plan needs
+// almost nothing, and on his own numbers that came out as 25 mg — 0.1 ml at 250 mg/ml,
+// half his floor, scheduled as a real injection to tick off in Today.
+//
+// A dose below the floor is not a dose. It is met the way the panel copy has always
+// promised — by injecting LESS OFTEN, never by rounding up — so a sub-floor week
+// becomes a skipped injection and the schedule keeps the milligrams it was solved for
+// in the weeks it can actually draw. Rounding up would be an overdose applied to
+// satisfy a convenience rule, which is the one thing the floor must never cause.
+//
+// Applied after snapping in all three solvers and before the final evaluation, so the
+// reported levels are the levels of the schedule the user will actually inject.
+// ⚠️ A SKIPPED DOSE IS DEFERRED, NOT DISCARDED. Zeroing a sub-floor dose outright
+// throws its milligrams away, and the level goes with them: on one measured solve two
+// consecutive light weeks became a fourteen-day hole and the mean fell to 1207 against
+// a 1400 target. The drug was never the problem — the NEEDLE was. So a dose under the
+// floor is not given, and what it was owed rolls forward to the next injection that can
+// afford it. A 25 mg-a-day plan under a 50 mg floor becomes 50 mg every other day: same
+// weekly milligrams, half the needles, every one of them drawable.
+//
+// Both inputs are already whole syringe steps, so a carried dose stays on the grid — the
+// carry can never produce a volume the snap would have rejected.
+function _tcApplyFloor(doses, minMg){
+  if(!(minMg>0)) return doses;
+  var out=[], carry=0;
+  for(var i=0;i<doses.length;i++){
+    var d=(doses[i]||0)+carry;
+    if(d>0 && d<minMg-1e-9){ out.push(0); carry=d; }   // owed, not lost
+    else { out.push(d); carry=0; }
+  }
+  return out;
+}
+
 // Snap a dose to whole syringe steps — what can actually be drawn up.
 function _tcSolveSnap(mg, stepMg){
   if(!(stepMg>0)) return Math.round(mg*10)/10;
@@ -3432,6 +3471,9 @@ function _tcSolveVariable(ctx, opts){
     if(moved<stepMg*0.1) break;
   }
   var finalSched=_tcSolveDatesPhased(ctx.startDate,W,ivWk);
+  var _settledDrawV=0;
+  for(var sdv=mgWk.length-1; sdv>=0; sdv--){ if(mgWk[sdv]>0){ _settledDrawV=mgWk[sdv]; break; } }
+  mgWk=_tcApplyFloor(mgWk, ctx.minMl>0?ctx.concMgPerMl*ctx.minMl:0);
   var fin=_tcSolveEvaluatePhased(ctx, finalSched, mgWk);
   if(!fin) return null;
 
@@ -3481,7 +3523,7 @@ function _tcSolveVariable(ctx, opts){
   worstSettledV=ctx.targetPmol>0?worstSettledV/ctx.targetPmol:Infinity;
   return {worstSettled:worstSettledV,
           cadence:{key:'variable', label:'Variable interval', variable:true}, settleWeeks:settleWeeks,
-          phases:phases, weekly:weekly, doses:mgWk, intervals:ivWk,
+          phases:phases, weekly:weekly, doses:mgWk, intervals:ivWk, settledDraw:_settledDrawV,
           ripple:rn?rp/rn:Infinity,
           drift:(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity,
           worst:ctx.targetPmol>0?worst/ctx.targetPmol:Infinity,
@@ -3581,6 +3623,11 @@ function _tcSolveDailyDither(ctx, opts){
   // Instead the week's total is quantised to whole steps and those steps are spread as
   // evenly as possible across the seven days. The same weekly load always yields the
   // same pattern, so consecutive equal weeks collapse into one phase.
+  // The pattern still spreads the week across all seven days — that is the whole reason
+  // this mode resolves finer than a fixed daily dose. The draw floor is applied to the
+  // finished daily array instead, where it can defer a sub-floor dose to the next day
+  // that can afford it; enforcing it here would have to decide the spacing blind, a week
+  // at a time, and would strand whatever the week could not spend.
   function weekPattern(perDayMg){
     var totalSteps=Math.max(0,Math.round(perDayMg*7/stepMg));
     var base=Math.floor(totalSteps/7), extra=totalSteps%7;
@@ -3616,14 +3663,48 @@ function _tcSolveDailyDither(ctx, opts){
     mg=dither(needW);
     if(moved<stepMg*0.05) break;
   }
+  // Daily array: one entry per injection, so the floor lands on each needle rather than
+  // on a weekly average. This is the mode the floor bites hardest in — 25 mg a day at
+  // 250 mg/ml is 0.1 ml — and it is supposed to: the answer is fewer, bigger draws.
+  mg=_tcApplyFloor(mg, ctx.minMl>0?ctx.concMgPerMl*ctx.minMl:0);
+  // ⚠️ FOR A DITHERED PLAN THE FLOOR IS A QUESTION ABOUT THE WEEK, NOT THE DAY.
+  // The carry gives the week as many needles as it can afford and defers the rest, so
+  // the per-day figure is an outcome of the floor rather than a test of it. What can
+  // still fail is a settled week whose whole total is under one floor dose — there the
+  // carry never clears and the steady state is injections drifting further apart
+  // forever, which is a longer interval badly expressed. So the filter is handed the
+  // settled week's TOTAL when that total cannot afford a single dose, and the dose the
+  // plan actually schedules when it can. Zero means "wants nothing", which is legitimate
+  // under a heavy outgoing tail.
+  var _floorMgD=ctx.minMl>0?ctx.concMgPerMl*ctx.minMl:0;
+  var _lastWkTotal=(needW[W-1]||0)*7;
+  var _settledDrawD=0;
+  if(_lastWkTotal>0){
+    if(_floorMgD>0&&_lastWkTotal<_floorMgD-1e-9){
+      _settledDrawD=_lastWkTotal;              // cannot afford one dose: excluded
+    }else{
+      for(var sdd=mg.length-1; sdd>=Math.max(0,mg.length-7); sdd--){
+        if(mg[sdd]>0){ _settledDrawD=mg[sdd]; break; }
+      }
+    }
+  }
   var fin=evalDaily(mg);
   if(!fin) return null;
 
-  // A phase per WEEK-PATTERN change: the seven doses of that week, repeating.
+  // A phase per WEEKLY-LOAD change.
+  // ⚠️ KEYED ON THE WEEK'S TOTAL, NOT ON THE EXACT PATTERN. This keyed on the seven
+  // doses, which was the same thing back when a given weekly load always dithered to
+  // the same pattern. The draw floor's carry broke that: it defers a sub-floor dose to
+  // the next day that can afford it, so the pattern now depends on what came before and
+  // two weeks with an identical load can arrange it differently — 30/20/20/0/30/20/20
+  // and 20/20/20/20/20/20/20 are both 140 mg. Emitting a phase for that prints two rows
+  // reading "20 mg" back to back, which is exactly the wall of identical rows the step
+  // function exists to avoid. The weekly load is what the user reads and acts on; a
+  // reshuffle inside the week at the same total is not a new instruction.
   var phases=[], prevKey=null;
   for(var pz=0;pz<W;pz++){
     var pat=mg.slice(pz*7,pz*7+7);
-    var pkey=pat.map(function(x){return Math.round(x*10)/10;}).join(',');
+    var pkey=String(Math.round(pat.reduce(function(a,b){return a+b;},0)*10)/10);
     if(pkey!==prevKey){
       var avg=pat.reduce(function(a,b){return a+b;},0);
       phases.push({w:pz, iv:1, pattern:pat.map(function(x){return Math.round(x*10)/10;}),
@@ -3674,7 +3755,7 @@ function _tcSolveDailyDither(ctx, opts){
   return {worstSettled:worstSettledD,
           cadence:{key:'daily-dither', label:'Daily, dose varies by day', dithered:true, days:null, freqVal:1, freqUnit:'days'},
           phases:phases, weekly:fin.weekly.map(function(x,i){return {week:i,mean:x.mean,peak:x.peak,trough:x.trough,mg:mg[i*7]};}),
-          doses:mg, ripple:rn?rp/rn:Infinity,
+          doses:mg, settledDraw:_settledDrawD, ripple:rn?rp/rn:Infinity,
           drift:(isFinite(wLo)&&ctx.targetPmol>0)?((wHi-wLo)/ctx.targetPmol):Infinity,
           worst:ctx.targetPmol>0?worst/ctx.targetPmol:Infinity,
           meanErr:en?err/en:Infinity, lowPmol:isFinite(wLo)?wLo:0, highPmol:wHi,
@@ -3795,6 +3876,17 @@ function _tcSolveForCadence(ctx, cad, opts){
       if(snapped[ci-1]===snapped[ci+1]&&snapped[ci]!==snapped[ci-1]) snapped[ci]=snapped[ci-1];
     }
   }
+  // ⚠️ WHAT THIS CADENCE WANTS AT STEADY STATE, CAPTURED BEFORE THE FLOOR TOUCHES IT.
+  // The floor zeroes a sub-floor dose rather than scheduling it, which is right for a
+  // ramp week and WRONG as the whole answer: if the dose this cadence settles at is
+  // itself under the floor, the cure is a longer interval, not a schedule with holes in
+  // its steady state. After flooring that is invisible — every surviving dose clears the
+  // floor by construction — so the ranking filter would see a compliant plan that in
+  // fact skips settled weeks. Recorded here, read by the filter, and the reason a
+  // too-small cadence is excluded instead of quietly thinned.
+  var _settledDraw=0;
+  for(var sd=snapped.length-1; sd>=0; sd--){ if(snapped[sd]>0){ _settledDraw=snapped[sd]; break; } }
+  snapped=_tcApplyFloor(snapped, ctx.minMl>0?ctx.concMgPerMl*ctx.minMl:0);
   var fin=_tcSolveEvaluate(ctx, cad, dates, snapped);
   if(!fin) return null;
 
@@ -3910,7 +4002,7 @@ function _tcSolveForCadence(ctx, cad, opts){
   var sensTail=0, stn=0;
   for(var sq=Math.max(0,W-4); sq<W; sq++){ if(sens[sq]>0){ sensTail+=sens[sq]; stn++; } }
   sensTail=stn?sensTail/stn:0;
-  return {cadence:cad, phases:phases, weekly:weekly, doses:snapped,
+  return {cadence:cad, phases:phases, weekly:weekly, doses:snapped, settledDraw:_settledDraw,
           ripple:rn?rp/rn:Infinity, drift:drift, worst:worst, worstSettled:worstSettled,
           meanErr:en?err/en:Infinity,
           settledDrift:(isFinite(sLo)&&ctx.targetPmol>0)?((sHi-sLo)/ctx.targetPmol):Infinity,
@@ -4402,14 +4494,30 @@ function tcSolveTransition(opts){
   // Rounding a 0.06 ml dose to 0.1 would be a 67% overdose applied to satisfy a
   // convenience rule — the constraint has to be met by injecting LESS OFTEN and more at
   // a time, which is the only direction that keeps the weekly milligrams where the solve
-  // put them. Measured on the SETTLED doses, because a ramp's opening weeks are
-  // legitimately small while the outgoing ester is still carrying the level.
+  // put them.
+  //
+  // ⚠️ MEASURED ON EVERY DOSE, NOT ON THE SETTLED ONE. This read the LAST non-zero dose,
+  // on the reasoning that "a ramp's opening weeks are legitimately small while the
+  // outgoing ester is still carrying the level". A loading dose broke that: the week
+  // after a front-load needs almost nothing, so it came out at 25 mg — 0.1 ml at
+  // 250 mg/ml, half the floor — and the settled dose said the plan was fine. Henrik,
+  // 2026-09-16: "0,2ml is non negotiable."
+  //
+  // The solvers now zero any sub-floor dose rather than scheduling it, so this filter
+  // sees a plan whose every injection already clears the floor. What is left for it to
+  // do is the job it always had: exclude a CADENCE that cannot meet the floor at all —
+  // one whose settled dose is under it, where zeroing would empty the schedule instead
+  // of thinning it. Both halves are checked, because a filter that trusts an invariant
+  // it does not verify is how the invariant gets lost.
   var _minMg=ctx.minMl>0?ctx.concMgPerMl*ctx.minMl:0;
   var _tooSmall=null;
   var _drawOf=function(r){
+    // What the cadence WANTS at steady state, before the floor zeroed anything. Falls
+    // back to the last scheduled dose for any result predating the field.
+    if(r.settledDraw!=null) return r.settledDraw>0?r.settledDraw:Infinity;
     var d=(r.doses||[]).filter(function(x){ return x>0; });
     if(!d.length) return Infinity;              // nothing scheduled: not a small draw
-    return d[d.length-1];                       // the dose it settles at
+    return d[d.length-1];
   };
   if(_minMg>0){
     var _bigEnough=results.filter(function(r){ return _drawOf(r)>=_minMg-1e-9; });

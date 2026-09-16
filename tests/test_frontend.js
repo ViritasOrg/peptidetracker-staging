@@ -6249,8 +6249,13 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       // compared whichever cadence happened to rank first at each step, and once
       // ranking moved to the settled window a step change could flip the winner —
       // making this assert something about cadence selection rather than draw volume.
+      // ⚠️ AND OPT OUT OF THE DRAW FLOOR. This measures what the STEP is worth at one
+      // concentration, so the three solves must differ only in the step. A 0.2 ml floor
+      // is 50 mg here — four steps at 0.05 ml and fifty at 0.01 — so it bites the fine
+      // steps hardest and turns a step-size measurement into a floor measurement. What
+      // the floor costs is pinned in its own block below; this one is about the step.
       const rr=G.tcSolveTransition({history:hist,incomingId:'enanthate',startDate:'2026-08-27',
-        targetPmol:1500,concMgPerMl:250,stepMl:stepMl,weeks:16,cadenceKey:'e2d'});
+        targetPmol:1500,concMgPerMl:250,stepMl:stepMl,weeks:16,cadenceKey:'e2d',minMl:0});
       return {stepMl:stepMl, drift:rr.best.drift, err:rr.best.meanErr, worst:rr.best.worst, cad:rr.best.cadence.key};
     });
     // Only the claim the product actually rests on: halving the draw volume at a FIXED
@@ -6857,6 +6862,65 @@ console.log('\n── The price of an injection ──────────�
   // 40mg and 100mg/ml 20mg" — and all three are the same draw: 50/250, 40/200 and
   // 20/100 are each 0.2 ml. So the floor is stored in ml and the milligrams are what it
   // looks like at whichever vial is in hand. It was 0.1, which was half what he meant.
+  // ⚠️ EVERY DOSE, NOT JUST THE ONE IT SETTLES AT. Henrik, 2026-09-16: "0,2ml is non
+  // negotiable." The filter measured the floor on the SETTLED dose, on the reasoning
+  // that a ramp's opening weeks are legitimately small — true of a tapering ramp, false
+  // the moment a loading dose existed. After a front-load the next week needs almost
+  // nothing, and on his own record that came out as 25 mg: 0.1 ml at 250 mg/ml, half
+  // his floor, scheduled as a real injection to tick off in Today.
+  //
+  // Asserted across every solver family and several targets, because each builds its
+  // doses differently — a fixed weekly array, a per-phase interval array, and a daily
+  // dithered array — and the floor has to mean the same thing in all three.
+  {
+    const _fd=['2026-06-20','2026-06-26','2026-07-02','2026-07-08','2026-07-14','2026-07-20',
+      '2026-07-26','2026-08-01','2026-08-07','2026-08-13','2026-08-18','2026-08-22',
+      '2026-08-25','2026-08-28','2026-09-01','2026-09-04','2026-09-07','2026-09-10',
+      '2026-09-12','2026-09-13'];
+    const _fh=_fd.map(d=>({compId:'nebido',doseMg:'100',date:d}));
+    const _bwS=G._tcBwEntries, _ftS=G._tcp.measuredFT, _shS=G._tcp.shbg,
+          _ttS=G._tcp.totalT, _dwS=G._tcp.currentDoseMgWk;
+    G._tcBwEntries=[{date:'2026-09-15',free_t:'634',total_t:'43.3',shbg:'39',unit:'pmol/L'}];
+    G._tcp.measuredFT='634'; G._tcp.shbg='39'; G._tcp.totalT='43.3';
+    G._tcp.currentDoseMgWk='233';
+    const _mkPlan=(t,cap)=>G.tcSolveTransition({history:_fh,incomingId:'enanthate',
+      startDate:'2026-09-17',targetPmol:t,concMgPerMl:250,stepMl:0.1,minMl:0.2,weeks:13,
+      maxInjPerWeek:cap||0});
+    const _cases=[[1000,0],[1400,0],[1600,2],[2200,0]];
+    const _offenders=[];
+    _cases.forEach(function(c){
+      const r=_mkPlan(c[0],c[1]);
+      if(!r||!r.best) return;
+      (r.best.doses||[]).forEach(function(d){
+        if(d>0 && d<50-1e-9) _offenders.push(c[0]+(c[1]?('/cap'+c[1]):'')+':'+d+'mg');
+      });
+    });
+    check('no dose anywhere in the plan is under the floor', _offenders.length===0,
+      _offenders.slice(0,8).join(' '));
+
+    // ⚠️ AND A SKIPPED DOSE IS DEFERRED, NOT DISCARDED. Zeroing a sub-floor dose outright
+    // throws its milligrams away with it: measured before the carry, two consecutive
+    // light weeks became a fourteen-day hole and the mean fell to 1207 against a 1400
+    // target. The drug was never the problem, the needle was — so what a skipped dose was
+    // owed rolls into the next injection that can afford it, and the weekly milligrams
+    // survive even though the needles are fewer.
+    check('  …and the milligrams a skipped dose was owed are not lost', (function(){
+      const step=25, floor=50;
+      const sum=a=>a.reduce((x,y)=>x+y,0);
+      const flo=G._tcApplyFloor([step,step,step,step,step,step,step,step], floor);
+      return Math.abs(sum(flo)-step*8)<1e-9            // same total
+          && flo.every(d=>d===0||d>=floor-1e-9)        // every needle clears the floor
+          && flo.filter(d=>d>0).length===4;            // half the needles, twice the dose
+    })(), JSON.stringify(G._tcApplyFloor([25,25,25,25,25,25,25,25],50)));
+    check('  …and no floor still means no floor', (function(){
+      const a=[25,25,10,0,40];
+      return JSON.stringify(G._tcApplyFloor(a,0))===JSON.stringify(a);
+    })());
+
+    G._tcBwEntries=_bwS; G._tcp.measuredFT=_ftS; G._tcp.shbg=_shS;
+    G._tcp.totalT=_ttS; G._tcp.currentDoseMgWk=_dwS;
+  }
+
   check('the default floor is the draw he named, not half of it', G._TC_MIN_ML===0.2,
     String(G._TC_MIN_ML));
   check('  …and it is the same 0.2 ml at every concentration he gave', (function(){
@@ -7444,8 +7508,16 @@ console.log('\n── The loading dose ─────────────�
     const _bwSave=G._tcBwEntries;
     G._tcBwEntries=[{date:'2026-08-18',free_t:'915',total_t:'32',shbg:'25',unit:'pmol/L'}];
     const hist=mk(33,2,100,'2026-08-26');
+    // ⚠️ NO DRAW FLOOR HERE, DELIBERATELY. This block is about the solver SEEING the
+    // outgoing ester's still-scheduled doses and asking for less because of them — and
+    // asking for less is exactly what collides with a floor. With Nebido still booked
+    // every two days the new ester is only needed at ~37 mg a week, which is 0.15 ml at
+    // 250 mg/ml: under a 0.2 ml floor the honest schedule is 75 mg every fortnight, and
+    // a fortnightly enanthate ripples far outside the ±6% band this test measures. That
+    // band is about stacking, not about needles. What the floor costs is pinned in its
+    // own block; this fixture predates it and is left testing what it was written for.
     const opts={incomingId:'enanthate',startDate:'2026-08-28',targetPmol:1400,
-                concMgPerMl:250,stepMl:0.05,weeks:16};
+                concMgPerMl:250,stepMl:0.05,weeks:16,minMl:0};
     const bare  = G.tcSolveTransition(Object.assign({history:hist},opts));
     const withSched = G.tcSolveTransition(Object.assign(
       {history:hist, scheduled:fwd(35,2,100,'2026-08-28')},opts));
