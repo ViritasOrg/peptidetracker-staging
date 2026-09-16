@@ -6852,8 +6852,75 @@ console.log('\n── The price of an injection ──────────�
   // Explicitly asking for no floor must actually mean none.
   check('  …and no floor can be asked for explicitly',
     !(solve({minMl:0}).notes||[]).some(n=>/asking for a draw under/.test(n)));
-  check('the default floor is a tenth of a millilitre', G._TC_MIN_ML===0.1,
+  // ⚠️ 0.2 ml, AND IT IS VOLUMETRIC. Henrik gave it per concentration — "With 250mg/mil
+  // 50mg is a reasonable minimum lowest dose for a single injection. For a 200mg/mil
+  // 40mg and 100mg/ml 20mg" — and all three are the same draw: 50/250, 40/200 and
+  // 20/100 are each 0.2 ml. So the floor is stored in ml and the milligrams are what it
+  // looks like at whichever vial is in hand. It was 0.1, which was half what he meant.
+  check('the default floor is the draw he named, not half of it', G._TC_MIN_ML===0.2,
     String(G._TC_MIN_ML));
+  check('  …and it is the same 0.2 ml at every concentration he gave', (function(){
+    return [[250,50],[200,40],[100,20]].every(function(p){
+      return Math.abs(p[1]/p[0] - G._TC_MIN_ML) < 1e-9;
+    });
+  })());
+  // ⚠️ AND NOTHING IS SOLVED TO A PRECISION A SYRINGE CANNOT BE DRAWN TO.
+  // "A normal 1ml (smallest) syringe is hard to draw with precision smaller than 0,1 ml
+  // steps." Finer steps genuinely reduce drift IN THE MODEL — 0.1 → 0.05 → 0.01 ml took
+  // one solve from 13% to 10% to 4% — which is why this used to offer 0.025. It is not
+  // a lever if the hand holding the syringe cannot move it: the plan says 0.125 ml, the
+  // barrel gets 0.1 or 0.15, and the model is wrong about a dose it chose itself.
+  check('the solver never rounds to less than a syringe can draw',
+    G._TC_SOLVE_STEP_ML >= 0.1 - 1e-9, String(G._TC_SOLVE_STEP_ML));
+  check('  …and the panel offers nothing finer either', (function(){
+    const st = fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8');
+    return !/'0\.05','0\.05 ml'/.test(st) && !/'0\.025','0\.025 ml'/.test(st);
+  })());
+  // ⚠️ AND THE FLOOR HAS A PRICE, RECORDED RATHER THAN HIDDEN.
+  // A 0.2 ml minimum at 250 mg/ml is a 50 mg smallest injection, and the 0.1 ml step on
+  // top leaves 25 mg of granularity to hold a target with. It holds less tightly than it
+  // did, and that is physics rather than a regression — two older tests had to opt OUT
+  // of the floor to keep testing what they were written for. This pins what it costs, so
+  // a later change cannot quietly blame the solver for it.
+  {
+    const _fh = [];
+    for (let i = 0; i < 30; i++) {
+      const d = new Date('2026-08-20T12:00:00'); d.setDate(d.getDate() - i * 2);
+      _fh.push({compId:'nebido', doseMg:'100',
+        date:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')});
+    }
+    const _fsolve = (mm) => G.tcSolveTransition({history:_fh, incomingId:'enanthate',
+      startDate:'2026-08-27', targetPmol:1400, concMgPerMl:250, stepMl:0.1, weeks:12,
+      minMl:mm});
+    const _drift = (r) => {
+      if (!r || !r.best) return null;
+      const wk = (r.best.weekly || []).slice(r.best.settleWeeks || 0).map(x => x.mean);
+      return wk.length ? (Math.max(...wk) - Math.min(...wk)) / 1400 : null;
+    };
+    const _floored = _fsolve(0.2), _free = _fsolve(0);
+    check('a 0.2 ml floor still produces a schedule', _floored && !!_floored.best);
+    // ⚠️ THE FLOOR IS HONOURED IN THE ANSWER, not just in the ranking.
+    check('  …whose every scheduled dose clears the floor', (function(){
+      if (!_floored || !_floored.best) return false;
+      const d = (_floored.best.doses || []).filter(x => x > 0);
+      return d.length > 0 && Math.min(...d) >= 50 - 1e-9;
+    })(), _floored && _floored.best
+      ? 'min ' + Math.min.apply(null, (_floored.best.doses||[]).filter(x=>x>0)) + ' mg'
+      : 'no result');
+    // Not asserting it is WORSE — it may tie. Only that it stays usable, which is the
+    // claim being made to the user when the floor is on by default.
+    check('  …and still lands within a usable band of target',
+      _drift(_floored) !== null && _drift(_floored) < 0.20,
+      'floored ' + (_drift(_floored)*100).toFixed(1) + '% vs unfloored '
+        + (_drift(_free)===null ? '?' : (_drift(_free)*100).toFixed(1)) + '%');
+  }
+
+  // The real lever for resolution is the vial, and the copy has to say so — otherwise
+  // removing the fine steps just reads as losing control.
+  check('  …pointing at the vial instead, which is a real gain and not a claimed one',
+    /thinner vial/.test(fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8')) &&
+    /same milligrams in more millilitres/.test(
+      fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8')));
 
   // ── THE TEMPORARY REPAIR TOOL ────────────────────────────────────────────
   // Henrik, 2026-09-16: "I am on my phone, so add this as a temporary feature under
@@ -7379,7 +7446,11 @@ console.log('\n── The loading dose ─────────────�
     // are not comparable. The auto-picked winner is the daily dithered plan, where every
     // day is a hit and the comparison means what it says.
     const sol=G.tcSolveTransition({history:mk(33,2,100,'2026-08-26'),incomingId:'enanthate',
-      startDate:'2026-08-28',targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:16});
+      startDate:'2026-08-28',targetPmol:1400,concMgPerMl:250,stepMl:0.05,weeks:16,
+      // minMl:0 — this predates the 0.2 ml floor and is not about it. Left to the
+      // default, a 50 mg minimum at 250 mg/ml excludes the schedules this case
+      // exists to compare, and the test quietly becomes a test of the floor.
+      minMl:0});
 
     const weeklyFor=(cycleStart)=>{
       const stack={cycle_start:cycleStart,cycle_length:40,trt:{enabled:true,compounds:[
@@ -18904,7 +18975,11 @@ if (typeof G.tcSolveTransition === 'function') {
     G._tcBwEntries = [{date:'2026-08-18', free_t:String(ft), total_t:'32', shbg:'25', unit:'pmol/L'}];
     var r = G.tcSolveTransition({history:_ssHist, scheduled:_ssSeq(35,2,100,'2026-08-28',false),
       incomingId:'enanthate', startDate:'2026-08-28', targetPmol:1400,
-      concMgPerMl:250, stepMl:0.05, weeks:16});
+      concMgPerMl:250, stepMl:0.05, weeks:16,
+      // minMl:0 — this predates the 0.2 ml floor and is not about it. Left to the
+      // default, a 50 mg minimum at 250 mg/ml excludes the schedules this case
+      // exists to compare, and the test quietly becomes a test of the floor.
+      minMl:0});
     if (!r || !r.best) return null;
     var ph = r.best.phases || [], W = 16, tw = 0, wk = 0;
     ph.forEach(function(p, i){
