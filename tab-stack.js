@@ -924,7 +924,7 @@ function _trtSolveWeeksDefault(scope){
 }
 function _trtSolveSt(id,scope){
   if(!_trtSolveState[id])_trtSolveState[id]={target:'',conc:'',
-    weeks:_trtSolveWeeksDefault(scope),step:'0.05',maxInj:'',running:false,result:null,error:''};
+    weeks:_trtSolveWeeksDefault(scope),step:'0.05',maxInj:'',minMl:'0.1',running:false,result:null,error:''};
   return _trtSolveState[id];
 }
 // ⚠️ NEVER RE-RENDER FROM A TEXT INPUT'S oninput HANDLER.
@@ -1038,7 +1038,10 @@ async function trtSolveRun(scope,id){
       stepMl:parseDec(st.step)||0.05, weeks:parseInt(st.weeks,10)||16,
       // '' means no cap — the solver then ranks on the standing per-injection price
       // alone, which is the default and the behaviour everyone had before.
-      maxInjPerWeek:parseDec(st.maxInj)||0
+      maxInjPerWeek:parseDec(st.maxInj)||0,
+      // '' is an explicit "no floor", distinct from unset — parseDec('')||0 gives 0,
+      // which the solver reads as no constraint.
+      minMl:(st.minMl===''?0:(parseDec(st.minMl)||0))
     }):null;
     if(!res)st.error='Could not solve — check the target, the start date, and that you have logged injections to model the tail from.';
     st.result=res;
@@ -1260,6 +1263,22 @@ function _renderTRTSolve(c,selData,scope,hideRun){
         }).join('')
       +'</select>'
       +'<span style="font-size:11px;color:var(--muted2)">injections</span></div>'
+    // ── THE SMALLEST DRAW WORTH SCHEDULING ──────────────────────────────────
+    // Henrik, 2026-09-16: "Also set min injection to 0,1ml." Below about a tenth of a
+    // millilitre the syringe stops being the instrument the plan assumes: dead space is
+    // ~0.07-0.10 ml, so the hub keeps more than the muscle gets, and a 1 ml barrel
+    // cannot be read to a fraction of it. The solver meets this by injecting less often
+    // and more at a time, never by rounding a dose up.
+    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'
+      +'<span style="font-size:11px;color:var(--muted2);min-width:56px">No less than</span>'
+      +'<select class="unit-sel" onchange="'+q('trtSolveSet',",'minMl',this.value")+'">'
+      +[['0.1','0.1 ml'],['0.05','0.05 ml'],['0.15','0.15 ml'],['0.2','0.2 ml'],['','no floor']]
+        .map(function(o){
+          return '<option value="'+o[0]+'"'+(String(st.minMl===''?'':(st.minMl||'0.1'))===o[0]?' selected':'')+'>'+o[1]+'</option>';
+        }).join('')
+      +'</select>'
+      +'<span style="font-size:11px;color:var(--muted2)">per injection ('
+      +(Math.round((parseDec(conc)||250)*(parseDec(st.minMl)||0)*10)/10)+' mg)</span></div>'
     +'<button onclick="'+q('trtSolveRun')+'"'+(st.running?' disabled':'')
       +' style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.5px;'+(st.running?'opacity:0.6;':'')+'">'
       +(st.running?'Solving…':'Generate schedule')+'</button>';

@@ -6819,6 +6819,41 @@ console.log('\n── The price of an injection ──────────�
   // The default must not have quietly become the cap: no cap is still no cap.
   check('no cap is the default, and it excludes nothing',
     !(solve().notes||[]).some(n=>/were excluded for needing/.test(n)));
+
+  // ── THE SMALLEST DRAW WORTH SCHEDULING ───────────────────────────────────
+  // Henrik, 2026-09-16: "Also set min injection to 0,1ml." Below about a tenth of a
+  // millilitre the syringe stops being the instrument the plan assumes: dead space is
+  // ~0.07-0.10 ml, so the hub keeps more than the muscle gets.
+  const drawOf=(r)=>{
+    if(!r||!r.best) return null;
+    const d=(r.best.doses||[]).filter(x=>x>0);
+    return d.length?d[d.length-1]:null;
+  };
+  // ⚠️ MET BY INJECTING LESS OFTEN, NEVER BY ROUNDING THE DOSE UP. Rounding 0.06 ml to
+  // 0.1 would be a 67% overdose applied to satisfy a convenience rule.
+  const floored=solve({minMl:0.2, concMgPerMl:250});
+  check('a draw floor is honoured by the schedule that wins',
+    floored && floored.best && drawOf(floored)>=50-1e-9,
+    floored&&floored.best?(drawOf(floored)+' mg = '+(drawOf(floored)/250)+' ml'):'no result');
+  check('  …and it holds the target rather than rounding a dose up to clear the floor',
+    (function(){
+      if(!floored||!floored.best) return false;
+      const wk=(floored.best.weekly||[]).slice(floored.best.settleWeeks||0).map(x=>x.mean);
+      return wk.length && Math.min(...wk)>=1400*0.90 && Math.max(...wk)<=1400*1.10;
+    })(),
+    floored&&floored.best?(floored.best.weekly||[]).slice(floored.best.settleWeeks||0)
+      .map(x=>Math.round(x.mean)).join(','):'no result');
+  // A floor nothing can meet is dropped and said out loud, same as the cap.
+  const impossibleFloor=solve({minMl:5});
+  check('a draw floor no schedule can meet is dropped and said out loud',
+    !!(impossibleFloor&&impossibleFloor.best) &&
+    (impossibleFloor.notes||[]).some(n=>/floor was not applied/.test(n)),
+    impossibleFloor?JSON.stringify((impossibleFloor.notes||[]).slice(0,1)):'no result');
+  // Explicitly asking for no floor must actually mean none.
+  check('  …and no floor can be asked for explicitly',
+    !(solve({minMl:0}).notes||[]).some(n=>/asking for a draw under/.test(n)));
+  check('the default floor is a tenth of a millilitre', G._TC_MIN_ML===0.1,
+    String(G._TC_MIN_ML));
 }
 
 // ── The loading dose ─────────────────────────────────────────────────────────
