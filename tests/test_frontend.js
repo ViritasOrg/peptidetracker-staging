@@ -17593,6 +17593,70 @@ console.log('\n── Enhanced dose: drawable injections ───────�
 // minutes — while that promotion run took 8m28s, because the workflow's last step waits
 // for CI on the prod PR before merging it. On timeout it wrote NOTHING, so the record
 // still held the previous push and the card showed a 16-hour-old v1.797 → v1.327.
+// ── EVERY TIER GETS THE INFO BUTTON ──────────────────────────────────────────
+// Henrik, 2026-09-17: "Why is test E nit having a Info button here?"
+//
+// Because Today only ever built one for two of the three tiers — both renderers branch
+// peptide / enhanced and stop. Glow and HGH got an ℹ, Masteron got one for being an
+// enhanced compound, and the testosterone sitting between them got nothing. Nothing was
+// disabled or hidden: the button was never created, and there was no card to open.
+// This is the failure CLAUDE.md's UI-consistency rule names outright — "If one tier
+// shows an info card, all must" — on the tier the app is built around.
+console.log('\n── Today: info button parity across tiers ─────────────────');
+{
+  const td=fs.readFileSync(path.join(__dirname,'../tab-today.js'),'utf8');
+  // Count the INFO-BUTTON branch specifically. `dose.tier==='trt'` also appears in the
+  // name-colour logic, so a bare occurrence count would pass without a button existing.
+  //
+  // ⚠️ AND A DISTANCE IS NOT A SCOPE — the lesson this file already learned once. A
+  // `[^}]*` window dies on the first nested callback's brace and a fixed character count
+  // reaches into the next branch. Each occurrence is sliced to wherever the NEXT tier
+  // test begins, which is the real boundary between these branches.
+  const infoBranches=(t)=>{
+    const marks=[]; const needle="dose.tier==='";
+    for(let i=td.indexOf(needle); i>=0; i=td.indexOf(needle,i+1)) marks.push(i);
+    let n=0;
+    marks.forEach(function(at,idx){
+      if(td.slice(at,at+needle.length+t.length+1)!==needle+t+"'") return;
+      const end=(idx+1<marks.length)?marks[idx+1]:td.length;
+      if(td.slice(at,end).indexOf('info-btn')>=0) n++;
+    });
+    return n;
+  };
+  ['peptide','enhanced','trt'].forEach(function(t){
+    check('both Today renderers offer an info button for '+t, infoBranches(t)===2,
+      infoBranches(t)+' of 2');
+  });
+  check('  …and each tier opens its own card', (function(){
+    return /showPeptideCard\(_id\)/.test(td) && /showEnhancedCard\(_id\)/.test(td)
+        && /showTrtCard\(_id\)/.test(td);
+  })());
+
+  // The card itself: same sheet, same Done button, carrying the guide the compound
+  // editor already shows under TRT GUIDE.
+  check('a TRT info card exists and renders without throwing', (function(){
+    if(typeof G.showTrtCard!=='function') return false;
+    const _su=G._userStacks, _sa=G._activeStackIndices;
+    G._userStacks=[{trt:{compounds:[{id:'enanthate',dose:'125',unit:'mg',
+                                     cadence:'days',days:[4]}]}}];
+    G._activeStackIndices=[0];
+    let ok=true;
+    try{ G.showTrtCard('enanthate'); }catch(e){ ok=false; }
+    G._userStacks=_su; G._activeStackIndices=_sa;
+    return ok;
+  })());
+  check('  …built from the guide the editor already shows', (function(){
+    const g=G._renderTRTGuide('enanthate',350);
+    return !!g && /Recommended cadence/.test(g) && /½-life/.test(g);
+  })());
+  // ⚠️ A COMPOUND WITH NEITHER A CATALOGUE ENTRY NOR A GUIDE MUST BE A NO-OP, NOT A
+  // THROW — Today builds the button from the same lookup, and an exception inside an
+  // onclick takes the whole row's handler with it.
+  check('  …and an unknown compound opens nothing rather than throwing', (function(){
+    try{ G.showTrtCard('no-such-compound'); return true; }catch(e){ return false; }
+  })());
+}
+
 console.log('\n── Deploy card: push status ───────────────────────────────');
 {
   const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');

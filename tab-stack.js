@@ -2042,6 +2042,70 @@ function showEnhancedCard(id){
   sheet.innerHTML='<div style="margin-bottom:14px;"><div class="pcard-name" style="color:'+dot+'">'+(cat.name||id)+'</div><div style="font-size:11px;font-weight:600;color:var(--muted2);letter-spacing:1.5px;text-transform:uppercase;margin-top:2px;">'+(cat.group||'')+'</div></div>'+myDoseHtml+_renderEnhancedGuide(cat,activeDose,(userComp&&userComp.unit)||cat.unit||'')+'<div style="position:sticky;bottom:0;background:var(--surface);padding:16px 0 28px;margin-top:20px;"><button onclick="this.closest(\'.pcard-overlay\').remove()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-size:14px;font-weight:700;padding:14px;border-radius:12px;cursor:pointer;font-family:inherit;letter-spacing:0.5px;">Done</button></div>';
   overlay.appendChild(sheet);document.body.appendChild(overlay);
 }
+// ⚠️ TRT HAD NO INFO CARD AT ALL, AND THAT IS A TIER-PARITY BREAK.
+// Henrik, 2026-09-17: "Why is test E nit having a Info button here?"
+//
+// Because Today only ever built one for two of the three tiers — the renderers branch
+// peptide / enhanced and stop. So Glow and HGH got an ℹ, Masteron got one for being an
+// enhanced compound, and the testosterone sitting between them got nothing. Nothing was
+// disabled or hidden: the button was never created, and there was no card for it to
+// open either.
+//
+// This is the failure CLAUDE.md's UI-consistency rule names outright — "If one tier
+// shows an info card, all must" — and it is the tier the app is built around.
+//
+// The content already existed: _renderTRTGuide is what the compound editor shows under
+// TRT GUIDE, with the recommended cadence, the half-life and the dose tiers. Same
+// sheet, same shape and same Done button as the enhanced card, so the three tiers read
+// as one app rather than three.
+function showTrtCard(id){
+  var cat=(typeof TRT_CAT!=='undefined')?TRT_CAT.find(function(c){return c.id===id;}):null;
+  // A compound with no catalogue entry AND no guide has nothing to show; one with
+  // either still does. TRT_GUIDE is keyed on the same ids, so a guide alone is enough.
+  var guide=(typeof TRT_GUIDE!=='undefined')?TRT_GUIDE[id]:null;
+  if(!cat&&!guide)return;
+  var dot=(cat&&cat.dot)||'#e05050';
+  var name=(cat&&cat.name)||id;
+  // The user's own dose, read from whichever active stack carries this compound —
+  // exactly how the enhanced card finds it.
+  var userComp=null;
+  (_activeStackIndices||[]).forEach(function(si){
+    var st=_userStacks[si]; if(!st||!st.trt)return;
+    var f=(st.trt.compounds||[]).find(function(c){return c.id===id;});
+    if(f&&!userComp)userComp=f;
+  });
+  var myDoseHtml='', weeklyMg=0;
+  if(userComp){
+    // ⚠️ THE GUIDE IS KEYED ON MILLIGRAMS PER WEEK, AND A RAMP HAS NO SINGLE DOSE.
+    // _trtCurrentScheduleLabel already knows how to say what a compound is running;
+    // the weekly figure here drives which dose tier the guide highlights, so a ramped
+    // compound uses the phase in force today rather than the flat field it ignores.
+    var perInj=parseDec(userComp.dose)||0;
+    if(userComp.dose_phases&&userComp.dose_phases.length){
+      var ph=userComp.dose_phases.slice().sort(function(a,b){return (a.w||0)-(b.w||0);});
+      perInj=parseDec(ph[ph.length-1].d)||perInj;
+    }
+    var ivDays=(typeof _cadenceIntervalDays==='function')?_cadenceIntervalDays(userComp):7;
+    if(perInj>0&&ivDays>0) weeklyMg=perInj*7/ivDays;
+    var label=(typeof _trtCurrentScheduleLabel==='function')?_trtCurrentScheduleLabel(userComp):'';
+    if(label&&label!=='NONE')
+      myDoseHtml='<div style="background:'+dot+'15;border:1px solid '+dot+'30;border-radius:10px;padding:10px 14px;margin-bottom:12px;">'
+        +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:'+dot+';margin-bottom:3px;">Your dose</div>'
+        +'<div style="font-size:13px;color:var(--text);">'+_esc(label)
+        +(weeklyMg>0?(' · ~'+Math.round(weeklyMg)+' mg/week'):'')+'</div></div>';
+  }
+  var overlay=document.createElement('div');overlay.className='pcard-overlay';
+  overlay.onclick=function(e){if(e.target===overlay)overlay.remove();};
+  var sheet=document.createElement('div');sheet.className='pcard-sheet';
+  sheet.innerHTML='<div style="margin-bottom:14px;"><div class="pcard-name" style="color:'+dot+'">'+_esc(name)+'</div>'
+    +'<div style="font-size:11px;font-weight:600;color:var(--muted2);letter-spacing:1.5px;text-transform:uppercase;margin-top:2px;">'
+    +_esc(_metaWithHalfLife(cat||{id:id},(cat&&cat.sub)||''))+'</div></div>'
+    +myDoseHtml
+    +((typeof _renderTRTGuide==='function')?_renderTRTGuide(id,weeklyMg):'')
+    +'<div style="position:sticky;bottom:0;background:var(--surface);padding:16px 0 28px;margin-top:20px;">'
+    +'<button onclick="this.closest(\'.pcard-overlay\').remove()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-size:14px;font-weight:700;padding:14px;border-radius:12px;cursor:pointer;font-family:inherit;letter-spacing:0.5px;">Done</button></div>';
+  overlay.appendChild(sheet);document.body.appendChild(overlay);
+}
 // ── Wizard ────────────────────────────────────────────────────────────────────
 var GOAL_DEFS=[{id:'muscle',label:'Muscle & Recovery',icon:'💪'},{id:'recovery',label:'Injury & Healing',icon:'🩹'},{id:'skin',label:'Skin & Anti-aging',icon:'✨'},{id:'fat',label:'Fat Loss',icon:'🔥'},{id:'cognitive',label:'Cognitive',icon:'🧠'},{id:'antiaging',label:'Longevity',icon:'⏳'},{id:'enhanced',label:'Enhanced Cycle',icon:'💉'}];
 var UNITS=['mg','µg','IU','ml','%'];var UNIT_LABELS={mcg:'µg'};
