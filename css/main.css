@@ -233,6 +233,22 @@
   .wiz-dot.active{background:var(--accent);width:18px;border-radius:3px;}
   .wiz-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overflow-anchor:none;padding:16px 20px 8px;}
   .wiz-footer{padding:12px 20px 32px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0;}
+  /* ⚠️ APPLY IS AN OVERLAY, NOT THE TAIL OF THE RESULT CARD.
+     Henrik, 2026-09-17: "When I hit generate the Next button is shown but the apply
+     schedule button is hidden below, the whole Apply Schedule needs to be a overlay not
+     a extension of the section."
+     It was position:sticky;top:0 — which pins to the TOP of the scrolling body, so it
+     only comes into view once you have already scrolled down to the results. The button
+     that makes the plan real was below the fold while the wizard's own Next sat in the
+     place a reader looks for the primary action. Fixed to the bottom instead, directly
+     above the footer, so it is reachable the moment a plan exists.
+     .wiz-overlay carries a transform, which makes it the containing block for fixed
+     descendants — so this pins to the wizard, not the page, and cannot escape it.
+     --wiz-foot-h lives here beside .wiz-footer so the two cannot drift apart. */
+  .wiz-overlay{--wiz-foot-h:88px;}
+  .trt-apply-bar{position:fixed;left:0;right:0;bottom:var(--wiz-foot-h);z-index:26;
+    background:var(--bg);border-top:1px solid var(--border);padding:10px 20px;
+    box-shadow:0 -8px 20px rgba(0,0,0,0.45);}
   .wiz-section{font-size:12px;font-weight:700;letter-spacing:1.5px;color:var(--muted2);text-transform:uppercase;margin:18px 0 10px;}
   .wiz-section:first-child{margin-top:4px;}
   .goal-grid{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px;}

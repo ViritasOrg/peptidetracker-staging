@@ -8239,6 +8239,43 @@ console.log('\n── The loading dose ─────────────�
       const h=G._renderTRTSolve(comp,{},'wiz',true);
       check('  …and the panel says applied, not "not applied yet"',
         /Applied\. This protocol now schedules/.test(h) && !/Not applied yet/.test(h));
+
+      // ── APPLY IS AN OVERLAY IN THE WIZARD, NOT THE TAIL OF THE CARD ────────
+      // Henrik, 2026-09-17: "When I hit generate the Next button is shown but the apply
+      // schedule button is hidden below, the whole Apply Schedule needs to be a overlay
+      // not a extension of the section."
+      //
+      // It was position:sticky;top:0, which pins to the TOP of the scrolling body — so
+      // it only comes into view once you have scrolled down to the results, and the
+      // results render below three form fields. On first generate the button that makes
+      // the plan real was off-screen while the wizard's own Next sat where a reader
+      // looks for the primary action.
+      check('  …with Apply as a fixed overlay bar in the wizard',
+        /class="trt-apply-bar"/.test(h) && !/position:sticky;top:0/.test(h));
+      // A fixed bar is out of the flow, so without a spacer the last note and the vial
+      // advice sit under it unreadably however far you scroll.
+      check('  …and a spacer standing in for the space it no longer occupies',
+        /height:104px/.test(h));
+      // ⚠️ THE EDITOR KEEPS STICKY. It has no fixed footer to fight and is not a
+      // full-screen scroller; a bar bolted to the viewport there would hang over
+      // unrelated content. Same state, both scopes, so this cannot pass by accident.
+      const hEdit=G._renderTRTSolve(comp,{},'edit');
+      check('  …while the editor keeps the in-flow sticky block',
+        /position:sticky;top:0/.test(hEdit) && !/trt-apply-bar/.test(hEdit));
+      check('  …and both still offer the button itself',
+        /Apply cadence \+ ramp/.test(h) && /Apply cadence \+ ramp/.test(hEdit));
+      // The bar is fixed inside .wiz-overlay, which carries a transform and is therefore
+      // the containing block for fixed descendants — that is what keeps it pinned to the
+      // wizard rather than the page. Its offset is the footer height, declared beside
+      // .wiz-footer so the two cannot drift apart.
+      {
+        const css=fs.readFileSync(path.join(__dirname,'../css/main.css'),'utf8');
+        check('  …anchored above the wizard footer, not to the page',
+          /\.trt-apply-bar\{[^}]*position:fixed/.test(css) &&
+          /\.trt-apply-bar\{[^}]*bottom:var\(--wiz-foot-h\)/.test(css) &&
+          /\.wiz-overlay\{--wiz-foot-h:/.test(css) &&
+          /\.wiz-overlay\{position:fixed;inset:0;[^}]*transform:/.test(css));
+      }
       G._trtSolveState={};
     }
   }
