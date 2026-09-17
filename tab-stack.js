@@ -1071,7 +1071,19 @@ async function trtSolveRun(scope,id){
     // state never gets a frame to paint in and the button just appears dead. One turn
     // of the event loop is enough for the render to land first.
     await new Promise(function(r){setTimeout(r,0);});
-    var start=comp.start_date||(typeof dateKey==='function'?dateKey(new Date(NOW.getTime()+86400000)):'');
+    // ⚠️ TODAY, NOT TOMORROW, WHEN THE PROTOCOL HAS ALREADY STARTED.
+    // This defaulted to NOW+1 unconditionally, which cost a day on top of whatever the
+    // cadence cost — and the anchor guard it was written for only needs the solve to
+    // start after the last LOGGED injection, not after today. When the protocol is
+    // already running, the plan should open on the protocol's own start date if that is
+    // still ahead, and otherwise today; tomorrow is only the fallback for a solve with
+    // no protocol to anchor to.
+    var _cs=(typeof _scopeCycleStart==='function')?_scopeCycleStart(scope):'';
+    var _today=(typeof dateKey==='function')?dateKey(NOW):'';
+    var start=comp.start_date
+      || (_cs&&_today&&_cs>_today ? _cs : '')
+      || _today
+      || (typeof dateKey==='function'?dateKey(new Date(NOW.getTime()+86400000)):'');
     var _inc=(typeof _canonCompoundId==='function')?_canonCompoundId(id):id;
     // ── AND WHAT IS STILL SCHEDULED OF THE OUTGOING ESTER ────────────────────
     // The tail above is the logged past. It is not the whole picture: if the protocol

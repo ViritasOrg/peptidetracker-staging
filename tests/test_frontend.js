@@ -2143,8 +2143,12 @@ console.log('\n── Injection timestamps ────────────�
     // another season disagrees with the local `date` sitting beside it.
     check('  …a local timestamp carrying its UTC offset, not a bare instant',
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/.test(_stamp), _stamp);
+    // ⚠️ THE DOSE'S OWN DAY, NOT TODAY. This compared against dateKey(new Date()), which
+    // was the same thing only while the fixture's date happened to BE today — so it went
+    // red the morning after, on a back-fill path that was working correctly. The check's
+    // name had it right all along; the assertion did not.
     check('  …whose date half is the day the dose belongs to',
-      _stamp.slice(0,10) === G.dateKey(new Date()), _stamp);
+      _stamp.slice(0,10) === _day, _stamp+' for a dose on '+_day);
     check('  …and the cache carries it without waiting for a refetch',
       _row().logged_at === _stamp, String(_row().logged_at));
 
@@ -7011,6 +7015,53 @@ console.log('\n── The price of an injection ──────────�
       return JSON.stringify(G._tcApplyFloor(a,0))===JSON.stringify(a);
     })());
 
+    // ── A WEEKLY CADENCE STARTS WHEN THE PLAN STARTS ─────────────────────────
+    // Henrik, 2026-09-17: "Why would first testosterone injection happen next week if
+    // protocol starts today?" The weekday cadences named their days literally — Mon, and
+    // Mon/Thu — so a plan beginning on a Wednesday did nothing for five days. The model
+    // was honest about it (it simulated the later start too), but the days are lost, and
+    // they are the worst days to lose: the LOADING DOSE rides on the first injection.
+    check('a weekly plan injects on its own start day, whatever weekday that is',
+      (function(){
+        return ['2026-09-16','2026-09-17','2026-09-19','2026-09-20'].every(function(sd){
+          const r=G.tcSolveTransition({history:_fh,incomingId:'enanthate',startDate:sd,
+            targetPmol:1500,concMgPerMl:250,stepMl:0.1,minMl:0.2,maxInjPerWeek:2,weeks:13});
+          if(!r||!r.best) return false;
+          const ev=(r.best.events||[]).filter(e=>e.compId==='enanthate')
+                    .map(e=>e.date).sort();
+          return ev.length && ev[0]===sd;
+        });
+      })());
+    check('  …and the loading dose rides that first day rather than waiting for one',
+      (function(){
+        const r=G.tcSolveTransition({history:_fh,incomingId:'enanthate',
+          startDate:'2026-09-16',targetPmol:1500,concMgPerMl:250,stepMl:0.1,minMl:0.2,
+          maxInjPerWeek:2,weeks:13});
+        return !r.loading || r.loading.date==='2026-09-16';
+      })());
+    // ⚠️ THE SPACING INSIDE THE WEEK IS PRESERVED, NOT JUST THE FIRST DAY. Mon/Thu is
+    // three days then four; rotated onto any start day it must stay three then four, or
+    // the cadence the solver ranked is not the cadence the user gets.
+    check('  …with a two-a-week cadence keeping its 3/4-day spacing wherever it lands',
+      (function(){
+        for(const sd of ['2026-09-16','2026-09-18','2026-09-20']){
+          const c=G._tcAnchorCadence({key:'2xwk',label:'Twice weekly (Mon/Thu)',
+                                      days:[1,4],perWeek:2}, sd);
+          const gaps=[(c.days[1]-c.days[0]+7)%7, (c.days[0]-c.days[1]+7)%7].sort();
+          if(gaps.join(',')!=='3,4') return false;
+          if(c.days.indexOf(new Date(sd+'T12:00:00').getDay())<0) return false;
+        }
+        return true;
+      })());
+    check('  …and the label names the days it actually uses',
+      /\(Wed\)/.test(G._tcAnchorCadence({key:'1xwk',label:'Once weekly (Mon)',days:[1],
+                                          perWeek:1},'2026-09-16').label));
+    // Interval cadences already stepped from the start date and must be left alone.
+    check('  …while an interval cadence is untouched', (function(){
+      const c={key:'e2d',label:'Every 2 days',freqVal:2,freqUnit:'days',perWeek:3.5};
+      return G._tcAnchorCadence(c,'2026-09-16')===c;
+    })());
+
     G._tcBwEntries=_bwS; G._tcp.measuredFT=_ftS; G._tcp.shbg=_shS;
     G._tcp.totalT=_ttS; G._tcp.currentDoseMgWk=_dwS;
   }
@@ -7469,11 +7520,21 @@ console.log('\n── The loading dose ─────────────�
         L.peakOver+'% settled vs '+L.peakOverWithout+'% unloaded');
     });
 
-    // ⚠️ AND THE COST IS STATED, NOT BURIED. A solver that spends a bigger peak on the
-    // user's behalf and does not say so is worse than one that refuses.
-    check('  …and the note says what the fast arrival costs in peak',
-      (r22.notes||[]).some(n=>/while the depot fills/.test(n)),
-      (r22.notes||[]).filter(n=>/Loading dose/.test(n)).join(' | ').slice(0,200));
+    // ⚠️ AND THE COST IS STATED WHEN THERE IS ONE — AND NOT CLAIMED WHEN THERE IS NOT.
+    // A solver that spends a bigger peak on the user's behalf without saying so is worse
+    // than one that refuses; a solver that warns about a transient it did not create is
+    // noise that teaches people to ignore the warning. Asserted BOTH ways, because a
+    // one-way check goes quietly vacuous the moment a fixture stops producing a
+    // transient — which is exactly what anchoring the cadence to the start date did,
+    // since a plan that injects on day one never has to climb.
+    [[r14,1400],[r22,2200]].forEach(function(pair){
+      const r=pair[0], L=r.loading; if(!L) return;
+      const claims=(r.notes||[]).some(n=>/while the depot fills/.test(n));
+      const costs=(L.raisePeakOver!=null && L.raisePeakOver>L.peakOver+0.5);
+      check('  …stating the peak cost at '+pair[1]+' exactly when there is one',
+        claims===costs,
+        'raise '+L.raisePeakOver+'% vs settled '+L.peakOver+'% — note says cost: '+claims);
+    });
 
     // ⚠️ A WIDENING ONLY — IT MAY NEVER REFUSE WHAT THE OLD SINGLE CEILING ALLOWED.
     // The multiplier is applied to (1 + settled ceiling), so for a flat ester whose

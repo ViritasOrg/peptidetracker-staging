@@ -2984,6 +2984,43 @@ var _TC_CADENCES = [
   {key:'1xwk', label:'Once weekly (Mon)',       days:[1],                   perWeek:1}
 ];
 
+// ⚠️ A WEEKLY CADENCE STARTS WHEN THE PLAN STARTS, NOT ON A MONDAY.
+// Henrik, 2026-09-17: "Why would first testosterone injection happen next week if
+// protocol starts today?"
+//
+// Because the weekday cadences above named their days literally — Mon, and Mon/Thu —
+// and _tcSolveDates walks forward from the start date taking the first match. A plan
+// beginning on a Wednesday therefore did nothing for five days. The interval cadences
+// never had this: they step from the start date, which is why it only ever bit the
+// weekly options.
+//
+// The model was at least honest about it — it simulated the first dose on that later
+// day too, so the curve was right — but the days are still lost, and they are the worst
+// days to lose: the LOADING DOSE rides on the first injection. A front-load exists to
+// close the gap in days rather than weeks, and it was sitting in the vial for most of a
+// half-life before the plan opened.
+//
+// So the weekday set is rotated onto the start day: once weekly injects on the start
+// day and every seventh day after, twice weekly on the start day and ~3.5 days later.
+// Same cadence, same spacing, same solve — it just no longer waits for a Monday. The
+// label follows, because "Once weekly (Mon)" on a Wednesday plan is the kind of caption
+// that sends someone hunting for a bug that is not there.
+var _TC_DAY_NAMES=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function _tcAnchorCadence(cad, startDate){
+  if(!cad||!cad.days||!cad.days.length||!startDate) return cad;
+  var d=new Date(startDate+'T12:00:00');
+  if(isNaN(d.getTime())) return cad;
+  // Rotate by the gap between the cadence's own first day and the start weekday, so the
+  // SPACING between days is preserved exactly — Mon/Thu is 3 then 4 days apart, and it
+  // stays 3 then 4 wherever it lands.
+  var shift=((d.getDay()-cad.days[0])%7+7)%7;
+  if(!shift) return cad;
+  var days=cad.days.map(function(x){ return (x+shift)%7; }).sort(function(a,b){return a-b;});
+  var named=days.map(function(x){ return _TC_DAY_NAMES[x]; }).join('/');
+  return Object.assign({}, cad, {days:days,
+    label:cad.label.replace(/\([^)]*\)/, '('+named+')')});
+}
+
 function _tcSolveDayKey(d){
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
@@ -4389,7 +4426,8 @@ function tcSolveTransition(opts){
   };
   if(!ctx.incomingId||!ctx.startDate||!(ctx.targetPmol>0)) return null;
 
-  var cands=_TC_CADENCES.filter(function(c){ return !opts.cadenceKey||c.key===opts.cadenceKey; });
+  var cands=_TC_CADENCES.filter(function(c){ return !opts.cadenceKey||c.key===opts.cadenceKey; })
+                        .map(function(c){ return _tcAnchorCadence(c, ctx.startDate); });
   // Two passes: a cheap one to rank the cadences, then a proper solve for the winner
   // only. Refining all four to convergence costs four times as long for three answers
   // that get thrown away.
