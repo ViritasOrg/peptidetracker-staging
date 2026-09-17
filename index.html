@@ -962,7 +962,7 @@ function saveAbandonedPush(stagingVer,runUrl,why){try{
   localStorage.setItem('proto-last-push',JSON.stringify(rec));
 }catch{}buildLastPushDropdown();}
 function buildLastPushDropdown(){const el=document.getElementById('push-to-prod-last');if(!el)return;let rec=null;try{rec=JSON.parse(localStorage.getItem('proto-last-push')||'null');}catch{}if(!rec){el.innerHTML='';return;}const COL={success:'#22c55e',failure:'#ef4444',skipped:'var(--muted2)',in_progress:'var(--accent)'};const LBL={success:'✓',failure:'✗',skipped:'—',in_progress:'…',queued:'·'};const _unk=rec.conclusion!=='success'&&rec.conclusion!=='failure';const icoCol=rec.conclusion==='success'?'#22c55e':(_unk?'#f59e0b':'#ef4444');const ico=rec.conclusion==='success'?'✓':(_unk?'?':'✗');const ago=_fmtAgo(new Date(rec.ts));const _verSummary=rec.stagingVer&&rec.prodVer?' · v'+rec.stagingVer+' → v'+rec.prodVer:rec.prodVer?' · v'+rec.prodVer+' on prod':rec.stagingVer?' · staged v'+rec.stagingVer:'';let det='<div style="display:flex;flex-direction:column;gap:3px;padding:6px 0">';(rec.steps||[]).forEach(s=>{const state=s.status==='completed'?s.conclusion:s.status;const col=COL[state]||'var(--muted2)';const lbl=LBL[state]||'·';const dim=state==='skipped'||state==='queued'||!state;det+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:${col};font-weight:700;width:10px;text-align:center;flex-shrink:0">${lbl}</span><span style="color:${dim?'var(--muted2)':'var(--fg)'}">${s.name}</span></div>`;});if(rec.stagingVer)det+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--muted2);font-weight:700;width:10px;text-align:center;flex-shrink:0">→</span><span style="color:var(--muted2)">Staged: v${rec.stagingVer}</span></div>`;if(rec.prodVer)det+=`<div style="display:flex;align-items:center;gap:8px"><span style="color:#22c55e;font-weight:700;width:10px;text-align:center;flex-shrink:0">✓</span><span style="color:var(--fg)">Prod: v${rec.prodVer}</span></div>`;if(rec.prUrl)det+=`<div style="margin-top:4px"><a href="${rec.prUrl}" target="_blank" style="color:var(--accent)">View PR →</a></div>`;else if(rec.runUrl&&rec.conclusion==='failure')det+=`<div style="margin-top:4px"><a href="${rec.runUrl}" target="_blank" style="color:#ef4444">View failure logs →</a></div>`;det+='</div>';const _lbl=rec.abandoned?('Last push: '+ago+' · stopped watching'+(rec.stagingVer?' at v'+rec.stagingVer:'')):('Last push: '+ago+_verSummary);
-el.innerHTML=`<details><summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;color:var(--muted2)"><span style="color:${icoCol};font-weight:700">${ico}</span><span>${_lbl}</span></summary>${det}</details><div id="push-to-prod-live" style="font-size:11px;color:var(--muted2);margin-top:4px"></div>`;
+el.innerHTML=`<details><summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;color:var(--muted2)"><span style="color:${icoCol};font-weight:700">${ico}</span><span id="push-to-prod-lbl">${_lbl}</span></summary>${det}</details><div id="push-to-prod-live" style="font-size:11px;color:var(--muted2);margin-top:4px"></div>`;
 _showLiveProdVersion();}
 // ⚠️ WHAT PROD IS RUNNING IS A FACT, NOT A MEMORY OF WATCHING IT CHANGE.
 // Everything above is a record of what this browser SAW while it was watching. Close
@@ -979,8 +979,31 @@ function _showLiveProdVersion(){var el=document.getElementById('push-to-prod-liv
       var staged=(typeof VERSION!=='undefined')?VERSION:null;
       el.innerHTML='<span style="color:#22c55e;font-weight:700">✓</span> Prod is running <b>v'+live+'</b>'
         +(staged?(' · staging is on <b>v'+staged+'</b>'):'');
+      _markSupersededPush(live);
     })
     .catch(function(){el.textContent='Could not reach prod to check its version.';});}
+// ⚠️ TWO LINES ON ONE CARD MUST NOT CLAIM DIFFERENT PROD VERSIONS.
+// Henrik, 2026-09-17: "One line claims last push was one day ago with prod 327, but the
+// line under is correctly showing prod being 330."
+//
+// Both lines were true of their own source and only one was true of prod. The summary's
+// "v1.797 → v1.327" is what this browser watched land a day ago; the line beneath it is
+// what prod answers right now. Prod had since moved to v1.330 through pushes nobody
+// here was watching — so the record was history being read as current state, the same
+// mistake as the unrecorded push above, one step further along.
+//
+// The record is not wrong and is not thrown away. But a stale "→ v1.327" on the
+// collapsed line reads as a claim about prod, so once we know it has been overtaken we
+// stop making it: the summary keeps what this push STAGED, and the prod version it put
+// there stays in the expanded detail where it is plainly history.
+function _markSupersededPush(live){
+  var lbl=document.getElementById('push-to-prod-lbl');if(!lbl||!live)return;
+  var rec=null;try{rec=JSON.parse(localStorage.getItem('proto-last-push')||'null');}catch(e){}
+  if(!rec||!rec.prodVer||rec.prodVer===live)return;
+  lbl.innerHTML='Last push: '+_fmtAgo(new Date(rec.ts))
+    +(rec.stagingVer?(' · staged v'+rec.stagingVer):'')
+    +' · <span style="color:#f59e0b">superseded</span>';
+}
 function pushAllPeptideToBackend(){const btn=document.getElementById('peptide-sync-btn');if(btn){btn.textContent='Syncing...';btn.disabled=true;}fetch(AGENT_URL+'/peptide-log',{headers:authHeaders()}).then(r=>r.json()).then(remote=>{const remoteDates=new Set(remote.map(e=>e.date));const keys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));let count=0;const promises=keys.map(key=>{const date=key.replace('proto-chk-','');if(remoteDates.has(date))return Promise.resolve();const doses=JSON.parse(localStorage.getItem(key)||'[]');if(!doses.length)return Promise.resolve();count++;return fetch(AGENT_URL+'/peptide-log',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date,doses})});});return Promise.all(promises).then(()=>count);}).then(count=>{if(btn){btn.textContent='Done — '+count+' synced';setTimeout(()=>{btn.textContent='Sync';btn.disabled=false;},2500);}localStorage.setItem('peptide_sync_done_fly','1');}).catch(e=>{if(btn){btn.textContent='Failed';btn.disabled=false;}});}
 async function pushMilestonesToBackend(){const colorMap=[['nebido','#c084fc'],['testoviron','#c084fc'],['trt','#c084fc'],['glow','#3b9eff'],['blood','#ff6b2b'],['panel','#ff6b2b'],['hgh','#3cffa0']];function _mc(name){const n=name.toLowerCase();for(const[kw,col]of colorMap)if(n.includes(kw))return col;return'#e8ff3c';}const milestones=MILESTONES.map(m=>{const d=m.date;const date=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');return{date,label:m.name,color:_mc(m.name),desc:m.desc||''};});try{const r=await fetch(AGENT_URL+'/stack-milestones/custom',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({milestones})});if(!r.ok)throw new Error('HTTP '+r.status);}catch(e){_logErr('pushMilestones',e);}}
 async function migrateLegacyData(){const btn=document.getElementById('s-migrate-btn');if(btn){btn.textContent='Fixing…';btn.disabled=true;}try{const r=await fetch(AGENT_URL+'/auth/migrate',{method:'POST',headers:authHeaders()});if(!r.ok)throw new Error('HTTP '+r.status);const res=await r.json();if(btn){btn.textContent='Fixed ('+res.total+')';setTimeout(()=>{btn.textContent='Fix old data';btn.disabled=false;},3000);}await syncPeptideLogFromAgent();loadSettings();}catch(e){if(btn){btn.textContent='Failed';btn.disabled=false;}}}

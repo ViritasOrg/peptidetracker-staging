@@ -17746,6 +17746,23 @@ console.log('\n── Deploy card: push status ───────────
     /function _showLiveProdVersion\(/.test(html)
     && /_showLiveProdVersion\(\);/.test(html)
     && /Prod is running/.test(html));
+
+  // ⚠️ AND THE TWO LINES MUST NOT DISAGREE ABOUT PROD.
+  // Henrik, 2026-09-17: "One line claims last push was one day ago with prod 327, but
+  // the line under is correctly showing prod being 330." The record said v1.797 →
+  // v1.327; the live fetch said v1.330. Both were true of their own source, only one
+  // was true of prod. Once the fresh read shows the recorded push has been overtaken,
+  // the collapsed line must stop printing that push's prod version as if it were the
+  // current one — it stays in the expanded detail, where it reads as history.
+  check('  …and a record prod has moved past is marked superseded, not shown as current',
+    /function _markSupersededPush\(/.test(html)
+    && /_markSupersededPush\(live\);/.test(html)
+    && /rec\.prodVer===live\)return;/.test(html)
+    && /id="push-to-prod-lbl"/.test(html));
+  // The mark has to reach the line the eye lands on — the collapsed summary — not just
+  // the detail rows inside the <details>.
+  check('  …on the collapsed summary line itself',
+    /<span id="push-to-prod-lbl">\$\{_lbl\}<\/span><\/summary>/.test(html));
 }
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
