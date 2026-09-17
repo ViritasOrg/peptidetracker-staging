@@ -1137,6 +1137,16 @@ async function trtSolveRun(scope,id){
 function trtSolveApply(scope,id,which){
   var st=_trtSolveSt(id), comp=_trtComp(scope,id);
   if(!st.result||!comp)return;
+  // ⚠️ REMEMBER WHICH VIAL THIS PLAN WAS SOLVED FOR.
+  // The doses below are milligrams, and milligrams only become a draw once you know the
+  // concentration. TRT_CAT's `conc` array is the list of strengths a compound is SOLD
+  // in, not a statement about the one in the fridge — so a millilitre figure derived
+  // from it is a guess. The solve already knows: the user picked a vial in the panel,
+  // and every dose it produced was snapped to whole 0.1 ml steps AT THAT STRENGTH.
+  // Storing it is what lets Today say "125 mg · 0.5 ml" and be right rather than
+  // plausible.
+  var _cmm=parseDec(st.conc)||_trtDefaultConc(id);
+  if(_cmm>0) comp.conc_mg_ml=_cmm;
   var pick=st.result.best;
   if(which!=null&&which!=='best'){
     var alt=(st.result.alternatives||[])[parseInt(which,10)];
@@ -2092,7 +2102,20 @@ function showTrtCard(id){
       myDoseHtml='<div style="background:'+dot+'15;border:1px solid '+dot+'30;border-radius:10px;padding:10px 14px;margin-bottom:12px;">'
         +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:'+dot+';margin-bottom:3px;">Your dose</div>'
         +'<div style="font-size:13px;color:var(--text);">'+_esc(label)
-        +(weeklyMg>0?(' · ~'+Math.round(weeklyMg)+' mg/week'):'')+'</div></div>';
+        +(weeklyMg>0?(' · ~'+Math.round(weeklyMg)+' mg/week'):'')+'</div>'
+        // ⚠️ NAME THE STRENGTH THE MILLILITRES ARE DERIVED FROM. Today shows a draw
+        // volume beside every mg figure, and a volume is only meaningful with the
+        // concentration behind it. Said once here rather than repeated on every row.
+        +(function(){
+           var cmm=parseDec(userComp.conc_mg_ml)
+                   ||((typeof _trtDefaultConc==='function')?_trtDefaultConc(id):0);
+           if(!(cmm>0))return '';
+           var stored=parseDec(userComp.conc_mg_ml)>0;
+           return '<div style="font-size:11px;color:var(--muted2);margin-top:4px">'
+             +(stored?'Solved for a ':'Draw volumes assume a ')+'<b>'+cmm+' mg/ml</b> vial'
+             +(stored?'.':' — apply a plan to set this from the vial you picked.')+'</div>';
+         })()
+        +'</div>';
   }
   var overlay=document.createElement('div');overlay.className='pcard-overlay';
   overlay.onclick=function(e){if(e.target===overlay)overlay.remove();};
