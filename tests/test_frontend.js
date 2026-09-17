@@ -17584,6 +17584,46 @@ console.log('\n── Enhanced dose: drawable injections ───────�
   G._COMPOUND_CATALOG=_catSave;
 }
 
+// ── THE DEPLOY CARD MUST NOT PRESENT AN OLD PUSH AS THE CURRENT STATE ────────
+// Henrik, 2026-09-17: "I pushed deploy to prod on b805 but when I check status it says
+// b797 last push to prod? If the 805 failed I would expect a different message."
+//
+// It had not failed. Prod went to v1.328 from staging v1.805 exactly as it should. The
+// UI stopped watching: pollPromoteStatus gave up after 100 attempts at 3s — five
+// minutes — while that promotion run took 8m28s, because the workflow's last step waits
+// for CI on the prod PR before merging it. On timeout it wrote NOTHING, so the record
+// still held the previous push and the card showed a 16-hour-old v1.797 → v1.327.
+console.log('\n── Deploy card: push status ───────────────────────────────');
+{
+  const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+  // ⚠️ THE WAIT IS BUDGETED IN TIME, AGAINST WHAT THE WORKFLOW TAKES. Counting attempts
+  // hid the deadline: "100" reads like patience and was five minutes. Asserted as a
+  // duration that comfortably exceeds the 8m28s run that exposed this.
+  check('the promote poller waits longer than the workflow takes', (function(){
+    const m=html.match(/_PROMOTE_WAIT_MS\s*=\s*(\d+)\s*\*\s*60\s*\*\s*1000/);
+    return !!m && parseInt(m[1],10)>=15;
+  })(), (html.match(/_PROMOTE_WAIT_MS\s*=\s*[^;]+/)||['not found'])[0]);
+  check('  …and gives up on elapsed time, not on a count of attempts',
+    /Date\.now\(\)-startedAt>_PROMOTE_WAIT_MS/.test(html) && !/attempt>100/.test(html));
+
+  // ⚠️ LOSING SIGHT OF A PUSH IS A THIRD OUTCOME AND MUST BE RECORDED AS ONE. Silence is
+  // indistinguishable from "nothing happened", which is the reading that made him doubt
+  // a deploy that had worked.
+  check('  …recording a push it stopped watching rather than leaving the last one standing',
+    /function saveAbandonedPush\(/.test(html)
+    && (html.match(/saveAbandonedPush\(/g)||[]).length>=3);
+  check('  …and showing it as unknown, not as a failure',
+    /conclusion:'unknown'/.test(html) && /_unk\?'\?'/.test(html));
+
+  // ⚠️ AND WHAT PROD IS RUNNING IS A FACT, NOT A MEMORY OF HAVING WATCHED IT CHANGE.
+  // Everything else on the card is what this browser saw while it was watching; close
+  // the app and that freezes. One fetch answers the question the card is really asked.
+  check('  …while the live prod version is read fresh, independent of any record',
+    /function _showLiveProdVersion\(/.test(html)
+    && /_showLiveProdVersion\(\);/.test(html)
+    && /Prod is running/.test(html));
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
