@@ -1398,7 +1398,23 @@ function _renderTRTSolve(c,selData,scope,hideRun){
     // press to make any of it real was off-screen, and the wizard's own fixed "Next"
     // footer sat where a reader expects the primary action. Sticking it to the top of
     // the results keeps it in reach for the whole scroll without competing with Next.
-    h+='<div style="position:sticky;top:0;z-index:25;background:var(--bg);padding:10px 0 8px;margin-top:10px">';
+    //
+    // ⚠️ AND IN THE WIZARD, STICKY-TOP WAS STILL THE WRONG EDGE. Henrik, 2026-09-17:
+    // "When I hit generate the Next button is shown but the apply schedule button is
+    // hidden below, the whole Apply Schedule needs to be a overlay not a extension of
+    // the section." Sticky to the TOP of a scrolling body only comes into view once you
+    // have scrolled down to the results — and the results render below three form
+    // fields, so on first generate the button is off-screen while the wizard's own Next
+    // occupies the spot a reader reads as the primary action. It is a fixed bar above
+    // the footer now: an overlay, not the tail of the card.
+    //
+    // The EDITOR keeps sticky-top. It has no fixed footer to fight, the panel is not a
+    // full-screen scroller, and a bar bolted to the viewport there would hang over
+    // unrelated content.
+    var _wizBar=(scope==='wiz');
+    h+=_wizBar
+      ? '<div class="trt-apply-bar">'
+      : '<div style="position:sticky;top:0;z-index:25;background:var(--bg);padding:10px 0 8px;margin-top:10px">';
     h+=(function(){
           var cur=_trtCurrentScheduleLabel(c);
           if(!cur)return '';
@@ -1418,6 +1434,10 @@ function _renderTRTSolve(c,selData,scope,hideRun){
         })();
     h+='<button onclick="'+q('trtSolveApply',",'best'")+'" style="width:100%;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;padding:11px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Apply cadence + ramp</button>';
     h+='</div>';
+    // A fixed bar is out of the flow, so the end of the results would sit underneath it.
+    // The spacer is what the bar no longer occupies — without it the last note and the
+    // vial advice are unreadable however far you scroll.
+    if(_wizBar) h+='<div style="height:104px" aria-hidden="true"></div>';
     // ── THE LOADING DOSE IS A DIFFERENT INSTRUCTION AND GETS ITS OWN BOX ─────
     // Every other number on this card is "do this repeatedly". This one is "do this
     // once, first", and folding it into the ramp table is how it would be missed or —
