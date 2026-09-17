@@ -17445,6 +17445,94 @@ console.log('\n── Ancillary groups and tier-2 access ───────�
   G._userTier = _sv;
 }
 
+// ── A WEEKLY RATE MUST DIVIDE INTO DRAWABLE INJECTIONS ───────────────────────
+// Henrik, 2026-09-17: "The 400mg/week masteron dosed at e2d creates an impossible draw.
+// In dose creation wizard adjust weekly dose to fit the 0,1ml draw precision to
+// compensate for the scheduling."
+//
+// 400 mg/week every two days is 114.3 mg a shot, and at Masteron Propionate's 100 mg/ml
+// that is 1.143 ml — a number no 1 ml barrel can be drawn to. The rate was round and the
+// cadence turned it into one that is not; nothing downstream noticed, because the
+// generator faithfully wrote 114.3 mg and Today faithfully displayed it.
+console.log('\n── Enhanced dose: drawable injections ─────────────────────');
+{
+  const _catSave=G._COMPOUND_CATALOG;
+  G._COMPOUND_CATALOG=[
+    {id:'mast_p',name:'Masteron Propionate',pack:{type:'vial',conc_mg_ml:100,vol_ml:10}},
+    {id:'mast_e',name:'Masteron Enanthate', pack:{type:'vial',conc_mg_ml:200,vol_ml:10}},
+    {id:'dbol',  name:'Dianabol',           pack:{type:'tablet',mg_per_tab:50,tabs_per_pack:100}},
+    {id:'hcg',   name:'hCG'}
+  ];
+  const snap=(c)=>({changed:G._enhSnapDoseToDraw(c),
+                    perInj:parseFloat(G._enhDosePerInjection(c).dose)});
+
+  const his={id:'mast_p',dose:'400',unit:'mg/week',cadence:'interval',freqVal:2,freqUnit:'days'};
+  const r=snap(his);
+  check('his case: 400 mg/wk E2D becomes a drawable rate',
+    r.changed && his.dose==='385' && Math.abs(r.perInj-110)<1e-9,
+    his.dose+' mg/week = '+r.perInj+' mg = '+(r.perInj/100)+' ml');
+
+  // ⚠️ EVERY CADENCE, NOT JUST THE ONE HE HIT. The rate is divided by injections per
+  // week, so a weekday set breaks it exactly as an interval does.
+  check('  …and a weekday cadence is snapped the same way', (function(){
+    const c={id:'mast_p',dose:'400',unit:'mg/week',cadence:'days',days:[1,3,5]};
+    const q=snap(c);
+    const ml=q.perInj/100;
+    return q.changed && Math.abs(ml*10-Math.round(ml*10))<1e-9;
+  })());
+  check('  …a rate that already divides cleanly is left alone', (function(){
+    const c={id:'mast_e',dose:'400',unit:'mg/week',cadence:'days',days:[1,4]};
+    return snap(c).changed===false && c.dose==='400';
+  })());
+  check('  …and snapping is idempotent', (function(){
+    const c={id:'mast_p',dose:'400',unit:'mg/week',cadence:'interval',freqVal:2,freqUnit:'days'};
+    snap(c); const first=c.dose;
+    return snap(c).changed===false && c.dose===first;
+  })());
+
+  // ⚠️ NEVER ROUND A DOSE UP TO REACH THE FIRST STEP. 7 mg/week at E2D is 2 mg a shot;
+  // forcing that onto 0.1 ml would quintuple the week to 35 mg. That is an overdose
+  // applied to satisfy a convenience rule — the thing T-Calc's draw floor exists to
+  // prevent, in the other direction. The cadence or the vial is the answer, and both are
+  // the user's call.
+  check('  …but a dose too small to draw is never rounded UP', (function(){
+    const c={id:'mast_p',dose:'7',unit:'mg/week',cadence:'interval',freqVal:2,freqUnit:'days'};
+    return snap(c).changed===false && c.dose==='7';
+  })());
+  check('  …and it says so rather than leaving an impossible draw unexplained',
+    /under the .* ml a syringe can be drawn to/.test(
+      G._enhDrawLine({id:'mast_p',dose:'7',unit:'mg/week',cadence:'interval',
+                      freqVal:2,freqUnit:'days'})));
+
+  // Nothing without a vial has a draw to round: tablets and IU doses are untouched, and
+  // must not acquire a ml readout that means nothing.
+  check('  …while tablets and IU doses are left entirely alone', (function(){
+    const t={id:'dbol',dose:'33',unit:'mg/day',cadence:'interval',freqVal:1,freqUnit:'days'};
+    const h={id:'hcg',dose:'1000',unit:'IU/week',cadence:'days',days:[1,4]};
+    return snap(t).changed===false && t.dose==='33' && G._enhDrawLine(t)===''
+        && snap(h).changed===false && h.dose==='1000' && G._enhDrawLine(h)==='';
+  })());
+  check('  …and a drawable dose reports its volume',
+    /1\.1 ml/.test(G._enhDrawLine(his)) && /100 mg\/ml/.test(G._enhDrawLine(his)),
+    G._enhDrawLine(his).replace(/<[^>]*>/g,''));
+
+  // ⚠️ ON COMMIT, NOT ON EVERY KEYSTROKE. Snapping inside `oninput` would rewrite the
+  // field mid-type — "4" becomes something else before "00" is reached — which is the
+  // focus-stealing failure this file has been bitten by before.
+  {
+    const stk=fs.readFileSync(path.join(__dirname,'../tab-stack.js'),'utf8');
+    check('  …snapped on change, never on input', (function(){
+      const rows=stk.match(/oninput="(wiz|edit)SetEnhDose\([^>]*/g)||[];
+      return rows.length===2 && rows.every(x=>/onchange="_enhCommitDose\(/.test(x))
+          && !/oninput="[^"]*_enhCommitDose/.test(stk);
+    })());
+    // Parity: the wizard and the editor configure the same compound.
+    check('  …in both the wizard and the editor',
+      /_enhCommitDose\(..wiz/.test(stk) && /_enhCommitDose\(..edit/.test(stk));
+  }
+  G._COMPOUND_CATALOG=_catSave;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
