@@ -17657,6 +17657,66 @@ console.log('\n── Today: info button parity across tiers ──────�
   })());
 }
 
+// ── WHAT TO DRAW, NOT JUST WHAT TO GIVE ─────────────────────────────────────
+// Henrik, 2026-09-17: "Also add ml to draw and inject after the mg in the today view."
+//
+// A milligram figure is the prescription; a millilitre figure is the instruction. The
+// row said "125 mg" and left the arithmetic — at which strength? — to be done at the
+// fridge, every time, on the one screen that exists to be followed rather than read.
+console.log('\n── Today: draw volume beside the dose ─────────────────────');
+{
+  const _cat=G._COMPOUND_CATALOG, _us=G._userStacks, _ai=G._activeStackIndices;
+  G._COMPOUND_CATALOG=[
+    {id:'mast_p',name:'Masteron Propionate',pack:{type:'vial',conc_mg_ml:100,vol_ml:10}},
+    {id:'dbol',  name:'Dianabol',           pack:{type:'tablet',mg_per_tab:50,tabs_per_pack:100}}];
+  G._userStacks=[{trt:{compounds:[{id:'enanthate',dose:'125',unit:'mg',conc_mg_ml:250}]}}];
+  G._activeStackIndices=[0];
+
+  check('a TRT dose shows the draw at the vial its plan was solved for',
+    G._todayDrawMl({tier:'trt',compound_id:'enanthate',dose:'125',unit:'mg'})===0.5);
+  check('  …and an enhanced dose reads its vial from the catalogue',
+    G._todayDrawMl({tier:'enhanced',compound_id:'mast_p',dose:'120',unit:'mg'})===1.2);
+
+  // ⚠️ ONLY WHERE THE CONCENTRATION IS KNOWN, NEVER GUESSED. A volume that looks exact
+  // and is not is the worst kind of number on a dosing screen, so anything without a
+  // real strength behind it shows nothing at all.
+  check('  …while a tablet, an IU dose and an ml dose show no volume', (function(){
+    return G._todayDrawMl({tier:'enhanced',compound_id:'dbol',dose:'30',unit:'mg'})===null
+        && G._todayDrawMl({tier:'peptide',compound_id:'hgh',dose:'3',unit:'IU'})===null
+        && G._todayDrawMl({tier:'peptide',compound_id:'glow',dose:'0.09',unit:'ml'})===null;
+  })());
+  check('  …and a compound nobody has told us the strength of shows none either',
+    G._todayDrawMl({tier:'enhanced',compound_id:'nope',dose:'50',unit:'mg'})===null);
+
+  // ⚠️ THE VIAL IS REMEMBERED, NOT RE-GUESSED. TRT_CAT's `conc` array lists the
+  // strengths a compound is SOLD in; the one in the fridge is whichever the user picked
+  // in the solve, so trtSolveApply stores it. Without that, "125 mg · 0.5 ml" would be
+  // plausible rather than right.
+  {
+    const stk=fs.readFileSync(path.join(__dirname,'../tab-stack.js'),'utf8');
+    check('  …because applying a plan records the vial it was solved at',
+      /comp\.conc_mg_ml=_cmm/.test(stk));
+  }
+  // A compound whose plan predates that still shows a volume, from the same default the
+  // solver panel opens at — the strength those milligrams were worked out at — and the
+  // info card names the assumption rather than burying it in a division.
+  G._userStacks=[{trt:{compounds:[{id:'enanthate',dose:'125',unit:'mg'}]}}];
+  check('  …and one that predates it falls back to the solver default, not to silence',
+    G._todayDrawMl({tier:'trt',compound_id:'enanthate',dose:'125',unit:'mg'})
+      ===Math.round((125/G._trtDefaultConc('enanthate'))*100)/100);
+
+  // Both renderers put it on the row.
+  {
+    const td=fs.readFileSync(path.join(__dirname,'../tab-today.js'),'utf8');
+    // Count the CALL SITES, not every mention — `function _todayDrawMl(dose){` matches
+    // the same text and would let one renderer go without.
+    check('  …shown on the row in both Today renderers',
+      (td.match(/var _ml=_todayDrawMl\(dose\)/g)||[]).length===2
+      && (td.match(/' · '\+_ml\+' ml'/g)||[]).length===2);
+  }
+  G._COMPOUND_CATALOG=_cat; G._userStacks=_us; G._activeStackIndices=_ai;
+}
+
 console.log('\n── Deploy card: push status ───────────────────────────────');
 {
   const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
