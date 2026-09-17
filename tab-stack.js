@@ -2247,6 +2247,77 @@ function _enhHitsDay(c,d,cycleStart){ return _cadenceHitsDay(c,d,cycleStart); }
 // Calendar days between two consecutive injections of an enhanced compound. Interval
 // cadence states it outright; weekday cadence spreads n injections over 7 days.
 function _enhIntervalDays(c){ return _cadenceIntervalDays(c); }
+
+// ── A WEEKLY RATE HAS TO DIVIDE INTO DRAWABLE INJECTIONS ─────────────────────
+// Henrik, 2026-09-17: "The 400mg/week masteron dosed at e2d creates an impossible draw.
+// In dose creation wizard adjust weekly dose to fit the 0,1ml draw precision to
+// compensate for the scheduling."
+//
+// 400 mg/week every two days is 114.3 mg a shot, and at Masteron Propionate's 100 mg/ml
+// that is 1.143 ml — a number no 1 ml barrel can be drawn to. The rate was a round
+// figure and the cadence turned it into one that is not; nothing downstream noticed,
+// because the generator faithfully wrote 114.3 mg and Today faithfully displayed it.
+//
+// The fix is at the source: the WEEKLY figure is adjusted so the per-injection volume
+// lands on a whole 0.1 ml step. 400 mg/week at E2D becomes 385 — 110 mg a shot, 1.1 ml
+// — which is a dose someone can actually give. It is the same rule the T-Calc solver
+// already works to; this is the hand-entered path finally honouring it.
+//
+// ⚠️ ON COMMIT, NOT ON EVERY KEYSTROKE. Snapping inside `oninput` would rewrite the
+// field mid-type — "4" becomes something else before "00" is reached — which is the
+// focus-stealing failure this file has been bitten by before. It runs on change (blur)
+// and whenever the cadence or unit moves the arithmetic underneath it.
+function _enhConcMgPerMl(id){
+  var cat=(typeof _COMPOUND_CATALOG!=='undefined'&&_COMPOUND_CATALOG&&_COMPOUND_CATALOG.length)
+    ? _COMPOUND_CATALOG : ((typeof ENHANCEMENT_COMPOUNDS!=='undefined'&&ENHANCEMENT_COMPOUNDS)||[]);
+  var e=cat.find(function(x){return x&&x.id===id;});
+  var pk=e&&e.pack;
+  // Tablets have no draw to round; only a vial has a concentration.
+  return (pk&&pk.type==='vial'&&pk.conc_mg_ml>0)?pk.conc_mg_ml:0;
+}
+// What one injection of this compound actually is, in mg and ml. Returns null when the
+// question does not apply — a tablet, an IU dose, a dose already given in ml.
+function _enhDrawOf(c){
+  if(!c)return null;
+  var conc=_enhConcMgPerMl(c.id);
+  if(!(conc>0))return null;
+  var unit=String(c.unit||'');
+  if(unit.split('/')[0]!=='mg')return null;      // IU, ml and % are not this rule's business
+  var pd=_enhDosePerInjection(c);
+  var mg=parseDec(pd&&pd.dose);
+  if(!(mg>0))return null;
+  return {mg:mg, ml:mg/conc, conc:conc, stepMg:conc*_TC_DRAW_STEP_ML};
+}
+// The draw step is the syringe's, not this tier's — 0.1 ml, the same figure T-Calc
+// solves to and for the same reason: a 1 ml barrel cannot be read finer.
+var _TC_DRAW_STEP_ML=0.1;
+// Adjust the stored RATE so the per-injection draw is a whole step. Returns true when it
+// changed something, so a caller can re-render and say so.
+function _enhSnapDoseToDraw(c){
+  var d=_enhDrawOf(c);
+  if(!d||!(d.stepMg>0))return false;
+  // ⚠️ NEVER ROUND A DOSE UP TO REACH THE FIRST STEP. A dose whose injection is under
+  // half a step cannot be snapped without inflating it — 7 mg/week at E2D is 2 mg a
+  // shot, and forcing that to 0.1 ml would quintuple the week to 35 mg. That is an
+  // overdose applied to satisfy a convenience rule, which is the one thing this must
+  // never cause; T-Calc's draw floor carries the same rule in the other direction. The
+  // answer there is a less frequent cadence or a weaker vial, both of which are the
+  // user's call, so the dose is left exactly as entered and the draw line says why.
+  var steps=Math.round(d.mg/d.stepMg);
+  if(steps<1)return false;
+  var wantMg=steps*d.stepMg;
+  if(Math.abs(wantMg-d.mg)<1e-9)return false;    // already drawable
+  var unit=String(c.unit||''), slash=unit.indexOf('/');
+  if(slash<0)return false;
+  var per=unit.slice(slash+1).toLowerCase();
+  var periodDays=(per==='week')?7:(per==='eod')?2:1;
+  var iv=_enhIntervalDays(c);
+  if(!(iv>0))return false;
+  // The inverse of _enhDosePerInjection: rate = perInjection x period / interval.
+  var rate=wantMg*periodDays/iv;
+  c.dose=String(Math.round(rate*10)/10);
+  return true;
+}
 // A configured enhanced dose is a RATE ("350 mg/week"), not the amount in the syringe.
 // An injection record stores an amount, so the rate has to be converted before it is
 // written.
@@ -3659,7 +3730,35 @@ function editToggleEnhancedCompound(id){
   renderStackEditor();
 }
 function editSetEnhDose(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.dose=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(v||0),c.unit);}}
-function editSetEnhUnit(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
+function editSetEnhUnit(id,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.unit=v;_enhCommitDose('edit',id);}
+// Commit handler for both surfaces: snap the rate to a drawable injection, then
+// re-render so the field shows what was stored and the draw line agrees with it.
+function _enhCommitDose(scope,id){
+  var c=(scope==='wiz')
+    ? (_wiz.enhanced.compounds||[]).find(function(x){return x.id===id;})
+    : (((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;}));
+  if(!c)return;
+  if(_enhSnapDoseToDraw(c)) _trtRerender(scope);
+}
+// "1.1 ml at 100 mg/ml" under the dose, so the adjustment is legible rather than a
+// number that silently changed. Nothing is shown for a tablet or an IU dose.
+function _enhDrawLine(c){
+  var d=_enhDrawOf(c);
+  if(!d)return '';
+  var ml=Math.round(d.ml*1000)/1000;
+  var mg=Math.round(d.mg*10)/10;
+  if(d.mg<d.stepMg-1e-9){
+    // Too small to draw, and not something to fix by giving more.
+    return '<div style="font-size:11px;color:#f59e0b;line-height:1.5;margin:-2px 0 8px">'
+      +'<b>'+mg+' mg</b> per injection is <b>'+ml+' ml</b> at '+d.conc+' mg/ml — under the '
+      +_TC_DRAW_STEP_ML+' ml a syringe can be drawn to. Inject less often, or use a weaker '
+      +'vial; the dose has been left as you entered it rather than rounded up.</div>';
+  }
+  return '<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin:-2px 0 8px">'
+    +'<b>'+mg+' mg</b> per injection — <b>'+ml+' ml</b> at '
+    +d.conc+' mg/ml, on the 0.1 ml a syringe can be drawn to.</div>';
+}
+
 function editSetEnhDoseSlot(id,slot,v){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c['dose_'+_slotKey(slot)]=v;var el=document.getElementById('enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,_enhSplitTotal(c),c.unit);}}
 // Toggle one intra-day slot for a split enhanced compound. Mirrors editToggleTime in
 // the peptide tier, including the guard that the last remaining slot cannot be removed.
@@ -3671,30 +3770,34 @@ function editSetEnhCadence(id,mode){
   if(!c)return;
   c.cadence=(mode==='interval')?'interval':'days';
   if(c.cadence==='interval'&&!(parseInt(c.freqVal,10)>0)){c.freqVal=1;c.freqUnit=c.freqUnit||'days';}
+  // The rate did not move but the injections did, so the draw has to be re-checked.
+  _enhSnapDoseToDraw(c);
   _collectEditInputs();renderStackEditor();
 }
 function editSetEnhFreqVal(id,v){
   var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;});
-  if(c)c.freqVal=Math.max(1,parseInt(v,10)||1);
+  if(!c)return;c.freqVal=Math.max(1,parseInt(v,10)||1);_enhSnapDoseToDraw(c);
 }
 function editSetEnhFreqUnit(id,v){
   var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(x){return x.id===id;});
-  if(!c)return;c.freqUnit=(v==='weeks')?'weeks':'days';_collectEditInputs();renderStackEditor();
+  if(!c)return;c.freqUnit=(v==='weeks')?'weeks':'days';_enhSnapDoseToDraw(c);
+  _collectEditInputs();renderStackEditor();
 }
 function wizSetEnhCadence(id,mode){
   var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
   if(!c)return;
   c.cadence=(mode==='interval')?'interval':'days';
   if(c.cadence==='interval'&&!(parseInt(c.freqVal,10)>0)){c.freqVal=1;c.freqUnit=c.freqUnit||'days';}
+  _enhSnapDoseToDraw(c);
   wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 function wizSetEnhFreqVal(id,v){
   var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
-  if(c)c.freqVal=Math.max(1,parseInt(v,10)||1);
+  if(!c)return;c.freqVal=Math.max(1,parseInt(v,10)||1);_enhSnapDoseToDraw(c);
 }
 function wizSetEnhFreqUnit(id,v){
   var c=((_wiz.enhanced&&_wiz.enhanced.compounds)||[]).find(function(x){return x.id===id;});
-  if(!c)return;c.freqUnit=(v==='weeks')?'weeks':'days';
+  if(!c)return;c.freqUnit=(v==='weeks')?'weeks':'days';_enhSnapDoseToDraw(c);
   wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 function editToggleEnhTime(id,t){
@@ -3716,7 +3819,7 @@ function wizToggleEnhTime(id,t){
   wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 function editSetEnhAmPm(id,on){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.amPm=!!on;_collectEditInputs();renderStackEditor();}
-function editSetEnhDays(id,di){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});renderStackEditor();}
+function editSetEnhDays(id,di){var c=((_editBuf.enhanced&&_editBuf.enhanced.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});_enhSnapDoseToDraw(c);renderStackEditor();}
 // Why an enhanced testosterone entry generates no doses: T-Calc schedules testosterone
 // (rule 2026-08-14). Empty string for everything that is not testosterone — the rest of
 // the Enhanced tier is generated from here exactly as before.
@@ -3862,7 +3965,8 @@ function _renderEditEnhanced(enh,opts){
           html+=_renderSlotTimingHint(c.id,_eTimes);
           html+=_renderEnhCadence(c,selData,'edit');
         }else{
-          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="editSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="editSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="editSetEnhDose(\''+c.id+'\',this.value)" onchange="_enhCommitDose(\'edit\',\''+c.id+'\')" placeholder="0"><select class="unit-sel" onchange="editSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+          html+=_enhDrawLine(selData);
           html+=_renderEnhCadence(c,selData,'edit');
         }
         html+='<div id="enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,_amPm?_enhSplitTotal(selData):parseDec(selData.dose||0),selData.unit)+'</div>';
@@ -4826,7 +4930,8 @@ function wizStepEnhanced(body,footer){
           html+=_renderSlotTimingHint(c.id,_wTimes);
           html+=_renderEnhCadence(c,selData,'wiz');
         }else{
-          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetEnhDose(\''+c.id+'\',this.value)" placeholder="0"><select class="unit-sel" onchange="wizSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+          html+='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+String(selData.dose||'')+'" oninput="wizSetEnhDose(\''+c.id+'\',this.value)" onchange="_enhCommitDose(\'wiz\',\''+c.id+'\')" placeholder="0"><select class="unit-sel" onchange="wizSetEnhUnit(\''+c.id+'\',this.value)">'+['mg/week','mg/day','mg/EOD','IU/day','IU/week','mg','ml','%'].map(function(u){return'<option'+(u===(selData.unit||'mg/week')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div></div>';
+          html+=_enhDrawLine(selData);
           html+=_renderEnhCadence(c,selData,'wiz');
         }
         html+='<div id="wiz-enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,c.amPm?_enhSplitTotal(selData):parseDec(selData.dose||0),selData.unit)+'</div>';
@@ -4861,9 +4966,9 @@ function wizToggleEnhancedCompound(id){
   wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));
 }
 function wizSetEnhDose(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c.dose=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,parseDec(v||0),c.unit);}}
-function wizSetEnhUnit(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(c)c.unit=v;}
+function wizSetEnhUnit(id,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c.unit=v;_enhCommitDose('wiz',id);}
 function wizSetEnhDoseSlot(id,slot,v){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;c['dose_'+_slotKey(slot)]=v;var el=document.getElementById('wiz-enh-guide-'+id);if(el){var cat=(ENHANCEMENT_COMPOUNDS||[]).find(function(x){return x.id===id;});el.innerHTML=_renderEnhancedGuide(cat,_enhSplitTotal(c),c.unit);}}
-function wizSetEnhDays(id,di){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
+function wizSetEnhDays(id,di){var c=(_wiz.enhanced.compounds||[]).find(function(c){return c.id===id;});if(!c)return;if(!c.days)c.days=[];var idx=c.days.indexOf(di);if(idx!==-1){if(c.days.length>1)c.days.splice(idx,1);}else{c.days.push(di);}c.days.sort(function(a,b){return a-b;});_enhSnapDoseToDraw(c);wizStepEnhanced(document.getElementById('wiz-body'),document.getElementById('wiz-footer'));}
 // Every TRT compound this protocol will actually dose, whichever way the tier was
 // filled in. Reported 2026-08-01: the Validate and Review steps read only the classic
 // _wiz.trt tier, so a protocol whose testosterone came from the T-Calc planner listed
