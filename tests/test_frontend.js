@@ -7548,6 +7548,57 @@ console.log('\n── The loading dose ─────────────�
       return G._TC_RAISE_MULT>1;
     })(), 'mult='+G._TC_RAISE_MULT);
 
+    // ── A MEAN IS NOT A HOLD ─────────────────────────────────────────────────
+    // Henrik, 2026-09-17: "instead of more frequent smaller doses it keeps bigger
+    // infrequent ones creating a curve oscillating between 2200 and 1300."
+    //
+    // Measured on his record with both labs at a 1600 target, once-weekly enanthate
+    // averaged 20 pmol/L from target and WON — while swinging 861 to 2785 inside each
+    // week. Daily-dithered held 1406-1898 and was ranked second. Two things put it
+    // there: the admissibility gate asked only where the weekly MEANS sit, and the
+    // fallback used when nothing is admissible ranked on meanErr, an average that lets
+    // the peaks cancel the troughs and directly contradicts the sort above it.
+    //
+    // Pinned as an outcome — how far the level actually travels — because a test on the
+    // constant would pass while the curve still sawtoothed.
+    check('the winner holds the target rather than averaging it', (function(){
+      const _2labs=G._tcBwEntries;
+      G._tcBwEntries=[{date:'2026-06-26',free_t:'217',total_t:'17',shbg:'45',unit:'pmol/L'},
+                      {date:'2026-09-15',free_t:'634',total_t:'43.3',shbg:'39',unit:'pmol/L'}];
+      const r=_raise(1600);
+      G._tcBwEntries=_2labs;
+      if(!r||!r.best) return false;
+      const w=(r.best.weekly||[]).slice(r.best.settleWeeks||0);
+      const lo=Math.min(...w.map(x=>x.trough)), hi=Math.max(...w.map(x=>x.peak));
+      // The sawtooth this replaced ran 861-2785 on exactly these inputs.
+      return lo>=1600*0.75 && hi<=1600*1.25;
+    })());
+    // ⚠️ AND NO ALTERNATIVE MAY HOLD IT BETTER THAN THE WINNER. This is the invariant
+    // both bugs broke: the gate and the fallback could each promote a plan that every
+    // ranked key below them says is worse.
+    check('  …and nothing ranked below it holds the target more tightly', (function(){
+      const r=_raise(1400);
+      if(!r||!r.best) return false;
+      const sw=(x)=>(x.worstSettled==null)?x.worst:x.worstSettled;
+      // The tie band is the sort's own; inside it the other keys legitimately decide.
+      return (r.alternatives||[]).every(a=>sw(a)>=sw(r.best)-0.03);
+    })());
+
+    // ⚠️ AND ARRIVING SOONER JUSTIFIES A FRONT-LOAD ON ITS OWN. missOf averages over
+    // every week, so a front-load that takes the opening week from 1011 to 1357 and
+    // pulls arrival from week 2 to week 1 scored a 7% gain and was thrown out for not
+    // clearing 15%. Ten settled weeks that were always going to be fine drown the one
+    // week the front-load exists to fix.
+    check('  …with a front-load that buys a week, even when the 12-week mean barely moves',
+      (function(){
+        const r=_raise(1400);
+        if(!r||!r.loading) return false;
+        return r.loading.weeksWith>0 && r.loading.weeksWith<r.loading.weeksWithout
+            && r.loading.missWith<=r.loading.missWithout;
+      })(), (function(){const r=_raise(1400);return r.loading
+        ? ('w'+r.loading.weeksWith+' vs w'+r.loading.weeksWithout+', miss '
+           +r.loading.missWith+' vs '+r.loading.missWithout) : 'no loading dose';})());
+
     G._tcBwEntries=_bwSave; G._tcp.measuredFT=_ftSave; G._tcp.shbg=_shSave;
     G._tcp.totalT=_ttSave; G._tcp.currentDoseMgWk=_dwSave; G._tcp.birthYear=_bySave;
   }

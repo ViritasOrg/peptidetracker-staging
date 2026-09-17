@@ -3293,6 +3293,19 @@ var _TC_INJ_COST = 0.01;
 // that actually holds the level. 6% of target, matching the band the suite asserts a
 // winner must hold.
 var _TC_HOLD_TOL = 0.06;
+// ⚠️ HOW FAR THE LEVEL MAY TRAVEL BETWEEN INJECTIONS AND STILL COUNT AS HOLDING.
+// _TC_HOLD_TOL above is about where the level SITS — a band on the weekly means. This is
+// the other half of the same claim: how far it may swing around them. Measured as
+// worstSettled, the furthest the level ever gets from target once settled, peaks and
+// troughs included.
+//
+// 0.30 is a floor under the word "holding", not a precision target. On his record at
+// 1600 the candidates run 19% (daily-dithered), 24% (every 2 days), 26% (every 3 days),
+// 40% (twice weekly) and 74% (once weekly) — so it admits every cadence that keeps him
+// inside roughly 1100-2100 and refuses the two that do not. A tighter number would start
+// excluding reasonable schedules on long esters; a looser one would let the 861-2785
+// sawtooth back in on the strength of its average.
+var _TC_HOLD_SWING = 0.30;
 // THE SMALLEST DRAW WORTH SCHEDULING, in ml. Henrik, 2026-09-16: "Also set min injection
 // to 0,1ml."
 //
@@ -4318,7 +4331,22 @@ function _tcSolveLoadingDose(ctx, best){
   }
   if(!(bestL>0)) return null;
   // Worth a bigger needle? A front-load that shaves a few percent off the climb is not.
-  if((zeroMiss-bestMiss) < zeroMiss*_TC_LOAD_MIN_GAIN) return null;
+  //
+  // ⚠️ BUT ARRIVING SOONER IS WORTH IT ON ITS OWN. This tested the mean miss alone, and
+  // missOf averages over every week of the plan — so a front-load that takes the opening
+  // week from 1011 to 1357 against a 1400 target, and brings arrival forward from week 2
+  // to week 1, scores a 7% improvement and was thrown out for not clearing 15%. Ten
+  // settled weeks that were always going to be fine drown the one week the front-load
+  // exists to fix. It is the same dilution that made the tie-break above prefer a plan
+  // arriving a week later, measured on the same number.
+  //
+  // So either test may carry it: a materially better fit across the plan, OR getting
+  // there sooner without holding the target worse. The second clause is what stops that
+  // becoming a licence — a front-load may buy arrival, never a worse plan.
+  var _arrivesSooner = reach(bestPlan)>0
+    && (reach(zero)===0 || reach(bestPlan)<reach(zero))
+    && bestMiss<=zeroMiss;
+  if((zeroMiss-bestMiss) < zeroMiss*_TC_LOAD_MIN_GAIN && !_arrivesSooner) return null;
 
   return {loading:{mg:Math.round(bestL*10)/10,
                    ml:Math.round((bestL/ctx.concMgPerMl)*100)/100,
@@ -4585,6 +4613,34 @@ function tcSolveTransition(opts){
   // ripples ~14%, so ±7% before it is even off target), which does not gate the price,
   // it abolishes it. Holding the target is a statement about where the level SITS; the
   // swing around it is the separate thing the next key already ranks.
+  //
+  // ⚠️ AND A MEAN IS NOT A HOLD. Henrik, 2026-09-17: "instead of more frequent smaller
+  // doses it keeps bigger infrequent ones creating a curve oscillating between 2200 and
+  // 1300."
+  //
+  // The note above is right that RIPPLE must not be folded into the closeness measure —
+  // that is what made every interval longer than daily inadmissible by construction. It
+  // was wrong to conclude that ripple should play no part in the gate at all. Measured
+  // on his own record at a 1600 target, once-weekly enanthate scored a mean error of 20
+  // pmol/L and was the ONLY admissible candidate, so it won outright — while swinging
+  // 861 to 2785 inside each week. Daily-dithered sat at 1406-1898 with a mean error of
+  // 88 and was ranked second, behind a plan that is off target by more than a third of
+  // its own value most of the time.
+  //
+  // When a gate admits exactly one candidate, that gate IS the ranking: worstSettled,
+  // ripple and the injection price below it never get consulted. So the gate has to mean
+  // what it says. Holding a target is two claims, not one — the level SITS there (the
+  // weekly means) and it STAYS there (the excursion around them) — and a weekly mean of
+  // 1600 delivered by a 861-2785 sawtooth is not holding 1600 by any reading.
+  //
+  // The swing band is deliberately far wider than the mean band: it is not a second
+  // attempt at precision, it is a floor under what "holding" can be stretched to cover.
+  // Ripple is still ranked, not priced, below — this only stops a plan that abandons the
+  // target between injections from being promoted for having a tidy average.
+  //
+  // And it stays safe for esters where ripple is unavoidable: if NOTHING clears both
+  // halves the gate stops discriminating, exactly as it always has, and the old ranking
+  // picks the least-bad option.
   var _admits=function(r){
     var wk=r.weekly||[], lo=Infinity, hi=0;
     for(var i=(r.settleWeeks||0); i<wk.length; i++){
@@ -4592,7 +4648,9 @@ function tcSolveTransition(opts){
       if(wk[i].mean>hi) hi=wk[i].mean;
     }
     if(!isFinite(lo)||!(ctx.targetPmol>0)) return false;
-    return lo>=ctx.targetPmol*(1-_TC_HOLD_TOL) && hi<=ctx.targetPmol*(1+_TC_HOLD_TOL);
+    if(!(lo>=ctx.targetPmol*(1-_TC_HOLD_TOL) && hi<=ctx.targetPmol*(1+_TC_HOLD_TOL))) return false;
+    var sw=(r.worstSettled==null)?r.worst:r.worstSettled;
+    return !(sw>_TC_HOLD_SWING);
   };
   results.sort(function(a,b){
     var aOK=_admits(a), bOK=_admits(b);
@@ -4609,13 +4667,24 @@ function tcSolveTransition(opts){
     return perWeekOf(a)-perWeekOf(b);
   });
   var tol=ctx.targetPmol*0.10;
+  // ⚠️ THE FALLBACK MUST NOT CONTRADICT THE RANKING IT FALLS BACK FROM.
+  // This tracked the lowest meanErr and used it whenever nothing was admissible — and
+  // meanErr is an AVERAGE of the distance from target, so it forgives a sawtooth that
+  // spends equal time above and below. On his record at a 1600 target, once-weekly
+  // enanthate averaged 20 pmol/L out while swinging 861 to 2785, and won the fallback
+  // over a daily-dithered plan holding 1406-1898 that averaged 88 out. The sort directly
+  // above had already ranked them the other way round, on worstSettled — which is the
+  // same question meanErr asks, answered without letting the peaks cancel the troughs.
+  //
+  // So the least-bad option is the best-ranked one, not the one with the tidiest
+  // average. results is already sorted; the first candidate to survive refinement is it.
   var best=null, fallback=null;
   for(var ri=0; ri<results.length; ri++){
     var refined;
     if(results[ri].cadence&&(results[ri].cadence.variable||results[ri].cadence.dithered)){ 
       // Already solved at full iteration count; the fixed-cadence refiner cannot
       // express it and would silently collapse it back to one interval.
-      if(!fallback||results[ri].meanErr<fallback.meanErr) fallback=results[ri];
+      if(!fallback) fallback=results[ri];
       if(results[ri].meanErr<=tol&&_admits(results[ri])){ best=results[ri]; break; }
       continue;
     }
@@ -4625,7 +4694,7 @@ function tcSolveTransition(opts){
     // the cheap result rather than promoting an unusable one into the rankings.
     if(!refined||refined.degenerate) continue;
     results[ri]=refined;
-    if(!fallback||refined.meanErr<fallback.meanErr) fallback=refined;
+    if(!fallback) fallback=refined;
     // ⚠️ RE-CHECK ADMISSIBILITY HERE — THE SORT RANKED THE CHEAP SOLVE.
     // The ranking above runs on the 4-iteration pass; this loop re-solves the leaders
     // at 12 and REPLACES them. A candidate can therefore arrive at the front of the
