@@ -864,6 +864,46 @@ function trtSetDate(scope,id,which,val){
 // cadence, time of day, the transition window — stays where it is, because those are
 // not competing answers to the same question.
 var _TRT_PLAN_MODES=[['fixed','Fixed dose'],['ramp','Dose ramp'],['target','Target free T']];
+// ── DOSE RAMP IS HIDDEN, NOT DELETED ───────────────────────────────
+// Henrik, 2026-09-18: "I used free T target to create cycle but when I hit edit it is
+// using dose ramp. Remove dose ramp totally (hide in UI but leave the code and test to
+// not let it rot away".
+//
+// The switch offered three strategies but only two of them are things a user decides.
+// A ramp is what a target-T solve PRODUCES — trtSolveApply writes dose_phases — so
+// offering "Dose ramp" as a peer strategy meant a solved compound came back looking like
+// a hand-built one, because that is precisely what the derivation said it was:
+// dose_phases exist, therefore ramp. The comment on _trtPlanMode admitted it at the
+// time: "'target' cannot be recovered that way — an applied solve leaves a ramp behind
+// and is indistinguishable from a hand-built one."
+//
+// Hidden rather than removed, on his instruction and for a good reason: every phase
+// reader in the app — _phaseAt, _effectiveDoseAt, the generator, the weekly-span label —
+// still runs on dose_phases, and the ramp EDITOR is the only screen that can show what a
+// solve actually wrote. Deleting the branch would leave that data with no view onto it.
+// The branch stays live and under test, reachable through _renderTRTPlan's mode
+// override; only the chip is withheld.
+var _TRT_PLAN_HIDDEN={ramp:true};
+// Where a hidden mode's compounds are shown instead. A ramp is the shape of a solve, so
+// a stored 'ramp' reads as 'target'.
+var _TRT_PLAN_SUPERSEDED_BY={ramp:'target'};
+function _trtPlanModesVisible(){
+  return _TRT_PLAN_MODES.filter(function(m){return !_TRT_PLAN_HIDDEN[m[0]];});
+}
+// The mode as STORED, before any hidden-mode mapping. trtSetPlanMode compares against
+// this so that setting a hidden mode is still a real state change rather than a no-op
+// that writes nothing.
+function _trtPlanModeStored(c){
+  if(!c)return 'fixed';
+  var m=c.plan_mode;
+  for(var i=0;i<_TRT_PLAN_MODES.length;i++) if(_TRT_PLAN_MODES[i][0]===m) return m;
+  // ⚠️ THE FALLBACK FOLLOWS THE VISIBLE MODES. Anything saved before plan_mode existed
+  // is derived from its data, and with the ramp chip withheld the only thing that writes
+  // dose_phases is a solve — so phases now mean 'target', not 'ramp'. This is the half of
+  // the fix that reaches protocols ALREADY saved; stamping plan_mode in trtSolveApply
+  // only helps the ones solved from here on.
+  return (c.dose_phases&&c.dose_phases.length)?'target':'fixed';
+}
 // ⚠️ DERIVED FOR ANYTHING SAVED BEFORE THE SWITCH EXISTED. `plan_mode` is new, and every
 // compound already on the backend predates it. The ramp's on/off state has always been
 // "does dose_phases exist", so that is what an unset mode reads. Nothing saved changes
@@ -871,10 +911,8 @@ var _TRT_PLAN_MODES=[['fixed','Fixed dose'],['ramp','Dose ramp'],['target','Targ
 // 'target' cannot be recovered that way — an applied solve leaves a ramp behind and is
 // indistinguishable from a hand-built one — so it is only ever an explicit choice.
 function _trtPlanMode(c){
-  if(!c)return 'fixed';
-  var m=c.plan_mode;
-  for(var i=0;i<_TRT_PLAN_MODES.length;i++) if(_TRT_PLAN_MODES[i][0]===m) return m;
-  return (c.dose_phases&&c.dose_phases.length)?'ramp':'fixed';
+  var m=_trtPlanModeStored(c);
+  return _TRT_PLAN_HIDDEN[m]?(_TRT_PLAN_SUPERSEDED_BY[m]||'fixed'):m;
 }
 // ⚠️ SWITCHING MODE MUST NOT DESTROY THE OTHER MODE'S WORK. The cadence switch in this
 // file already carries that rule — "a user comparing the two and switching back would
@@ -891,7 +929,7 @@ function trtSetPlanMode(scope,id,mode){
   var known=false;
   for(var i=0;i<_TRT_PLAN_MODES.length;i++) if(_TRT_PLAN_MODES[i][0]===mode) known=true;
   if(!known) return;
-  if(_trtPlanMode(c)!==mode){
+  if(_trtPlanModeStored(c)!==mode){
     if(mode==='fixed'){
       if(c.dose_phases&&c.dose_phases.length){ c.ramp_stash=c.dose_phases; }
       delete c.dose_phases;
@@ -1246,6 +1284,12 @@ function trtSolveApply(scope,id,which){
   if(_cap>0) comp.max_inj_week=String(_cap);
   else delete comp.max_inj_week;
   comp.unit='mg';
+  // ⚠️ SAY WHICH STRATEGY WROTE THIS, RATHER THAN LEAVING IT TO BE GUESSED FROM THE DATA.
+  // Henrik, 2026-09-18: "I used free T target to create cycle but when I hit edit it is
+  // using dose ramp." An applied solve wrote dose_phases and nothing else, so reopening
+  // the protocol re-derived the strategy from the only evidence left — phases — and
+  // phases used to mean 'ramp'. The solve knows what it is; it should record it.
+  comp.plan_mode='target';
   // Keep the flat dose in step with the maintenance dose, so turning the ramp OFF
   // later lands on the held dose rather than whatever was in the box beforehand.
   var lastPh=phases[phases.length-1];
@@ -1587,12 +1631,14 @@ function _renderTRTSolve(c,selData,scope,hideRun){
 // The switch and whichever single editor it selects. `doseRow` is the flat Dose control,
 // passed in because the editor and the wizard bind it to different handlers — the same
 // reason _renderCadenceControl takes a handlers object.
-function _renderTRTPlan(c,selData,scope,doseRow){
+function _renderTRTPlan(c,selData,scope,doseRow,modeOverride){
   scope=(scope==='wiz')?'wiz':'edit';
-  var id=c.id, mode=_trtPlanMode(selData);
+  // modeOverride keeps the hidden ramp editor reachable — from a test, or from a future
+  // decision to offer it again — without putting a chip back on the panel.
+  var id=c.id, mode=modeOverride||_trtPlanMode(selData);
   var q=function(fn,args){return fn+'(\''+scope+'\',\''+id+'\''+(args||'')+')';};
   var h='<div class="cfg-row"><div class="cfg-lbl">Plan</div><div class="time-chips">'
-    +_TRT_PLAN_MODES.map(function(m){
+    +_trtPlanModesVisible().map(function(m){
         return '<div class="time-chip'+(mode===m[0]?' sel':'')+'" onclick="'
           +q('trtSetPlanMode',',\''+m[0]+'\'')+'">'+m[1]+'</div>';
       }).join('')

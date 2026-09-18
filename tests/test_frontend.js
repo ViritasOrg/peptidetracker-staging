@@ -6097,15 +6097,37 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     // The ramp editor and the solver moved out of the transition panel and behind the
     // switch, so the scope and parity checks follow them. The window stays where it is:
     // it is not a fourth strategy, it is when this compound runs.
+    // ⚠️ THE MODE IS FORCED, NOT INFERRED. 'ramp' is withheld from the chip row, so
+    // _trtPlanMode maps a stored ramp onto 'target' and the ramp editor would never
+    // render here again — the checks below would all pass by rendering nothing. The
+    // override is what keeps the hidden branch genuinely under test, which is the whole
+    // condition Henrik attached to hiding it: "leave the code and test to not let it rot
+    // away".
     const ePlan=(m)=>G._renderTRTPlan({id:'enanthate'},Object.assign({},comp,{plan_mode:m}),'edit',
-      '<div class="cfg-row"><div class="cfg-lbl">Dose</div><input oninput="editSetTRTDose()"></div>');
+      '<div class="cfg-row"><div class="cfg-lbl">Dose</div><input oninput="editSetTRTDose()"></div>',m);
     const wPlan=(m)=>G._renderTRTPlan({id:'enanthate'},Object.assign({},comp,{plan_mode:m}),'wiz',
-      '<div class="cfg-row"><div class="cfg-lbl">Dose</div><input oninput="wizSetTRTDose()"></div>');
-    check('the plan switch offers exactly the three strategies', (function(){
+      '<div class="cfg-row"><div class="cfg-lbl">Dose</div><input oninput="wizSetTRTDose()"></div>',m);
+    // ── DOSE RAMP IS HIDDEN, NOT DELETED ──────────────────────────
+    // Henrik, 2026-09-18: "I used free T target to create cycle but when I hit edit it is
+    // using dose ramp. Remove dose ramp totally (hide in UI but leave the code and test
+    // to not let it rot away".
+    //
+    // Only two of the three were ever things a user DECIDES. A ramp is what a target-T
+    // solve produces, so offering it as a peer strategy is what made a solved compound
+    // come back looking hand-built.
+    check('the plan switch offers the two strategies a user chooses', (function(){
       const h=ePlan('fixed');
-      return ['Fixed dose','Dose ramp','Target free T'].every(k=>h.includes(k))
-          && G._TRT_PLAN_MODES.length===3;
+      return h.includes('Fixed dose') && h.includes('Target free T')
+          && !h.includes('Dose ramp')
+          && G._trtPlanModesVisible().length===2;
     })());
+    // ⚠️ AND THE RAMP IS STILL THERE. Every phase reader in the app runs on
+    // dose_phases and this editor is the only screen that can show what a solve wrote;
+    // deleting the branch would leave that data with no view onto it. If this check ever
+    // fails, the code rotted away — which is the exact thing hiding it was meant to avoid.
+    check('  …with the ramp still implemented behind it',
+      G._TRT_PLAN_MODES.length===3 && G._TRT_PLAN_HIDDEN.ramp===true
+      && G._TRT_PLAN_SUPERSEDED_BY.ramp==='target');
     check('  …in both scopes, neither leaking the other\'s',
       /trtSetPlanMode\('edit'/.test(ePlan('fixed')) && !/'wiz'/.test(ePlan('fixed')) &&
       /trtSetPlanMode\('wiz'/.test(wPlan('fixed'))  && !/'edit'/.test(wPlan('fixed')));
@@ -6152,9 +6174,21 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     // unset mode must read. A protocol opened after this ships shows the strategy it was
     // already running, rather than silently reverting to a flat dose.
     check('a compound saved before the switch keeps the strategy it was running',
-      G._trtPlanMode({id:'x',dose:'100',dose_phases:[{w:0,d:'50',u:'mg'}]})==='ramp' &&
       G._trtPlanMode({id:'x',dose:'100'})==='fixed' &&
       G._trtPlanMode({id:'x',dose:'100',dose_phases:[],plan_mode:'target'})==='target');
+    // ⚠️ THIS IS THE HALF OF THE FIX THAT REACHES PROTOCOLS ALREADY SAVED. Stamping
+    // plan_mode in trtSolveApply only helps solves run from here on; his cycle was
+    // already on the backend carrying phases and nothing else, and phases used to derive
+    // to 'ramp'. With the chip withheld, the only thing that writes dose_phases is a
+    // solve — so phases mean 'target'.
+    check('  …and a solved compound with no plan_mode reads as Target free T, not a ramp',
+      G._trtPlanMode({id:'x',dose:'100',dose_phases:[{w:0,d:'50',u:'mg'}]})==='target',
+      G._trtPlanMode({id:'x',dose:'100',dose_phases:[{w:0,d:'50',u:'mg'}]}));
+    // A stored 'ramp' is shown where its data now lives, while the stored value itself is
+    // left alone — nothing saved is rewritten by opening it.
+    check('  …as does a compound that explicitly stored the hidden ramp mode',
+      G._trtPlanMode({id:'x',plan_mode:'ramp',dose_phases:[{w:0,d:'50',u:'mg'}]})==='target' &&
+      G._trtPlanModeStored({id:'x',plan_mode:'ramp',dose_phases:[{w:0,d:'50',u:'mg'}]})==='ramp');
 
     // ⚠️ SWITCHING MODE MUST NOT DESTROY THE OTHER MODE'S WORK — the rule the cadence
     // switch in this file already carries, and it matters more here: a ramp can be a
