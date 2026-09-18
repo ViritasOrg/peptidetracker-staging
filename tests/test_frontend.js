@@ -16050,6 +16050,56 @@ if(typeof G.caliperBF==='function'){
 if(typeof G._bcEntryDetail==='function'){
   check('entry detail: tape entry shows Neck', /Neck/.test(G._bcEntryDetail({method:'navy',neck:42,belly:94})));
   check('entry detail: caliper entry shows method label', /Jackson-Pollock 3-site/.test(G._bcEntryDetail({method:'jp3',skinfolds:{chest:10,abdomen:18,thigh:14}})));
+  // ⚠️ A NEW METHOD MUST NOT PRINT ITS OWN ID AT THE USER.
+  // The detail line looked its label up in the CALIPER table only, so anything outside
+  // it fell through to `e.method` — a history row reading "dexa" and a Latest Results
+  // line reading "ai", which is how the id becomes the label nobody chose.
+  check('entry detail: DEXA entry is named, not its id',
+    G._bcEntryDetail({method:'dexa',bf:14.2})==='DEXA scan', G._bcEntryDetail({method:'dexa',bf:14.2}));
+  check('entry detail: an AI estimate is named as one',
+    G._bcEntryDetail({method:'ai',bf:14.2})==='AI photo estimate', G._bcEntryDetail({method:'ai',bf:14.2}));
+}
+
+// ── DEXA AND AI ARE ENTERED, NOT COMPUTED ─────────────────────────────
+// Henrik, 2026-09-18: "Adding BF% needs two new inputs, one is Dexa and one is AI image
+// analysis", and on the photos: "the instructions is take a few photos and upload to any
+// chat bot, so the input is only a single field where the user enter BF %."
+//
+// Navy and caliper measure and then calculate. These two do neither: the percentage is
+// finished before it reaches the app. So the thing worth protecting is that they stay a
+// single field with instructions — no equation, no site list, no photo upload — and
+// that the entry still records WHICH of them produced the number.
+{
+  const bodyJs=fs.readFileSync(path.join(__dirname,'../tab-body.js'),'utf8');
+  const idxHtml=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+  check('both new methods are offered as chips',
+    /setBcMethod\('dexa'\)/.test(idxHtml) && /setBcMethod\('ai'\)/.test(idxHtml));
+  check('  …and each has a section to reveal',
+    /id="bc-direct-section"/.test(idxHtml));
+  // ⚠️ FOUR CHIPS DO NOT FIT ONE PHONE ROW. Without a wrap they shrink until the
+  // labels are unreadable, which is the whole reason the row is declared to wrap.
+  check('  …on a row that wraps rather than crushing four chips together',
+    /flex-wrap:wrap;margin-bottom:2px"><div id="bc-method-navy"/.test(idxHtml));
+  // The old switcher named each chip and section in its own body; a third method left
+  // the previous one lit and its section open underneath.
+  check('the method switch is driven off the method list, not named pairs',
+    /_BC_METHODS\.forEach/.test(bodyJs) && /_BC_METHODS=\['navy','caliper','dexa','ai'\]/.test(bodyJs));
+  check('  …and DEXA and AI share the one entered-value section',
+    /dexa:'bc-direct-section',ai:'bc-direct-section'/.test(bodyJs));
+  check('  …reached by the log dispatcher',
+    /_BC_DIRECT_LABEL\[_bcMethod\]\)bcLogDirect\(\)/.test(bodyJs));
+  // The band the other two methods are already held to — one method must not be able to
+  // put a value on the chart that another would have refused.
+  check('  …held to the same 3-60% band as tape and caliper',
+    /bf>=3&&bf<=60/.test(bodyJs));
+  // What distinguishes them is the instructions, and the AI one has to say where the
+  // analysis actually happens, because the app does not do it.
+  check('  …with the AI method telling the user to take the photos elsewhere',
+    /_BC_DIRECT_HELP/.test(bodyJs) && /upload them to any chat assistant/.test(bodyJs));
+  // ⚠️ AND NOTHING HERE MAY GROW AN EQUATION. If a number needs deriving it was
+  // derived before it reached this file; a formula would make the label a lie.
+  check('  …and the entry records which method produced the number',
+    /method:_bcMethod/.test(bodyJs));
 }
 
 // ── Injection pharmacology stamp (_injPkMeta) ──────────────────────────────
