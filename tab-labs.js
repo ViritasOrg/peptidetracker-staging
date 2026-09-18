@@ -78,8 +78,40 @@ function _labFlag(m, canonicalValue, sex) {
   return 'in';
 }
 
+// ── TOTAL T OVER THE BAND IS NOT A FINDING WHILE FREE T IS INSIDE ITS OWN ─────
+// Henrik, 2026-09-18: "Testosterone is orange and called out as High, even though free T
+// is under 800pmol/l also the sole reason fir this app is basically to drive free T up".
+//
+// His 15 Sep draw: total T 43.3 nmol/L against a male band of 8.6-29.0, so HIGH; free T
+// 634 pmol/L against 243-804, so IN RANGE. One sample, two verdicts, and the app put a
+// warning on the number it exists to raise.
+//
+// The two do not track each other. What fraction of a total goes free is set by SHBG (39
+// here) and albumin, and the population total-T band is built from men producing their
+// own. On exogenous testosterone that band describes a population the user is not in,
+// while free T — what the tissues actually see, and what T-Calc targets — has a band that
+// still means something. Reporting the first as abnormal while the second is fine is not
+// a safety net, it is noise, and noise is what gets a real flag ignored later.
+//
+// ⚠️ NARROW ON PURPOSE, AND IT IS NOT HIDING ANYTHING. The value, the trend arrow and
+// the sparkline are untouched; only the pill changes, and it says why. Free T high → total
+// T flags as before. Free T missing → flags as before. A LOW total T always flags. And
+// this is testosterone alone: E2, haematocrit and the rest are safety markers whose bands
+// do not stop applying because someone is on a cycle. E2 240 pmol/L on that same draw is
+// red and stays red.
+function _labFlagOn(entry, key, sex) {
+  var m = _labMarkerIndex[key];
+  var f = _labFlag(m, _labCanonical(entry, key), sex);
+  if (f !== 'high' || key !== 'total_t') return f;
+  var ft = _labCanonical(entry, 'free_t');
+  if (ft == null) return f;
+  return (_labFlag(_labMarkerIndex['free_t'], ft, sex) === 'in') ? 'expected' : f;
+}
 function _labFlagMeta(flag, safety) {
   if (flag === 'in')   return { label: 'In range', color: 'var(--accent3)' };
+  // Stated, not warned about. Muted rather than orange, because it is the intended
+  // consequence of the protocol rather than something to act on.
+  if (flag === 'expected') return { label: 'Expected on T', color: 'var(--muted2)' };
   if (flag === 'high') return { label: 'High', color: safety ? 'var(--danger)' : 'var(--warning)' };
   if (flag === 'low')  return { label: 'Low',  color: safety ? 'var(--danger)' : 'var(--warning)' };
   return { label: '', color: 'var(--muted2)' };
@@ -180,7 +212,7 @@ function _labSafetyFindings(entry) {
   _labEntryKeys(entry).forEach(function (k) {
     var m = _labMarkerIndex[k];
     if (!m || !m.safety) return;
-    var f = _labFlag(m, _labCanonical(entry, k), sex);
+    var f = _labFlagOn(entry, k, sex);
     if (f === 'high' || f === 'low') out.push({ key: k, label: m.label, flag: f, text: (m.note || m.meaning || '') });
   });
   return out;
@@ -264,14 +296,16 @@ function _labMarkerRow(entry, entries, idx, key) {
   var label = m ? m.label : key;
   var unit = raw.unit || (m ? m.unit : '');
   var canon = _labConvert(m, raw.value, raw.unit);
-  var flag = _labFlag(m, canon, _labSex());
+  var flag = _labFlagOn(entry, key, _labSex());
   var meta = _labFlagMeta(flag, m && m.safety);
   var tr = _labTrend(entries, idx, key);
   var arrow = tr ? (tr.dir === 'up' ? '▲' : tr.dir === 'down' ? '▼' : '–') : '';
   var spark = (idx === 0) ? _labSparkline(entries, key) : '';   // history sparkline on the latest draw
   var pill = flag ? '<span style="font-size:9px;font-weight:800;letter-spacing:0.4px;text-transform:uppercase;color:' + meta.color + ';border:1px solid ' + meta.color + ';border-radius:5px;padding:2px 6px;flex-shrink:0">' + meta.label + '</span>' : '';
   // Beginners (tier ≤ 2) get the plain-language line on every marker; pros only on the notable ones.
-  var showMeaning = m && m.meaning && (_labTier() <= 2 || flag === 'high' || flag === 'low' || (m.safety && flag));
+  // 'expected' earns the line at every tier: a number outside its printed band with no
+  // warning on it is the one that most needs a sentence saying why.
+  var showMeaning = m && m.meaning && (_labTier() <= 2 || flag === 'high' || flag === 'low' || flag === 'expected' || (m.safety && flag));
   var meaning = showMeaning ? '<div style="font-size:10.5px;color:var(--muted2);line-height:1.45;margin-top:5px">' + _esc(m.meaning) + '</div>' : '';
   return '<div style="padding:10px 2px;border-bottom:1px solid var(--border)">' +
     '<div style="display:flex;align-items:center;gap:8px">' +
@@ -435,7 +469,7 @@ function _labEntryCard(entry, entries, idx, expanded) {
   keys.forEach(function (k) {
     var m = _labMarkerIndex[k];
     var canon = _labCanonical(entry, k);
-    var f = _labFlag(m, canon, sex);
+    var f = _labFlagOn(entry, k, sex);
     if (f === 'high' || f === 'low' || (m && m.safety)) flagged.push(k); else normal.push(k);
   });
   var ordered = flagged.concat(normal);
@@ -486,7 +520,7 @@ function _labRowSummary(entry){
   var flagged=[];
   keys.forEach(function(k){
     var m=_labMarkerIndex[k];
-    var f=_labFlag(m, _labCanonical(entry,k), sex);
+    var f=_labFlagOn(entry, k, sex);
     if(f==='high'||f==='low') flagged.push({label:(m&&m.label)||k, flag:f, safety:!!(m&&m.safety)});
   });
   if(!flagged.length) return keys.length + (keys.length===1?' result':' results') + ' \u00b7 all in range';
@@ -503,7 +537,7 @@ function _labListRow(entry, idx){
   var worst=null;
   keys.forEach(function(k){
     var m=_labMarkerIndex[k];
-    var f=_labFlag(m,_labCanonical(entry,k),sex);
+    var f=_labFlagOn(entry,k,sex);
     if(f==='high'||f==='low'){ if(!worst||(m&&m.safety)) worst=_labFlagMeta(f,m&&m.safety); }
   });
   var dotCol=pending?'var(--accent4)':(worst?worst.color:'var(--accent3)');
