@@ -2271,9 +2271,44 @@ async function _tcFetchBwEntries() {
     // failing should degrade to "no bloodwork", which the curve already handles.
     _tcBwEntries = Array.isArray(_bw) ? _bw : (_bw && Array.isArray(_bw.entries) ? _bw.entries : []);
   } catch(_e) { _tcBwEntries = []; }
-  _tcBwEntries.sort(function(a,b){ return (b.date||'') < (a.date||'') ? -1 : 1; });
-  // Sync most-recent entry into _tcp so calibration code reads correct values
-  var latest = _tcBwEntries[0];
+  // ⚠️ A COMPARATOR THAT NEVER RETURNS 0 DECIDES TIES BY ACCIDENT.
+  // This returned 1 for two entries on the SAME date — "a goes after b" — so the order
+  // of same-day draws came out of whichever algorithm the engine picked for that array
+  // length, not out of the data. Henrik has two entries dated 2026-09-15: one carrying
+  // free T 634 and one carrying no marker values at all. On his three rows the blank one
+  // sorted to the front.
+  _tcBwEntries.sort(function(a,b){
+    var da=a.date||'', db=b.date||'';
+    return da===db ? 0 : (db < da ? -1 : 1);
+  });
+  // ── THE DATE AND THE VALUE MUST COME FROM THE SAME ROW ──────────────────
+  // Henrik, 2026-09-18, on a blank 15 Sep row sitting beside a real one: "Remove the
+  // blank rows, most likely a leftover from the bug."
+  //
+  // They are, and deleting them is right — but the reason a blank row MATTERS is this
+  // line, and that is a bug on its own. The calibration anchor was chosen by two
+  // different rules: _bwAnchorDate (below) walks the list for the newest entry that
+  // actually carries a value, while this took _tcBwEntries[0] whatever it held. With a
+  // blank row at the front the two disagree — the anchor DATE moves to the new draw
+  // while `if (latest.free_t != null)` declines to update the VALUE, so the curve is
+  // calibrated as "the old free T was measured on the new date". Anchored on 15 Sep at
+  // whatever _tcp still held rather than at the 634 that was actually drawn, every level
+  // on the plot is wrong by that ratio, and nothing on screen says so.
+  //
+  // One rule now: the newest row carrying a usable reading. A blank row cannot become
+  // the calibration source, whether it is deleted or not.
+  // ⚠️ AND THE SAME DATE FILTER _bwAnchorDate APPLIES, or the split comes back the
+  // other way round. A level cannot have been measured on a day that has not happened,
+  // so a future-dated draw is not a measurement yet; _bwAnchorDate skips it, and a
+  // `latest` that did not would feed the curve a value from a row the anchor refused.
+  var _bwToday = (function(){ var _n = new Date(); return _n.getFullYear() + '-' +
+    String(_n.getMonth() + 1).padStart(2, '0') + '-' + String(_n.getDate()).padStart(2, '0'); })();
+  var latest = null;
+  for (var _li = 0; _li < _tcBwEntries.length; _li++) {
+    var _le = _tcBwEntries[_li];
+    if (!_le || !_le.date || _le.date > _bwToday) continue;
+    if (parseDec(_le.free_t) > 0 || parseDec(_le.total_t) > 0) { latest = _le; break; }
+  }
   if (latest) {
     if (latest.total_t    != null) _tcp.totalT         = String(latest.total_t);
     if (latest.shbg       != null) _tcp.shbg           = String(latest.shbg);
