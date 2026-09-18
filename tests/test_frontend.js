@@ -16102,6 +16102,97 @@ if(typeof G._bcEntryDetail==='function'){
     /method:_bcMethod/.test(bodyJs));
 }
 
+// ── FOUR METHODS, FOUR SERIES, AND AN ERROR BAR ON EVERY POINT ──────────────
+// Henrik, 2026-09-18: "The 4 different methods needs to be kept separate and preferably
+// with some color flag or something to highlight different methods. Thing is dexa is the
+// gold standard but expensive, us navy and caliper only give realistic values between
+// 30-15% BF. AI is consistent but +/- 5% still the only realistic for a low budget high
+// or low BF individual" — with a precision-vs-body-fat chart attached.
+//
+// Everything went into one line in one colour, so a DEXA scan next to a tape reading drew
+// a step that looked like the body changing when it was the instrument changing. And the
+// size of that artefact is not constant: tape and calipers are best near 20% and worst at
+// both ends, which is exactly where a lean or a heavy person is standing.
+if(typeof G._bcPrecision==='function'){
+  console.log('\n── Body-fat method separation ───────────────────────');
+  // ⚠️ THE GROUPER MUST BE IDEMPOTENT. Stored caliper methods are jp3/jp7/dw4; the
+  // string 'caliper' is a GROUP key and never a stored value. Without that case a group
+  // key fed back in returned 'navy' — a caliper series drawn in the tape colour.
+  check('the three caliper equations are one series',
+    G._bcMethodGroup('jp3')==='caliper' && G._bcMethodGroup('jp7')==='caliper' && G._bcMethodGroup('dw4')==='caliper');
+  check('  …and the grouper is idempotent on its own keys',
+    G._bcMethodGroup('caliper')==='caliper' && G._bcMethodGroup('dexa')==='dexa' && G._bcMethodGroup('ai')==='ai');
+  // An entry saved before `method` existed is a tape reading, not an unknown.
+  check('  …with a pre-method entry treated as tape',
+    G._bcMethodGroup(undefined)==='navy' && G._bcMethodGroup('')==='navy');
+
+  // DEXA is the gold standard and does not care where on the range you are.
+  check('DEXA precision is flat across the range',
+    G._bcPrecision('dexa',6)===G._bcPrecision('dexa',40) && G._bcPrecision('dexa',20)<2);
+  // ⚠️ THE WHOLE POINT OF THE CURVE: tape and calipers are worst at the ENDS. A flat
+  // per-method figure would have said a 5% reading is as trustworthy as a 20% one.
+  check('  …while tape and calipers are worst at both ends',
+    G._bcPrecision('navy',5)>G._bcPrecision('navy',20) &&
+    G._bcPrecision('navy',40)>G._bcPrecision('navy',20) &&
+    G._bcPrecision('jp3',5)>G._bcPrecision('jp3',20) &&
+    G._bcPrecision('jp3',40)>G._bcPrecision('jp3',20));
+  // His words: "AI is consistent but +/- 5% still the only realistic for a low budget
+  // high or low BF individual". At 5% body fat the calipers must lose to it.
+  check('  …and at the lean end the AI estimate beats the calipers',
+    G._bcPrecision('ai',5)<G._bcPrecision('jp3',5), G._bcPrecision('ai',5)+' vs '+G._bcPrecision('jp3',5));
+  check('  …as it does at the heavy end',
+    G._bcPrecision('ai',40)<G._bcPrecision('jp3',40));
+  // Interpolated, not stepped: a reading between two anchors gets a value between them.
+  // Measured on the caliper curve's steepest stretch (5%→7%): a flatter segment rounds
+  // to the same tenth at both ends and would pass whether or not it interpolated.
+  check('  …interpolating between anchors rather than stepping',
+    G._bcPrecision('jp3',6)<G._bcPrecision('jp3',5) && G._bcPrecision('jp3',6)>G._bcPrecision('jp3',7),
+    G._bcPrecision('jp3',5)+' / '+G._bcPrecision('jp3',6)+' / '+G._bcPrecision('jp3',7));
+  check('  …and clamping outside them instead of running negative',
+    G._bcPrecision('navy',1)>0 && G._bcPrecision('navy',95)>0);
+
+  // The range flag is the actionable half of what the curve says.
+  check('a tape reading below 15% is flagged as outside its range',
+    G._bcOutsideGoodRange({method:'navy',bf:12})===true);
+  check('  …and above 30%',
+    G._bcOutsideGoodRange({method:'jp3',bf:34})===true);
+  check('  …but not inside it',
+    G._bcOutsideGoodRange({method:'navy',bf:20})===false);
+  // DEXA and the AI estimate have no such band — they are the two that still work out
+  // there, which is exactly why they were added.
+  check('  …and DEXA and AI are never flagged',
+    G._bcOutsideGoodRange({method:'dexa',bf:6})===false && G._bcOutsideGoodRange({method:'ai',bf:45})===false);
+  check('every point carries its margin of error as a label',
+    /^\u00b1\d+\.\d%$/.test(G._bcPrecisionLabel({method:'dexa',bf:14})),
+    G._bcPrecisionLabel({method:'dexa',bf:14}));
+}
+{
+  const bodyJs=fs.readFileSync(path.join(__dirname,'../tab-body.js'),'utf8');
+  const idxHtml=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+  // ⚠️ THE X AXIS HAS TO BE TIME, NOT THE ROW NUMBER. Index spacing is harmless with
+  // one line; with four it gives each series its own private axis, so a DEXA scan and a
+  // tape reading from the same morning land in different places and the lines cross
+  // where nothing crossed.
+  check('the body-fat chart plots one series per method',
+    /function bcDrawBfChart\(/.test(bodyJs) && /bcDrawBfChart\(arr\)/.test(bodyJs));
+  check('  …on a shared time axis, not on row index',
+    /_BC_GROUP_ORDER\.filter/.test(bodyJs) && !/bcDrawChart\('chart-bf'/.test(bodyJs));
+  // ⚠️ IDENTITY IS NEVER COLOUR ALONE. These accents are brighter than a general
+  // chart palette wants because the app is neon on black; the shapes and the named
+  // legend are what carry identity for anyone who cannot separate the hues.
+  check('  …each with its own marker shape, not colour alone',
+    /shape:'circle'/.test(bodyJs) && /shape:'square'/.test(bodyJs)
+    && /shape:'diamond'/.test(bodyJs) && /shape:'triangle'/.test(bodyJs));
+  check('  …and a legend that names them',
+    /id="bc-bf-legend"/.test(idxHtml) && /legend\.innerHTML=present\.map/.test(bodyJs));
+  // The whisker is the feature. A band sized only to the points would clip it, and a
+  // clipped error bar reads as a smaller uncertainty than the method actually has.
+  check('  …with the y band sized to hold the error bars',
+    /los\.push\(e\.bf-p\);his\.push\(e\.bf\+p\)/.test(bodyJs));
+  check('history rows carry the method colour and its margin of error',
+    /_BC_GROUP\[_bcMethodGroup\(e\.method\)\]/.test(bodyJs) && /_bcPrecisionLabel\(e\)/.test(bodyJs));
+}
+
 // ── Injection pharmacology stamp (_injPkMeta) ──────────────────────────────
 if(typeof G._injPkMeta==='function'){
   console.log('\n── Injection pharmacology stamp ───────────────────────────');
@@ -17182,7 +17273,17 @@ console.log('\n─────────────────────�
 {
   const body = fs.readFileSync(path.join(__dirname, '../tab-body.js'), 'utf8');
   check('_bcLabel helper exists', /function _bcLabel\(e\)\{/.test(body));
-  check('the BF chart derives its labels', /arr\.map\(e=>_bcLabel\(e\)\)/.test(body));
+  // ⚠️ ASSERT THE PROPERTY, NOT ONE CALL SITE'S SPELLING. This matched the literal
+  // `arr.map(e=>_bcLabel(e))` of the single-series chart, so splitting the chart into one
+  // series per method broke the guard while the hazard it guards — reading e.dateLabel
+  // raw, which a synced entry does not have — was never reintroduced. Scoped to the BF
+  // chart and stated as "labels go through _bcLabel, dateLabel is never read here".
+  check('the BF chart derives its labels', (function(){
+    const i=body.indexOf('function bcDrawBfChart(');
+    if(i<0)return false;
+    const fn=body.slice(i, body.indexOf('\n}', i));
+    return /_bcLabel\(e\)/.test(fn) && !/\.dateLabel/.test(fn);
+  })());
   check('the BMI chart derives its labels', /bmiLabels=bmiData\.map\(e=>_bcLabel\(e\)\)/.test(body));
   check('no raw e.dateLabel read remains in a render path', !/\be\.dateLabel\b(?!\)return)/.test(
     body.replace(/function _bcLabel\(e\)\{[\s\S]*?\n\}/, '')));
