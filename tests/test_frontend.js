@@ -14991,6 +14991,14 @@ if (typeof G._labSetCatalogue === 'function') {
     markers: [
       {key:'total_t',label:'Total Testosterone',unit:'nmol/L',panel:'hormones',direction:'band',safety:false,
        ranges:{male:{low:8.6,high:29.0},female:{low:0.3,high:2.4}},altUnits:[{unit:'ng/dL',factor:28.84}],meaning:'m1'},
+      // free_t and estradiol carry the LIVE catalogue's bands. The total-T rule below is
+      // about how these three read against each other, so a seed missing two of them
+      // cannot express the thing being tested — _labFlag returns null for an unknown
+      // marker, which is indistinguishable from "in range" if you are not looking.
+      {key:'free_t',label:'Free Testosterone',unit:'pmol/L',panel:'hormones',direction:'band',safety:false,
+       ranges:{male:{low:243.0,high:804.0},female:{low:3.0,high:35.0}},altUnits:[{unit:'pg/mL',factor:0.288}],meaning:'m5'},
+      {key:'estradiol',label:'Estradiol (E2)',unit:'pmol/L',panel:'hormones',direction:'band',safety:true,
+       ranges:{male:{low:41.0,high:160.0},female:{low:46.0,high:607.0}},altUnits:[{unit:'pg/mL',factor:0.272}],meaning:'m6'},
       {key:'hematocrit',label:'Hematocrit',unit:'%',panel:'cbc',direction:'band',safety:true,
        ranges:{male:{low:40,high:54},female:{low:36,high:48}},altUnits:[],meaning:'m2'},
       {key:'hdl',label:'HDL',unit:'mmol/L',panel:'lipids',direction:'higher',safety:true,
@@ -15013,6 +15021,61 @@ if (typeof G._labSetCatalogue === 'function') {
   check('lab flag higher: low HDL flagged',  G._labFlag(M('hdl'), 0.8, 'male') === 'low');
   check('lab flag higher: open top is in',   G._labFlag(M('hdl'), 3.0, 'male') === 'in');   // high bound null
   check('lab flag: null value → null',       G._labFlag(M('total_t'), null, 'male') === null);
+
+  // ── TOTAL T OVER ITS BAND IS NOT A FINDING WHILE FREE T IS INSIDE ITS OWN ─────
+  // Henrik, 2026-09-18: "Testosterone is orange and called out as High, even though free T
+  // is under 800pmol/l also the sole reason fir this app is basically to drive free T up".
+  //
+  // His 15 Sep draw: total T 43.3 nmol/L against a male band of 8.6-29.0, so HIGH; free T
+  // 634 pmol/L against 243-804, so IN RANGE. One sample, two verdicts, and the warning
+  // landed on the number the app exists to raise. The two do not track each other — what
+  // fraction goes free is set by SHBG and albumin, and the total-T band is built from men
+  // producing their own.
+  if (typeof G._labFlagOn === 'function') {
+    const _e = (o) => Object.assign({date:'2026-09-15'}, o);
+    check('total T over the band reads as expected while free T is in range',
+      G._labFlagOn(_e({total_t:43.3, free_t:634}), 'total_t', 'male') === 'expected',
+      G._labFlagOn(_e({total_t:43.3, free_t:634}), 'total_t', 'male'));
+    check('  …shown as a statement, not a warning',
+      G._labFlagMeta('expected', false).label === 'Expected on T'
+      && G._labFlagMeta('expected', false).color === 'var(--muted2)');
+    // ⚠️ NARROW ON PURPOSE. Each of these must still flag, or this stopped being a
+    // reference range and became a way of never saying anything about testosterone.
+    check('  …but free T over ITS band flags total T as before',
+      G._labFlagOn(_e({total_t:55, free_t:950}), 'total_t', 'male') === 'high');
+    check('  …as does a draw with no free T to judge it against',
+      G._labFlagOn(_e({total_t:43.3}), 'total_t', 'male') === 'high');
+    check('  …and a LOW total T always flags',
+      G._labFlagOn(_e({total_t:5, free_t:300}), 'total_t', 'male') === 'low');
+    check('  …while an in-band total T is unchanged',
+      G._labFlagOn(_e({total_t:20, free_t:500}), 'total_t', 'male') === 'in');
+    // ⚠️ AND IT IS TESTOSTERONE ALONE. E2, haematocrit and the rest are safety markers
+    // whose bands do not stop applying because someone is on a cycle. E2 240 pmol/L on
+    // that same draw is red, and must stay red.
+    check('  …and a safety marker on the same draw is untouched',
+      G._labFlagOn(_e({total_t:43.3, free_t:634, markers:{estradiol:{value:240}}}), 'estradiol', 'male') === 'high');
+    // The relaxation must not leak to any other marker keyed on free T being fine.
+    check('  …and no marker other than total_t is relaxed', (function(){
+      const e = _e({total_t:43.3, free_t:634, markers:{ldl:{value:4.0}, hematocrit:{value:56}}});
+      return ['ldl','hematocrit'].every(k => G._labFlagOn(e, k, 'male') !== 'expected');
+    })());
+    // The whole point is that it is stated rather than hidden: the row still renders the
+    // value, and now carries the sentence explaining why it sits outside its band.
+    check('  …with the plain-language line shown in that state',
+      /flag === 'expected' \|\| \(m\.safety && flag\)/.test(
+        fs.readFileSync(path.join(__dirname, '../tab-labs.js'), 'utf8')));
+  }
+  // Every flag consumer goes through the rule, or a marker reads one way in the detail
+  // sheet and another in the list chip beside it.
+  check('  …and every flag consumer routes through it', (function(){
+    const src = fs.readFileSync(path.join(__dirname, '../tab-labs.js'), 'utf8');
+    const body = src.slice(src.indexOf('function _labFlagOn'));
+    // _labFlag itself is called once inside _labFlagOn (twice: total and free) and
+    // nowhere else outside it.
+    const outside = src.slice(0, src.indexOf('function _labFlagOn'));
+    return (outside.match(/_labFlag\(/g) || []).length === 1   // its own definition
+      && (body.match(/_labFlag\(/g) || []).length === 2;       // total, then free
+  })(), 'raw _labFlag calls outside the rule');
 
   // unit conversion: entered ng/dL → canonical nmol/L (alt = canonical*factor ⇒ canonical = alt/factor)
   const conv = G._labConvert(M('total_t'), 577, 'ng/dL');
