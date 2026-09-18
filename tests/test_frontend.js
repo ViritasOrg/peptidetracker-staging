@@ -6602,6 +6602,49 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     check('  …while a genuine weekly compound still reads as weekdays',
       G._trtCadenceLabel({id:'enanthate',cadence:'days',days:[1]})==='M');
 
+    // ── A RAMP IS NOT A DOSE ON A DAY ─────────────────────────────────
+    // Henrik, 2026-09-18: "Testosterone injections are planned using free T target, but
+    // in the protocol details it is shown as a daily injection (which it isn't) and with
+    // a very low daily dose (changes during the 12weeks so untrue)."
+    //
+    // The row printed c.dose beside the cadence label. On a target-T solve c.dose is the
+    // maintenance dose of ONE shot and the cadence is the dither pattern's daily grid, so
+    // the two together read as a flat 39.3 mg every day for twelve weeks — none of which
+    // the protocol does. mg/week is the only figure a ramp is comparable across.
+    {
+      const ramp={id:'enanthate',cadence:'interval',freqVal:1,freqUnit:'days',dose:'39.3',
+        dose_phases:[
+          {w:0, d:'35.7',u:'mg',pattern:['35.7','35.7','35.7','35.7','35.7','35.7','35.7']},
+          {w:4, d:'42.9',u:'mg',pattern:['42.9','42.9','42.9','42.9','42.9','42.9','42.9']},
+          {w:8, d:'50',  u:'mg',pattern:['50','50','50','50','50','50','50']},
+          {w:12,d:'64.3',u:'mg',pattern:['64.3','64.3','64.3','64.3','64.3','64.3','64.3']}]};
+      check('a ramped testosterone states its weekly span, not one day of it',
+        G._trtRampSpanLabel(ramp,16)==='16w \u00b7 250 mg/week \u2192 450 mg/week',
+        G._trtRampSpanLabel(ramp,16));
+      // ⚠️ A PHASE THAT STARTS AFTER THE LAST WEEK NEVER RUNS. A 12-week cycle covers
+      // week indices 0-11, so w:12 is never the phase in force on any day the generator
+      // visits — quoting its dose as the destination promises a dose never given.
+      check('  …ending at the last phase the cycle actually reaches',
+        G._trtRampSpanLabel(ramp,12)==='12w \u00b7 250 mg/week \u2192 350 mg/week',
+        G._trtRampSpanLabel(ramp,12));
+      // The dither pattern IS the week's load. Reading ph.d would report one day as seven.
+      check('  …summing a dithered week rather than multiplying one of its days',
+        Math.round(G._phaseWeeklyMg(ramp.dose_phases[0],ramp))===250);
+      // Per-phase intervals are the other shape a solve emits.
+      check('  …and honouring a per-phase interval when there is no pattern',
+        G._trtRampSpanLabel({id:'enanthate',dose_phases:[
+          {w:0,d:'125',u:'mg',iv:3.5},{w:6,d:'225',u:'mg',iv:3.5}]},12)
+          ==='12w \u00b7 250 mg/week \u2192 450 mg/week');
+      // A one-ended range is a range that says the same number twice.
+      check('  …collapsing to one figure when the ramp does not move',
+        G._trtRampSpanLabel({id:'enanthate',dose_phases:[
+          {w:0,d:'125',u:'mg',iv:3.5},{w:6,d:'125',u:'mg',iv:3.5}]},12)==='12w \u00b7 250 mg/week');
+      // ⚠️ A FLAT DOSE GENUINELY IS ONE DOSE ON ONE CADENCE and must keep saying so —
+      // the span replaces the old line only where the old line was untrue.
+      check('  …while a flat compound keeps its dose-and-cadence line',
+        G._trtRampSpanLabel({id:'enanthate',cadence:'interval',freqVal:2,freqUnit:'days',dose:'100'},12)==='');
+    }
+
     // A split compound keeps its dose in dose_am/dose_pm; c.dose is whatever the
     // catalogue seeded and is NOT the configured dose.
     const hgh={id:'hgh',name:'HGH (Somatropin)',amPm:true,dose:'2',unit:'IU/day',
