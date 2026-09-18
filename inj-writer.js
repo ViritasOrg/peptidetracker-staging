@@ -231,3 +231,29 @@ async function injPurgeCyclePlan(cycleId, tag){
     return (j && typeof j.removed === 'number') ? j.removed : 0;
   }catch(e){ _injLogErr(tag || 'injPurgeCyclePlan', e); return null; }
 }
+
+// PUT /injections/{id} — change the DOSE on one row.
+//
+// ⚠️ THE SECOND EXCEPTION TO "ONLY THE SCHEDULER WRITES INJECTIONS", AND IT IS THE
+// SAME KIND AS THE FIRST. Henrik, 2026-09-18: "Add ability to change a dose in Today,
+// IF I either run low on a compound or want to over ride schedule."
+//
+// The rule at the top of this file allows Today's tick because it records an event
+// rather than planning one. Saying "I drew 15 mg, not 25" is that same act: it is what
+// happened to one injection on one day, not a change to the protocol, and the protocol
+// is left exactly as it was. Editing the plan is still the scheduler's alone.
+//
+// It lives here rather than in the page for the reason the file exists: one place that
+// spells the request, tags it, and reports a failed status, instead of a third hand-
+// rolled fetch drifting away from the other two.
+async function injSetDose(injId, dose, tag){
+  try{
+    var r = await fetch(AGENT_URL + '/injections/' + injId, {
+      method:'PUT',
+      headers: authHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({dose: String(dose)})
+    });
+    if(!r.ok) _injLogHttp(tag || 'injSetDose', r.status, '/injections/' + injId);
+    return r;
+  }catch(e){ _injLogErr(tag || 'injSetDose', e); return null; }
+}

@@ -2401,6 +2401,98 @@ console.log('\n── Editing when a dose was taken ─────────�
     !/logged_at/.test(_tcJs2));
 }
 
+// ── CHANGING WHAT ACTUALLY WENT IN, FOR ONE DAY ───────────────────────
+// Henrik, 2026-09-18: "Add ability to change a dose in Today, IF I either run low on a
+// compound or want to over ride schedule."
+//
+// Both are one statement about one injection: the number the protocol planned is not the
+// number that went into the syringe. The only ways to say it before were to edit the
+// protocol — rewriting every future dose to answer a question about one past one — or to
+// say nothing and let the curve model a dose that was never given.
+{
+  console.log('\n── Today: changing one day\u2019s dose ────────────────────');
+  const _tdJs = fs.readFileSync(path.join(__dirname, '../tab-today.js'), 'utf8');
+  const _iwJs = fs.readFileSync(path.join(__dirname, '../inj-writer.js'), 'utf8');
+
+  // ⚠️ THE REQUEST BELONGS IN inj-writer. That file exists because ten call sites each
+  // spelled their own /injections request and none of them agreed; a third hand-rolled
+  // PUT in the page is how that comes back.
+  check('the dose write goes through inj-writer, not a raw fetch in the page',
+    /async function injSetDose\(/.test(_iwJs)
+    && /injSetDose\(id, next, 'todayDoseOverride'\)/.test(_tdJs));
+  check('  …addressing the row by id and sending only the dose',
+    /'\/injections\/' \+ injId/.test(_iwJs)
+    && /JSON\.stringify\(\{dose: String\(dose\)\}\)/.test(_iwJs));
+
+  const _dSave = {f:G.fetch, c:G._injectionsCache, vd:G._viewDate};
+  const _puts = [];
+  G._viewDate = null;
+  G._injectionsCache = {'2026-09-18': [{id:'d1', date:'2026-09-18', compound_id:'enanthate',
+    compound_name:'Testosterone Enanthate', dose:'28.6', unit:'mg', tier:'trt',
+    logged:false, active:true, time_of_day:'AM'}]};
+  const _r = () => G._injectionsCache['2026-09-18'][0];
+
+  await (async () => {
+    G.fetch = async (url, opt) => {
+      if (opt && opt.method === 'PUT') _puts.push({url:String(url), body:JSON.parse(opt.body)});
+      return {ok:true, status:200, json:async()=>({})};
+    };
+    await G._setInjectionDose('d1', 15);
+    check('a changed dose is written to that one row',
+      _puts.length===1 && /\/injections\/d1$/.test(_puts[0].url) && _puts[0].body.dose==='15',
+      JSON.stringify(_puts[0]||null));
+    check('  …and lands in the cache the screen reads', _r().dose==='15', String(_r().dose));
+    // A dose does not become taken, or untaken, because its size was wrong.
+    check('  …without ever sending a logged flag',
+      _puts.every(p => !('logged' in p.body) && !('logged_at' in p.body)));
+
+    G.fetch = async () => ({ok:false, status:500, json:async()=>({})});
+    await G._setInjectionDose('d1', 99);
+    check('a failed save puts the old dose back rather than keeping the new one',
+      _r().dose==='15', String(_r().dose));
+    G.fetch = _dSave.f;
+  })();
+
+  // ⚠️ A ZERO IS NOT AN OVERRIDE, IT IS A SKIP, and skipping has its own control
+  // (`active`). dose:0 leaves a row that reads as an injection and models as nothing.
+  check('zero and nonsense are refused rather than written',
+    /if\(!\(v>0\)\)\{ if\(err\)err\.textContent='Enter a dose above 0\.'; return; \}/.test(_tdJs));
+  // The same ordering trap saveInjectionTime carries: the close removes the input.
+  check('  …reading the field before the modal is torn down',
+    _tdJs.indexOf("var v=parseDec(inp?inp.value:'')") < _tdJs.indexOf('_closeInjectionDoseEditor();\n  if(id)'));
+
+  // ⚠️ THE PLAN IS NOT TOUCHED. Editing the protocol to answer a question about one
+  // day is the thing this exists to avoid, so nothing here may reach a compound.
+  {
+    const _fn = _tdJs.slice(_tdJs.indexOf('async function _setInjectionDose'));
+    const _body = _fn.slice(0, _fn.indexOf('\n}'));
+    check('changing one dose never writes the protocol',
+      !/dose_phases|_userStacks|injWriteBatch|saveStacks/.test(_body));
+  }
+  // An unlogged row is a PLAN row, and injWriteBatch prunes this compound's unlogged
+  // future and rewrites it. Saying so in the sheet is the difference between a caveat
+  // and a silent loss.
+  check('an unticked dose says a regenerated schedule will replace it',
+    /This dose is not ticked yet\. Generating a schedule/.test(_tdJs)
+    && /row\.logged\?''/.test(_tdJs));
+  // THE RECORD CHANGED — RE-READ IT. _tcHistory is fetched once per session, so a logged
+  // dose changed here and not re-read leaves the curve on the old milligrams.
+  check('  …and changing a dose already taken re-reads the curve\'s history',
+    /if\(row\.logged && typeof _tcFetchHistory==='function'\)/.test(_tdJs));
+
+  // The legacy peptide-log fallback rows showDayInline builds have fabricated ids that
+  // no PUT can address — a tappable dose there looks live and does nothing.
+  {
+    const _mkCell = (dose) => { const el={style:{},onclick:null,textContent:''};
+                                G._todayDoseCell(el, dose); return el; };
+    check('a real row gets a tappable dose',
+      !!_mkCell(_r()).onclick && _mkCell(_r()).style.cursor==='pointer');
+    check('  …and a legacy log row with no record behind it does not',
+      !_mkCell({id:'reta-sun_2026-09-14', compound_id:'reta-sun', dose:'', logged:true}).onclick);
+  }
+  G._injectionsCache = _dSave.c; G._viewDate = _dSave.vd;
+}
+
 
 // ── Evidence grades + research citations ─────────────────────────────────────
 // Henrik, 2026-08-12: "this app will basically have research citations and t-calc
