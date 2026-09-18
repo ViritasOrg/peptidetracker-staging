@@ -3031,6 +3031,53 @@ function _renderTcalcTrtCard(){
     +'<div style="font-size:10px;color:var(--muted2);margin-top:6px">These doses are stored against this protocol but no compound here generates them — they came from an older T-Calc plan. Add the compound in Compounds to take them over, or clear them in the admin Records tab.</div>'
   +'</div>';
 }
+// ── A RAMP HAS NO SINGLE DOSE AND NO SINGLE DAY ────────────────────────
+// Henrik, 2026-09-18: "Testosterone injections are planned using free T target, but in
+// the protocol details it is shown as a daily injection (which it isn't) and with a very
+// low daily dose (changes during the 12weeks so untrue)."
+//
+// Both numbers came from fields that are true of one injection and of nothing else.
+// c.dose is the maintenance dose of a SINGLE shot — 39.3 mg — and the cadence label is
+// the phase's day pattern, which a target-T solve locks to daily precisely so it can
+// dither the dose between days. Printed side by side they read as "39.3 mg, every day,
+// for twelve weeks": the dose changes week to week, not every daily slot is an
+// injection, and neither figure is what a testosterone plan is judged by anyway.
+//
+// Milligrams per week is what a ramp IS comparable across — it is what the solver
+// targets, what the guide tiers are keyed on, and what the enhanced rows beside it
+// already state. So the row gives the span and its two ends instead.
+function _phaseWeeklyMg(ph,c){
+  if(!ph)return 0;
+  // A dithered phase carries its own week of doses; the pattern IS the weekly load, and
+  // reading ph.d instead would report one day of it as seven.
+  if(ph.pattern&&ph.pattern.length){
+    var sum=0;
+    for(var i=0;i<ph.pattern.length;i++)sum+=parseDec(ph.pattern[i])||0;
+    return sum*7/ph.pattern.length;
+  }
+  var mg=parseDec(ph.d)||0;
+  var iv=parseDec(ph.iv)||((typeof _cadenceIntervalDays==='function')?_cadenceIntervalDays(c):7);
+  return (mg>0&&iv>0)?(mg*7/iv):0;
+}
+function _trtRampSpanLabel(c,weeks){
+  var phs=(c&&c.dose_phases)||[];
+  if(!phs.length)return '';
+  phs=phs.slice().sort(function(a,b){return (a.w||0)-(b.w||0);});
+  // ⚠️ A PHASE THAT STARTS AFTER THE LAST WEEK NEVER RUNS, SO IT IS NOT AN ENDPOINT.
+  // A 12-week cycle covers week indices 0-11, so a w:12 phase is never the phase in
+  // force on any day the generator visits. Naming its dose as where the ramp arrives
+  // would promise a dose this protocol never actually gives.
+  if(weeks>0){
+    var live=phs.filter(function(ph){return (ph.w||0)<=weeks-1;});
+    if(live.length)phs=live;
+  }
+  var a=Math.round(_phaseWeeklyMg(phs[0],c));
+  var b=Math.round(_phaseWeeklyMg(phs[phs.length-1],c));
+  if(!(a>0)&&!(b>0))return '';
+  var span=(weeks>0)?(weeks+'w · '):'';
+  return (a===b)?(span+a+' mg/week')
+                :(span+a+' mg/week → '+b+' mg/week');
+}
 // TRT tab content for stack view (read-only): compounds + injection log
 function _renderTRTViewTab(st){
   var compounds=_trtCompounds(st.trt);
@@ -3042,13 +3089,20 @@ function _renderTRTViewTab(st){
   }else{
     html+=_tcalcOwnsTestoNote('Testosterone');
     html+='<div class="wiz-section" style="margin-bottom:10px;">Protocol</div>';
+    // The same week count the Cycle header above states, so the row's span cannot
+    // disagree with it.
+    var _wks=(st.cycle_length===0)?0:(st.cycle_length||12);
     compounds.forEach(function(c){
       var cat=TRT_CAT.find(function(t){return t.id===c.id;})||{};
       var dot=cat.dot||c.dot||'var(--accent4)';
       html+='<div class="cfg-block" style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">';
       html+='<div style="width:8px;height:8px;border-radius:50%;background:'+dot+';flex-shrink:0;"></div>';
       html+='<div style="font-size:13px;font-weight:600;color:var(--text);">'+_esc(c.name)+'</div>';
-      html+='<div style="font-size:12px;color:var(--muted2);">'+(c.dose?c.dose+(c.unit||'mg')+' ':'')+_trtCadenceLabel(c)+'</div>';
+      // A flat dose is genuinely one dose on one cadence and still says so; only a
+      // ramp, which is neither, switches to the weekly span.
+      var _span=_trtRampSpanLabel(c,_wks);
+      html+='<div style="font-size:12px;color:var(--muted2);">'
+        +_esc(_span||((c.dose?c.dose+(c.unit||'mg')+' ':'')+_trtCadenceLabel(c)))+'</div>';
       html+='</div>';
     });
   }
