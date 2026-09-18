@@ -8500,6 +8500,71 @@ console.log('\n── The loading dose ─────────────�
     }
   }
 
+  // -- A BLANK DRAW MUST NOT CALIBRATE THE CURVE -----------------------------
+  // Found 2026-09-18 in Henrik's live record: two entries dated 2026-09-15, one carrying
+  // free T 634 and one carrying no marker values at all. He called the blank one "most
+  // likely a leftover from the bug" and it is -- but the reason it MATTERS is that the
+  // calibration anchor was picked by two different rules.
+  //
+  // _bwAnchorDate walks the list for the newest entry that actually carries a value,
+  // while _tcFetchBwEntries took _tcBwEntries[0] whatever it held. The sort comparator
+  // returned 1 for two entries on the same DATE -- never 0 -- so ties were decided by
+  // whichever algorithm the engine picked for that array length, and on his three rows
+  // the blank one came out in front. The anchor DATE then moved to the new draw while
+  // `if (latest.free_t != null)` declined to update the VALUE, so the curve was
+  // calibrated as "the old free T was measured on the new date". Every level on the plot
+  // is wrong by that ratio, and nothing on screen says so.
+  //
+  // It lives in this async block because _tcFetchBwEntries is async and the file is
+  // CommonJS -- a top-level await here makes the module format ambiguous and nothing
+  // runs at all.
+  if (typeof G._tcFetchBwEntries === 'function') {
+    console.log('\n-- T-calc: a blank draw cannot anchor --');
+    const _bbSave = {f:G.fetch, ah:G.authHeaders, bt:G.buildTCalc, tp:G._tcp,
+                     bw:G._tcBwEntries, rate:G._tcRateAtDate};
+    G.authHeaders = () => ({});
+    G.buildTCalc = () => {};
+    G._tcRateAtDate = () => null;
+    // His three rows, in the order the backend returns them (date desc, stable sort).
+    const _bbRows = [
+      {id:'21353b87', date:'2026-09-15', free_t:null, total_t:null, shbg:null},
+      {id:'91318589', date:'2026-09-15', free_t:634,  total_t:43.3, shbg:39},
+      {id:'da53a820', date:'2026-06-26', free_t:217,  total_t:17,   shbg:45}];
+    G.fetch = async () => ({ok:true, json:async()=>_bbRows.map(r=>Object.assign({},r))});
+    G._tcp = {measuredFT:'217', totalT:'17', shbg:'45'};
+    await G._tcFetchBwEntries();
+    check('a blank row beside a real one does not become the calibration source',
+      G._tcp.measuredFT === '634', 'measuredFT=' + G._tcp.measuredFT);
+    check('  ...and the rest of that draw comes from the same row',
+      G._tcp.totalT === '43.3' && G._tcp.shbg === '39',
+      'totalT=' + G._tcp.totalT + ' shbg=' + G._tcp.shbg);
+    // SAME-DATE TIES MUST BE DECIDED BY THE DATA, NOT BY THE SORT. A comparator that
+    // never returns 0 is inconsistent, and its answer depends on the array length.
+    check('  ...because the comparator no longer breaks ties by accident',
+      /da===db \? 0 :/.test(fs.readFileSync(path.join(__dirname,'../tab-tcalc.js'),'utf8')));
+    // The other half of the same rule: _bwAnchorDate refuses a draw dated in the future,
+    // so a `latest` that accepted one would feed the curve a value the anchor rejected.
+    G._tcp = {measuredFT:'217', totalT:'17', shbg:'45'};
+    const _fut = new Date(Date.now() + 30*86400000).toISOString().slice(0,10);
+    G.fetch = async () => ({ok:true, json:async()=>[
+      {id:'future',   date:_fut,         free_t:1500, total_t:60,   shbg:35},
+      {id:'91318589', date:'2026-09-15', free_t:634,  total_t:43.3, shbg:39}]});
+    await G._tcFetchBwEntries();
+    check('  ...and a draw dated in the future cannot calibrate either',
+      G._tcp.measuredFT === '634', 'measuredFT=' + G._tcp.measuredFT);
+    // A partial panel is still a calibrating draw -- total T + SHBG with no free T is an
+    // ordinary TRT panel, and the 2026-08-02 report was exactly this being ignored.
+    G._tcp = {measuredFT:'', totalT:'', shbg:''};
+    G.fetch = async () => ({ok:true, json:async()=>[
+      {id:'partial', date:'2026-09-15', free_t:null, total_t:25, shbg:40}]});
+    await G._tcFetchBwEntries();
+    check('  ...while a total-T-only panel still counts as a real draw',
+      G._tcp.totalT === '25' && G._tcp.shbg === '40',
+      'totalT=' + G._tcp.totalT + ' shbg=' + G._tcp.shbg);
+    G.fetch=_bbSave.f; G.authHeaders=_bbSave.ah; G.buildTCalc=_bbSave.bt;
+    G._tcp=_bbSave.tp; G._tcBwEntries=_bbSave.bw; G._tcRateAtDate=_bbSave.rate;
+  }
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
 });
