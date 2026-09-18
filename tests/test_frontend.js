@@ -16292,6 +16292,45 @@ if(typeof G._bcPrecision==='function'){
     /^\u00b1\d+\.\d%$/.test(G._bcPrecisionLabel({method:'dexa',bf:14})),
     G._bcPrecisionLabel({method:'dexa',bf:14}));
 }
+
+// ── THE ERROR BARS ARE SOURCED, NOT EYEBALLED ────────────────────────
+// The anchors were read off a JPEG of Henrik's chart when this shipped, which is a poor
+// footing for an error bar: it is a claim about how much to trust a number, so it should
+// not itself be a claim read off a picture. He supplied the source text on 2026-09-18
+// (docs/bodyfat-measurement-uncertainty.md §3) and the curve is now bounded by it.
+if(typeof G._BC_SEE==='object'){
+  const _seeDoc=fs.readFileSync(path.join(__dirname,'../docs/bodyfat-measurement-uncertainty.md'),'utf8');
+  check('the source behind the error bars is kept in the repo',
+    /SEE\) ≈ 1\.2% - 2\.5% BF/.test(_seeDoc)
+    && /SEE\) ≈ 3\.5% - 4\.5% BF/.test(_seeDoc)
+    && /SEE\) ≈ 2\.5% - 4\.5% BF/.test(_seeDoc));
+  check('  …and every method records the envelope and the model it comes from',
+    ['dexa','navy','caliper','ai'].every(k=>{
+      const e=G._BC_SEE[k];
+      return e && e.hi>e.lo && e.lo>0 && e.model && (e.refs||[]).length>=2;
+    }));
+  // ⚠️ THE CURVE MUST NOT LEAVE ITS OWN ENVELOPE. Two anchors did — navy@40 at 4.7 and
+  // ai@40 at 4.8, both at the far left edge of the chart where a pixel read is least
+  // reliable, both above a documented 4.5 ceiling. This is the check that would have
+  // caught them, and it is why the envelope is data rather than a comment.
+  check('  …and the curve stays inside it, end to end',
+    ['dexa','navy','ai'].every(k=>{
+      const e=G._BC_SEE[k];
+      for(let bf=4; bf<=45; bf++){
+        const pr=G._bcPrecision(k,bf);
+        if(!(pr>=e.lo-1e-9 && pr<=e.hi+1e-9))return false;
+      }
+      return true;
+    }), ['dexa','navy','ai'].map(k=>k+'@40='+G._bcPrecision(k,40)).join(' '));
+  // The calipers are the documented exception, and the exception is the whole point of a
+  // body-fat-DEPENDENT curve: the flat SEE is 3.0-4.0 for a skilled tester, but the
+  // method's own assumptions break down at the ends, where > 5.0 is documented. A check
+  // that forced the calipers inside 3.0-4.0 would be enforcing the flat figure the curve
+  // exists to improve on.
+  check('  …with the calipers allowed past it only where the method breaks down',
+    G._bcPrecision('jp3',20)<=4.0 && G._bcPrecision('jp3',5)>5.0
+    && /> 5\.0% BF \(Untrained\)/.test(_seeDoc));
+}
 {
   const bodyJs=fs.readFileSync(path.join(__dirname,'../tab-body.js'),'utf8');
   const idxHtml=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');

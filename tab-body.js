@@ -218,17 +218,57 @@ function bcLogCaliper(){
 // THAT BODY FAT. The whisker is not decoration — it is the difference between "I gained
 // 2%" and "I changed instrument".
 //
-// ⚠️ THE NUMBERS BELOW WERE READ OFF HENRIK'S CHART BY EYE. They are anchor points on
-// his curves, linearly interpolated between and clamped outside. They are good to a few
-// tenths, not to the decimal; correct them here if the source chart is ever published
-// with real figures rather than a plot.
+// ── WHERE THESE NUMBERS COME FROM ───────────────────────────────
+// The anchors are points on Henrik's precision-vs-body-fat chart. They were read off the
+// image by eye when this shipped, which is a poor footing for an error bar — it is a
+// claim about how much to trust a number, so it should not itself be a claim read off a
+// picture. He supplied the text the chart was drawn from on 2026-09-18; it is kept
+// verbatim in docs/bodyfat-measurement-uncertainty.md and the anchors were reconciled
+// against it.
+//
+// ⚠️ THE DOCUMENT GIVES A FLAT SEE PER METHOD AND THAT IS NOT WHAT THIS TABLE IS.
+// A Standard Error of Estimate is one central figure for a method; this table is body-fat
+// DEPENDENT, which is the entire point of it — the tape and the calipers are at their
+// best around 20% and fall apart at both ends, which is exactly where a lean or a heavy
+// person is standing. Section 3 of that document gives the MECHANISM for the dependence
+// (the Taylor expansion on C_A − C_N for the tape, the fixed subcutaneous-fat-ratio
+// assumption for the calipers), not a replacement for the curve. So an anchor is only
+// wrong when it falls OUTSIDE the documented envelope, and the two that did — both at the
+// far left edge, where a pixel read is least reliable — were brought back to it:
+// navy@40 4.7→4.5, ai@40 4.8→4.5.
+//
+// The caliper curve reaching 6.9 at 5% BF is NOT out of bounds. The flat SEE for a
+// skilled tester is 3.0-4.0, but > 5.0 is documented for a tester working outside their
+// competence — which, at 5% body fat, describes almost everyone holding a caliper.
 var _BC_PRECISION={
   // Flat: a DEXA scan does not care where you are on the range. Legend on the source
   // chart reads 1.5-2%; the plotted line sits at 1.5.
   dexa:   [[3,1.5],[60,1.5]],
-  navy:   [[5,4.3],[7,4.1],[10,3.9],[12,3.8],[15,3.6],[20,3.5],[25,3.6],[30,3.9],[35,4.2],[40,4.7]],
+  navy:   [[5,4.3],[7,4.1],[10,3.9],[12,3.8],[15,3.6],[20,3.5],[25,3.6],[30,3.9],[35,4.2],[40,4.5]],
   caliper:[[5,6.9],[7,6.0],[10,5.0],[12,4.4],[15,3.9],[20,3.6],[25,3.8],[30,4.3],[35,4.8],[40,5.6]],
-  ai:     [[5,4.2],[7,4.1],[10,3.9],[12,3.8],[15,3.7],[20,3.6],[25,3.8],[30,4.1],[35,4.4],[40,4.8]]
+  ai:     [[5,4.2],[7,4.1],[10,3.9],[12,3.8],[15,3.7],[20,3.6],[25,3.8],[30,4.1],[35,4.4],[40,4.5]]
+};
+// The flat Standard Error of Estimate each method is DOCUMENTED at, with the model it
+// comes from. This is what the app can honestly say about a method in general, where
+// _BC_PRECISION is what one reading gets its error bar from. Kept as data rather than
+// prose so the curve can be checked against it (see the test) instead of the bound
+// living only in a comment nobody re-reads.
+// Source: docs/bodyfat-measurement-uncertainty.md §3.
+var _BC_SEE={
+  dexa:   {lo:1.2, hi:2.5, model:'3-compartment X-ray attenuation (Beer-Lambert)',
+           refs:['Pietrobelli 1996, Am J Physiol Endocrinol Metab 271(6):E941',
+                 'Toombs 2012, Eur J Clin Nutr 66(1):115']},
+  navy:   {lo:3.5, hi:4.5, model:'Circumference geometry → Siri',
+           refs:['Hodgdon & Beckett 1984, NAVHLTHRESCEN 84-29',
+                 'Siri 1961, Tech Meas Body Comp 61:223']},
+  // 3.0-4.0 skilled; > 5.0 untrained, which is why the curve is allowed past the ceiling
+  // at the ends where the method's own assumptions break down.
+  caliper:{lo:3.0, hi:5.0, model:'Skinfold sum → Jackson-Pollock → Brožek',
+           refs:['Jackson & Pollock 1978, Br J Nutr 40(3):497',
+                 'Lohman 1981, Hum Biol 53:181']},
+  ai:     {lo:2.5, hi:4.5, model:'Convolutional regression / SMPL mesh volume',
+           refs:['Majmudar 2020, NPJ Digit Med 3(1):1',
+                 'Loper 2015, ACM Trans Graph 34(6):1']}
 };
 // ⚠️ THE STORED METHOD IS NOT THE SERIES. Three caliper equations are all "the calipers"
 // as far as precision and colour go, and an entry saved before `method` existed is a tape
