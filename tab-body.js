@@ -48,7 +48,28 @@ function _bcAgeLabel(dateStr,refDate){
 }
 
 /* ── CALIPER (skinfold) body-fat — validated equations, see backend docs/08 ── */
-var _bcMethod='navy';     // 'navy' (tape/circumference) | 'caliper' (skinfold)
+var _bcMethod='navy';     // 'navy' (tape) | 'caliper' (skinfold) | 'dexa' | 'ai'
+// ── TWO METHODS THAT MEASURE NOTHING HERE ──────────────────────────────
+// Henrik, 2026-09-18: "Adding BF% needs two new inputs, one is Dexa and one is AI image
+// analysis" — and, on how the photos get read: "the instructions is take a few photos
+// and upload to any chat bot, so the input is only a single field where the user enter
+// BF %."
+//
+// So neither of these computes anything. Navy and caliper take raw measurements and run
+// an equation over them; DEXA and AI take the finished percentage from somewhere else.
+// That is why they share one section and one handler: the only thing that differs is
+// which instructions to print and which name to store the entry under. Nothing in this
+// file should ever grow an equation for them — if a number needs deriving, it was
+// derived before it got here.
+var _BC_METHODS=['navy','caliper','dexa','ai'];
+// Which section a chip reveals. dexa and ai deliberately point at the same one.
+var _BC_SECTION={navy:'bc-navy-section',caliper:'bc-caliper-section',
+                 dexa:'bc-direct-section',ai:'bc-direct-section'};
+var _BC_DIRECT_LABEL={dexa:'DEXA scan',ai:'AI photo estimate'};
+var _BC_DIRECT_HELP={
+  dexa:'Enter the body-fat percentage from your DEXA report. Lean mass is worked out from your logged weight, the same as every other method here.',
+  ai:'Take a few photos — front, side and back, relaxed, in even light — and upload them to any chat assistant for a body-fat estimate. Enter the percentage it gives you here.'
+};
 var _bcCalMethod='jp3';   // 'jp3' | 'jp7' | 'dw4'
 var _BC_SITE_LABEL={chest:'Chest',abdomen:'Abdomen',thigh:'Thigh',triceps:'Triceps',suprailiac:'Suprailiac',axilla:'Midaxillary',subscapular:'Subscapular',biceps:'Biceps'};
 var _BC_CAL_LABEL={jp3:'Jackson-Pollock 3-site',jp7:'Jackson-Pollock 7-site',dw4:'Durnin-Womersley 4-site'};
@@ -84,21 +105,39 @@ function caliperBF(method,sex,age,vals){
 // One-line detail string for a stored entry (tape vs caliper), used in results + history
 function _bcEntryDetail(e){
   if(e&&e.method&&e.method!=='navy'){
-    var lbl=_BC_CAL_LABEL[e.method]||e.method,sum=0;
+    var lbl=_BC_CAL_LABEL[e.method]||_BC_DIRECT_LABEL[e.method]||e.method,sum=0;
     if(e.skinfolds){for(var k in e.skinfolds)sum+=(e.skinfolds[k]||0);}
     return lbl+(sum>0?' · Σ'+(Math.round(sum*10)/10)+'mm':'');
   }
   return 'Neck '+(e?e.neck:'')+' · Waist '+(e?e.belly:'')+((e&&e.hip)?' · Hip '+e.hip:'');
 }
+// ⚠️ DRIVEN OFF THE METHOD LIST, NOT OFF A PAIR OF NAMED VARIABLES.
+// The two-method version named every chip and every section in its own body, so adding
+// a third left the old chips lit and the old section open underneath the new one — the
+// failure is silent and looks like a CSS bug. One list, and a new method is one entry.
 function setBcMethod(m){
   _bcMethod=m;
-  var nav=document.getElementById('bc-navy-section'),cal=document.getElementById('bc-caliper-section');
-  var cn=document.getElementById('bc-method-navy'),cc=document.getElementById('bc-method-caliper');
-  if(cn)cn.classList.toggle('sel',m==='navy');if(cc)cc.classList.toggle('sel',m==='caliper');
-  if(nav)nav.style.display=(m==='navy')?'flex':'none';
-  if(cal)cal.style.display=(m==='caliper')?'flex':'none';
+  _BC_METHODS.forEach(function(k){
+    var chip=document.getElementById('bc-method-'+k);
+    if(chip)chip.classList.toggle('sel',k===m);
+  });
+  var want=_BC_SECTION[m];
+  ['bc-navy-section','bc-caliper-section','bc-direct-section'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(el)el.style.display=(id===want)?'flex':'none';
+  });
   var err=document.getElementById('bc-err');if(err)err.textContent='';
   if(m==='caliper')renderCaliperInputs();
+  if(_BC_DIRECT_LABEL[m])renderDirectBfInputs();
+}
+// One field, because the measuring happened elsewhere. The instructions are the only
+// part that differs between DEXA and an AI estimate.
+function renderDirectBfInputs(){
+  var host=document.getElementById('bc-direct-section');if(!host)return;
+  var help=_BC_DIRECT_HELP[_bcMethod]||'';
+  host.innerHTML='<div style="font-size:11px;color:var(--muted2);line-height:1.5">'+help+'</div>'
+    +'<div style="display:flex;flex-direction:column;gap:4px;"><label class="info-label">Body fat (%)</label>'
+    +'<input id="bc-direct-bf" type="text" inputmode="decimal" placeholder="e.g. 14.2" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:16px;font-family:var(--font-ui);width:100%;outline:none;"></div>';
 }
 function setBcCalMethod(m){_bcCalMethod=m;renderCaliperInputs();}
 function renderCaliperInputs(){
@@ -115,7 +154,31 @@ function renderCaliperInputs(){
   });
   host.innerHTML=h;
 }
-function bcLogDispatch(){if(_bcMethod==='caliper')bcLogCaliper();else bcLog();}
+function bcLogDispatch(){
+  if(_bcMethod==='caliper')bcLogCaliper();
+  else if(_BC_DIRECT_LABEL[_bcMethod])bcLogDirect();
+  else bcLog();
+}
+// ⚠️ THE METHOD IS STORED, AND IT IS NOT DECORATION.
+// A DEXA percentage and a photo estimate are not the same measurement as a tape reading
+// and are not the same as each other, so the entry has to carry which one it was or the
+// series silently mixes them. _bcEntryDetail names it on every row and in Latest
+// Results; the backend already keeps `method` for exactly this reason.
+function bcLogDirect(){
+  var err=document.getElementById('bc-err');if(err)err.textContent='';
+  if(!_BC_DIRECT_LABEL[_bcMethod]){if(err)err.textContent='Pick a measurement method.';return;}
+  var bf=parseVal('bc-direct-bf');
+  if(bf===null){if(err)err.textContent='Enter the body-fat percentage.';return;}
+  // The same band the tape and caliper results are held to, so one method cannot put a
+  // value on the chart that another would have refused.
+  if(!(bf>=3&&bf<=60)){if(err)err.textContent='Body fat out of range \u2014 enter a value between 3 and 60%.';return;}
+  var entry={date:dateKey(NOW),dateLabel:fmtDate(NOW),bf:Math.round(bf*10)/10,method:_bcMethod};
+  var arr=bcLoad(),idx=arr.findIndex(function(e){return e.date===entry.date;});
+  if(idx!==-1)arr[idx]=entry;else arr.push(entry);
+  arr.sort(function(a,b){return a.date.localeCompare(b.date);});
+  bcSave(arr);pushBodyCompToAgent(entry);
+  bcRender();
+}
 function bcLogCaliper(){
   var err=document.getElementById('bc-err');if(err)err.textContent='';
   var sex=localStorage.getItem('user_sex')||'male';
