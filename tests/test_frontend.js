@@ -12641,7 +12641,10 @@ function _isProdCheckout(dir) {
 // whoever adds the next one to remember.
 {
   const _selfSrc = require('fs').readFileSync(__filename, 'utf8');
-  ['../CLAUDE.md', 'promote-to-prod.yml'].forEach(function (f) {
+  // '../docs/' joined the list on 2026-09-18: the body-fat uncertainty source was read
+  // unscoped and failed prod CI on two promotion branches. docs/ is development material
+  // and the promotion deliberately leaves it behind, exactly like the two files above.
+  ['../CLAUDE.md', 'promote-to-prod.yml', '../docs/'].forEach(function (f) {
     var idx = -1, unguarded = [];
     while ((idx = _selfSrc.indexOf(f, idx + 1)) !== -1) {
       // Only actual reads count; the name appears in prose, and in this scanner's own
@@ -16410,11 +16413,38 @@ if(typeof G._bcPrecision==='function'){
 // not itself be a claim read off a picture. He supplied the source text on 2026-09-18
 // (docs/bodyfat-measurement-uncertainty.md §3) and the curve is now bounded by it.
 if(typeof G._BC_SEE==='object'){
-  const _seeDoc=fs.readFileSync(path.join(__dirname,'../docs/bodyfat-measurement-uncertainty.md'),'utf8');
-  check('the source behind the error bars is kept in the repo',
-    /SEE\) ≈ 1\.2% - 2\.5% BF/.test(_seeDoc)
-    && /SEE\) ≈ 3\.5% - 4\.5% BF/.test(_seeDoc)
-    && /SEE\) ≈ 2\.5% - 4\.5% BF/.test(_seeDoc));
+  // ⚠️ STAGING-ONLY READ. Henrik, 2026-09-18: "Deploy fails due to CI."
+  // It did, twice, on the prod promotion branch:
+  //   ENOENT: open '.../docs/bodyfat-measurement-uncertainty.md'
+  // The suite is promoted to prod; docs/ is not, because prod is the deployed app and
+  // docs/ is development material. This read went in unscoped and failed a DEPLOY on a
+  // file that was never meant to be there.
+  //
+  // The fourth time this class of mistake has blocked a promotion — 2026-08-02, 2026-08-20
+  // and 2026-09-09 are all recorded further down, next to the structural guard that was
+  // built after the third. That guard's list now covers '../docs/' too, which is why this
+  // read is written in the direct readFileSync(path.join(...)) form: that is the shape it
+  // can see and verify _isProdCheckout on.
+  //
+  // The NUMBERS are asserted against _BC_SEE, which is promoted, so prod still checks the
+  // envelope the curve must honour. Only the prose behind it is staging-only.
+  const _seeDoc = _isProdCheckout(dir) ? null
+    : fs.readFileSync(path.join(__dirname, '../docs/bodyfat-measurement-uncertainty.md'), 'utf8');
+  // The documented Standard Error of Estimate per method, transcribed from §3. These are
+  // the figures the curve is bounded by, so they are pinned here rather than only in a
+  // file that does not travel.
+  const _seeDocumented={dexa:[1.2,2.5], navy:[3.5,4.5], caliper:[3.0,5.0], ai:[2.5,4.5]};
+  check('the error bars carry the documented envelope, not an invented one',
+    Object.keys(_seeDocumented).every(k=>{
+      const e=G._BC_SEE[k]||{};
+      return e.lo===_seeDocumented[k][0] && e.hi===_seeDocumented[k][1];
+    }), JSON.stringify(G._BC_SEE));
+  if(_seeDoc){
+    check('  …and the source text behind it is kept in the repo',
+      /SEE\) ≈ 1\.2% - 2\.5% BF/.test(_seeDoc)
+      && /SEE\) ≈ 3\.5% - 4\.5% BF/.test(_seeDoc)
+      && /SEE\) ≈ 2\.5% - 4\.5% BF/.test(_seeDoc));
+  }
   check('  …and every method records the envelope and the model it comes from',
     ['dexa','navy','caliper','ai'].every(k=>{
       const e=G._BC_SEE[k];
@@ -16439,8 +16469,11 @@ if(typeof G._BC_SEE==='object'){
   // that forced the calipers inside 3.0-4.0 would be enforcing the flat figure the curve
   // exists to improve on.
   check('  …with the calipers allowed past it only where the method breaks down',
-    G._bcPrecision('jp3',20)<=4.0 && G._bcPrecision('jp3',5)>5.0
-    && /> 5\.0% BF \(Untrained\)/.test(_seeDoc));
+    G._bcPrecision('jp3',20)<=4.0 && G._bcPrecision('jp3',5)>5.0);
+  if(_seeDoc){
+    check('  …which is what the source documents for an untrained tester',
+      /> 5\.0% BF \(Untrained\)/.test(_seeDoc));
+  }
 }
 {
   const bodyJs=fs.readFileSync(path.join(__dirname,'../tab-body.js'),'utf8');
