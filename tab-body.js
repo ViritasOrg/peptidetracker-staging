@@ -12,7 +12,7 @@ function navyBF(n,b,h,sex,hip){if(sex==='female'&&hip){return Math.round((495/(1
 function setBioSex(sex){localStorage.setItem('user_sex',sex);pushPepSettingsToAgent({'user_sex':sex});document.querySelectorAll('#sex-chip-male,#sex-chip-female').forEach(function(el){el.classList.remove('sel');});var chip=document.getElementById('sex-chip-'+sex);if(chip)chip.classList.add('sel');var hr=document.getElementById('bc-hip-row');if(hr)hr.style.display=sex==='female'?'flex':'none';if(typeof _bcMethod!=='undefined'&&_bcMethod==='caliper')renderCaliperInputs();}
 function parseVal(id){const raw=document.getElementById(id).value.trim().replace(',','.');const v=parseFloat(raw);return isNaN(v)?null:v;}
 function bcLog(){const sex=localStorage.getItem('user_sex')||'male';const h=parseInt(localStorage.getItem('user_height')||'182');const n=parseVal('bc-neck');const b=parseVal('bc-belly');const hip=sex==='female'?parseVal('bc-hip'):null;const err=document.getElementById('bc-err');err.textContent='';if(n===null){err.textContent='Enter neck circumference';return;}if(b===null){err.textContent='Enter waist circumference';return;}if(sex==='female'&&hip===null){err.textContent='Enter hip circumference';return;}if(n<20||n>60){err.textContent='Neck out of range';return;}if(b<50||b>200){err.textContent='Waist out of range';return;}if(sex==='female'&&hip!==null&&(hip<60||hip>200)){err.textContent='Hip out of range';return;}if(b<=n){err.textContent='Waist must be larger than neck';return;}const bf=navyBF(n,b,h,sex,hip);if(bf<3||bf>60){err.textContent='Result out of range — check measurements.';return;}const entry={date:dateKey(NOW),dateLabel:fmtDate(NOW),neck:n,belly:b,bf:bf,...(hip!==null?{hip}:{})};const arr=bcLoad();const idx=arr.findIndex(e=>e.date===entry.date);if(idx!==-1)arr[idx]=entry;else arr.push(entry);arr.sort((a,b)=>a.date.localeCompare(b.date));bcSave(arr);pushBodyCompToAgent(entry);document.getElementById('bc-neck').value=entry.neck;document.getElementById('bc-belly').value=entry.belly;if(sex==='female'&&entry.hip!=null){const he=document.getElementById('bc-hip');if(he)he.value=entry.hip;}bcRender();}
-function bcRender(){const _hcm=parseInt(localStorage.getItem('user_height')||'182');const _hdisp=document.getElementById('bc-height-display');if(_hdisp)_hdisp.textContent=_hcm+' cm';const stored=bcLoad();const storedDates=new Set(stored.map(e=>e.date));const raw=[...stored];raw.sort((a,b)=>new Date(a.date.replace(/-/g,'/'))-new Date(b.date.replace(/-/g,'/')));const arr=raw.map(e=>{const w=getWeightForDate(e.date);const bmi=w?Math.round(w/Math.pow(_hcm/100,2)*10)/10:null;const lean=w?Math.round(w*(1-e.bf/100)*10)/10:null;return{...e,resolvedWeight:w,bmi,lean};});document.getElementById('bc-date-badge').textContent=fmtDate(NOW).toUpperCase();bcDrawWeightLeanChart();bcRenderWeightHistory();if(!arr.length){document.getElementById('bc-results-card').style.display='none';document.getElementById('bc-chart-card').style.display='none';document.getElementById('bc-history-card').style.display='none';return;}const latest=arr[arr.length-1];document.getElementById('bc-results-card').style.display='';var _ra=document.getElementById('res-age');if(_ra)_ra.textContent=_bcAgeLabel(latest.date);document.getElementById('res-bf').textContent=latest.bf;const latestW=weights.length?weights[weights.length-1].weight:null;const latestBmi=latestW?Math.round(latestW/Math.pow(_hcm/100,2)*10)/10:null;const latestLean=latestW?Math.round(latestW*(1-latest.bf/100)*10)/10:null;document.getElementById('res-bmi').textContent=latestBmi?latestBmi.toFixed(1):'—';document.getElementById('res-weight').textContent=latestW?String(latestW):'—';document.getElementById('res-lean').textContent=latestLean?String(latestLean):'—';document.getElementById('res-neck-belly').textContent=(latest.method&&latest.method!=='navy')?_bcEntryDetail(latest):('Neck '+latest.neck+' cm · Waist '+latest.belly+' cm'+(latest.hip?' · Hip '+latest.hip+' cm':''));document.getElementById('bc-chart-card').style.display='';document.getElementById('bc-entries-badge').textContent=arr.length+' entr'+(arr.length===1?'y':'ies');bcDrawChart('chart-bf',arr.map(e=>e.bf),arr.map(e=>_bcLabel(e)),'#ff6b2b','%');const bmiData=arr.filter(e=>e.bmi);let bmiVals=bmiData.map(e=>e.bmi);let bmiLabels=bmiData.map(e=>_bcLabel(e));if(latestW&&arr.length){const lastDate=arr[arr.length-1].date;const todayKey=dateKey(NOW);if(todayKey>lastDate){const todayBmi=Math.round(latestW/Math.pow(_hcm/100,2)*10)/10;bmiVals=[...bmiVals,todayBmi];bmiLabels=[...bmiLabels,fmtDate(NOW)];}}if(bmiVals.length>=1)bcDrawChart('chart-bmi',bmiVals,bmiLabels,'#3cffa0','');document.getElementById('bc-history-card').style.display='';const list=document.getElementById('bc-history-list');list.innerHTML='';[...arr].reverse().forEach((e,i)=>{const row=document.createElement('div');row.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px;';if(i===arr.length-1)row.style.borderBottom='none';row.innerHTML=`<div><div style="font-weight:500;color:var(--text)">${_bcLabel(e)}</div><div style="color:var(--muted2);margin-top:2px;">${_bcEntryDetail(e)}${e.resolvedWeight?' · '+e.resolvedWeight+'kg':''}</div></div><div style="display:flex;gap:12px;align-items:center;"><div style="text-align:center"><div style="font-family:var(--font-mono);font-size:20px;color:var(--accent2);line-height:1">${e.bf}%</div><div style="font-size:9px;color:var(--muted2);">BF</div></div>${e.lean!=null?`<div style="text-align:center"><div style="font-family:var(--font-mono);font-size:20px;color:var(--accent4);line-height:1">${e.lean}</div><div style="font-size:9px;color:var(--muted2);">lean kg</div></div>`:''}${e.bmi?`<div style="text-align:center"><div style="font-family:var(--font-mono);font-size:20px;color:var(--accent3);line-height:1">${e.bmi}</div><div style="font-size:9px;color:var(--muted2);">BMI</div></div>`:''}<button onclick="bcDeleteEntry('${e.date}')" style="background:none;border:none;color:var(--muted2);font-size:18px;cursor:pointer;padding:4px 6px;line-height:1;">✕</button></div>`;list.appendChild(row);});}
+function bcRender(){const _hcm=parseInt(localStorage.getItem('user_height')||'182');const _hdisp=document.getElementById('bc-height-display');if(_hdisp)_hdisp.textContent=_hcm+' cm';const stored=bcLoad();const storedDates=new Set(stored.map(e=>e.date));const raw=[...stored];raw.sort((a,b)=>new Date(a.date.replace(/-/g,'/'))-new Date(b.date.replace(/-/g,'/')));const arr=raw.map(e=>{const w=getWeightForDate(e.date);const bmi=w?Math.round(w/Math.pow(_hcm/100,2)*10)/10:null;const lean=w?Math.round(w*(1-e.bf/100)*10)/10:null;return{...e,resolvedWeight:w,bmi,lean};});document.getElementById('bc-date-badge').textContent=fmtDate(NOW).toUpperCase();bcDrawWeightLeanChart();bcRenderWeightHistory();if(!arr.length){document.getElementById('bc-results-card').style.display='none';document.getElementById('bc-chart-card').style.display='none';document.getElementById('bc-history-card').style.display='none';return;}const latest=arr[arr.length-1];document.getElementById('bc-results-card').style.display='';var _ra=document.getElementById('res-age');if(_ra)_ra.textContent=_bcAgeLabel(latest.date);document.getElementById('res-bf').textContent=latest.bf;const latestW=weights.length?weights[weights.length-1].weight:null;const latestBmi=latestW?Math.round(latestW/Math.pow(_hcm/100,2)*10)/10:null;const latestLean=latestW?Math.round(latestW*(1-latest.bf/100)*10)/10:null;document.getElementById('res-bmi').textContent=latestBmi?latestBmi.toFixed(1):'—';document.getElementById('res-weight').textContent=latestW?String(latestW):'—';document.getElementById('res-lean').textContent=latestLean?String(latestLean):'—';document.getElementById('res-neck-belly').textContent=((latest.method&&latest.method!=='navy')?_bcEntryDetail(latest):('Neck '+latest.neck+' cm · Waist '+latest.belly+' cm'+(latest.hip?' · Hip '+latest.hip+' cm':'')))+(_bcPrecisionLabel(latest)?(' · '+_bcPrecisionLabel(latest)):'');document.getElementById('bc-chart-card').style.display='';document.getElementById('bc-entries-badge').textContent=arr.length+' entr'+(arr.length===1?'y':'ies');bcDrawBfChart(arr);const bmiData=arr.filter(e=>e.bmi);let bmiVals=bmiData.map(e=>e.bmi);let bmiLabels=bmiData.map(e=>_bcLabel(e));if(latestW&&arr.length){const lastDate=arr[arr.length-1].date;const todayKey=dateKey(NOW);if(todayKey>lastDate){const todayBmi=Math.round(latestW/Math.pow(_hcm/100,2)*10)/10;bmiVals=[...bmiVals,todayBmi];bmiLabels=[...bmiLabels,fmtDate(NOW)];}}if(bmiVals.length>=1)bcDrawChart('chart-bmi',bmiVals,bmiLabels,'#3cffa0','');document.getElementById('bc-history-card').style.display='';const list=document.getElementById('bc-history-list');list.innerHTML='';[...arr].reverse().forEach((e,i)=>{const row=document.createElement('div');row.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px;';if(i===arr.length-1)row.style.borderBottom='none';const _g=_BC_GROUP[_bcMethodGroup(e.method)]||{color:'var(--muted2)'};const _pl=_bcPrecisionLabel(e);const _warn=_bcOutsideGoodRange(e);row.innerHTML=`<div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:${_g.color};flex-shrink:0"></span><div><div style="font-weight:500;color:var(--text)">${_bcLabel(e)}</div><div style="color:var(--muted2);margin-top:2px;">${_bcEntryDetail(e)}${_pl?' · '+_pl:''}${e.resolvedWeight?' · '+e.resolvedWeight+'kg':''}${_warn?' · <span style="color:#f59e0b">outside this method\u2019s range</span>':''}</div></div></div><div style="display:flex;gap:12px;align-items:center;"><div style="text-align:center"><div style="font-family:var(--font-mono);font-size:20px;color:var(--accent2);line-height:1">${e.bf}%</div><div style="font-size:9px;color:var(--muted2);">BF</div></div>${e.lean!=null?`<div style="text-align:center"><div style="font-family:var(--font-mono);font-size:20px;color:var(--accent4);line-height:1">${e.lean}</div><div style="font-size:9px;color:var(--muted2);">lean kg</div></div>`:''}${e.bmi?`<div style="text-align:center"><div style="font-family:var(--font-mono);font-size:20px;color:var(--accent3);line-height:1">${e.bmi}</div><div style="font-size:9px;color:var(--muted2);">BMI</div></div>`:''}<button onclick="bcDeleteEntry('${e.date}')" style="background:none;border:none;color:var(--muted2);font-size:18px;cursor:pointer;padding:4px 6px;line-height:1;">✕</button></div>`;list.appendChild(row);});}
 // The backend stores {date, bf} only — no dateLabel, because a display string is not
 // data. syncBodyCompFromAgent rebuilds the list from the remote records, so any entry
 // that has round-tripped comes back without one. Derive it from the date instead of
@@ -199,4 +199,169 @@ function bcLogCaliper(){
   arr.sort(function(a,b){return a.date.localeCompare(b.date);});
   bcSave(arr);pushBodyCompToAgent(entry);
   bcRender();
+}
+
+// ── ONE SERIES PER METHOD, AND THE ERROR BAR IS THE POINT ────────────────────
+// Henrik, 2026-09-18: "The 4 different methods needs to be kept separate and preferably
+// with some color flag or something to highlight different methods. Thing is dexa is the
+// gold standard but expensive, us navy and caliper only give realistic values between
+// 30-15% BF. AI is consistent but +/- 5% still the only realistic for a low budget high
+// or low BF individual" — with a precision-vs-body-fat chart attached.
+//
+// Until now every entry went into one line in one colour, so a DEXA scan and a tape
+// reading taken a week apart drew a step that looked like a change in the body. It was a
+// change of instrument. Worse, the size of that artefact is not constant: the tape and
+// the calipers are at their best around 20% and fall apart at both ends, which is exactly
+// where someone lean or someone heavy is actually standing.
+//
+// So: a series per method, and every point carries the margin of error its method has AT
+// THAT BODY FAT. The whisker is not decoration — it is the difference between "I gained
+// 2%" and "I changed instrument".
+//
+// ⚠️ THE NUMBERS BELOW WERE READ OFF HENRIK'S CHART BY EYE. They are anchor points on
+// his curves, linearly interpolated between and clamped outside. They are good to a few
+// tenths, not to the decimal; correct them here if the source chart is ever published
+// with real figures rather than a plot.
+var _BC_PRECISION={
+  // Flat: a DEXA scan does not care where you are on the range. Legend on the source
+  // chart reads 1.5-2%; the plotted line sits at 1.5.
+  dexa:   [[3,1.5],[60,1.5]],
+  navy:   [[5,4.3],[7,4.1],[10,3.9],[12,3.8],[15,3.6],[20,3.5],[25,3.6],[30,3.9],[35,4.2],[40,4.7]],
+  caliper:[[5,6.9],[7,6.0],[10,5.0],[12,4.4],[15,3.9],[20,3.6],[25,3.8],[30,4.3],[35,4.8],[40,5.6]],
+  ai:     [[5,4.2],[7,4.1],[10,3.9],[12,3.8],[15,3.7],[20,3.6],[25,3.8],[30,4.1],[35,4.4],[40,4.8]]
+};
+// ⚠️ THE STORED METHOD IS NOT THE SERIES. Three caliper equations are all "the calipers"
+// as far as precision and colour go, and an entry saved before `method` existed is a tape
+// reading. Grouping in one place keeps every consumer — chart, legend, history, results —
+// agreeing on which of the four a row belongs to.
+function _bcMethodGroup(m){
+  // ⚠️ IDEMPOTENT ON PURPOSE. The stored caliper methods are jp3/jp7/dw4 — the string
+  // 'caliper' is a GROUP key and never a stored value, so without this line feeding a
+  // group key back in silently returned 'navy' and a caliper series turned blue.
+  if(_BC_GROUP[m])return m;
+  if(m==='jp3'||m==='jp7'||m==='dw4')return 'caliper';
+  return 'navy';
+}
+// Colours are the app's own accent tokens, deliberately: DEXA green (the one you trust),
+// tape blue, calipers orange, AI purple. They are brighter than a general-purpose chart
+// palette wants — this app is neon on pure black and every other chart in it already
+// reads that way — so identity is never left to colour alone: each series also has its
+// own marker shape and a named legend entry.
+var _BC_GROUP={
+  navy:   {label:'Tape (Navy)',       color:'#3b9eff', shape:'circle',  good:[15,30]},
+  caliper:{label:'Caliper',           color:'#ff6b2b', shape:'square',  good:[15,30]},
+  dexa:   {label:'DEXA',              color:'#3cffa0', shape:'diamond', good:null},
+  ai:     {label:'AI photo estimate', color:'#c084fc', shape:'triangle',good:null}
+};
+var _BC_GROUP_ORDER=['navy','caliper','dexa','ai'];
+// Margin of error for one reading, in absolute BF percentage points.
+function _bcPrecision(method,bf){
+  var tbl=_BC_PRECISION[_bcMethodGroup(method)];
+  if(!tbl||!tbl.length||!(bf>0))return null;
+  if(bf<=tbl[0][0])return tbl[0][1];
+  if(bf>=tbl[tbl.length-1][0])return tbl[tbl.length-1][1];
+  for(var i=1;i<tbl.length;i++){
+    if(bf<=tbl[i][0]){
+      var a=tbl[i-1],b=tbl[i],t=(bf-a[0])/(b[0]-a[0]);
+      return Math.round((a[1]+t*(b[1]-a[1]))*10)/10;
+    }
+  }
+  return tbl[tbl.length-1][1];
+}
+// "± 3.6%" for a row, or '' when the method is unknown.
+function _bcPrecisionLabel(e){
+  if(!e)return '';
+  var p=_bcPrecision(e.method,e.bf);
+  return (p===null)?'':('±'+p.toFixed(1)+'%');
+}
+// Is this reading inside the range its method is actually good for? Only the tape and
+// the calipers have one — they are the two that fall apart at both ends.
+function _bcOutsideGoodRange(e){
+  if(!e)return false;
+  var g=_BC_GROUP[_bcMethodGroup(e.method)];
+  if(!g||!g.good)return false;
+  return !(e.bf>=g.good[0]&&e.bf<=g.good[1]);
+}
+function _bcMarker(ctx,shape,x,y,r){
+  ctx.beginPath();
+  if(shape==='square'){ctx.rect(x-r,y-r,r*2,r*2);}
+  else if(shape==='diamond'){ctx.moveTo(x,y-r*1.25);ctx.lineTo(x+r*1.25,y);ctx.lineTo(x,y+r*1.25);ctx.lineTo(x-r*1.25,y);ctx.closePath();}
+  else if(shape==='triangle'){ctx.moveTo(x,y-r*1.3);ctx.lineTo(x+r*1.2,y+r);ctx.lineTo(x-r*1.2,y+r);ctx.closePath();}
+  else {ctx.arc(x,y,r,0,Math.PI*2);}
+}
+// ⚠️ THE X AXIS HAS TO BE TIME, NOT THE ROW NUMBER.
+// The single-series chart spaced points by index, which is harmless while there is one
+// line. With four, index spacing puts each series on its own private axis — a DEXA scan
+// and a tape reading from the same morning land in different places, and the lines cross
+// where nothing crossed.
+function bcDrawBfChart(entries){
+  var canvas=document.getElementById('chart-bf');if(!canvas)return;
+  var legend=document.getElementById('bc-bf-legend');
+  var dpr=window.devicePixelRatio||1, cssW=canvas.offsetWidth||300, cssH=120;
+  canvas.width=cssW*dpr;canvas.height=cssH*dpr;canvas.style.width=cssW+'px';canvas.style.height=cssH+'px';
+  var ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);
+  var rows=(entries||[]).filter(function(e){return e&&e.bf>0;});
+  if(legend)legend.innerHTML='';
+  if(!rows.length)return;
+  var SURFACE='#15130F';
+  var PAD={top:12,right:12,bottom:28,left:40};
+  var cW=cssW-PAD.left-PAD.right, cH=cssH-PAD.top-PAD.bottom;
+  var tOf=function(e){var d=new Date(String(e.date).replace(/-/g,'/'));return d.getTime();};
+  var ts=rows.map(tOf), tMin=Math.min.apply(null,ts), tMax=Math.max.apply(null,ts);
+  var tSpan=(tMax-tMin)||1;
+  var xOf=function(t){return (tMax===tMin)?(PAD.left+cW/2):(PAD.left+((t-tMin)/tSpan)*cW);};
+  // The band has to hold the whiskers, or an error bar is clipped and reads as a smaller
+  // uncertainty than it is.
+  var los=[],his=[];
+  rows.forEach(function(e){var p=_bcPrecision(e.method,e.bf)||0;los.push(e.bf-p);his.push(e.bf+p);});
+  var minV=Math.min.apply(null,los), maxV=Math.max.apply(null,his), range=(maxV-minV)||1;
+  var vMin=minV-range*0.12, vMax=maxV+range*0.12;
+  var yOf=function(v){return PAD.top+cH-((v-vMin)/(vMax-vMin))*cH;};
+  ctx.strokeStyle='#3A352B';ctx.lineWidth=0.5;
+  for(var g=0;g<=3;g++){var gy=PAD.top+(cH/3)*g;ctx.beginPath();ctx.moveTo(PAD.left,gy);ctx.lineTo(PAD.left+cW,gy);ctx.stroke();}
+  ctx.fillStyle='#555';ctx.font='9px -apple-system,system-ui,sans-serif';ctx.textAlign='right';
+  for(var gi=0;gi<=3;gi++){var vv=vMax-(vMax-vMin)*(gi/3);ctx.fillText(vv.toFixed(1)+'%',PAD.left-4,PAD.top+(cH/3)*gi+3);}
+  var groups={};
+  rows.forEach(function(e){var k=_bcMethodGroup(e.method);(groups[k]=groups[k]||[]).push(e);});
+  var present=_BC_GROUP_ORDER.filter(function(k){return groups[k]&&groups[k].length;});
+  present.forEach(function(k){
+    var meta=_BC_GROUP[k], pts=groups[k].slice().sort(function(a,b){return tOf(a)-tOf(b);});
+    // Whiskers first, so the marks sit on top of their own uncertainty.
+    ctx.strokeStyle=meta.color+'66';ctx.lineWidth=2;ctx.lineCap='butt';
+    pts.forEach(function(e){
+      var p=_bcPrecision(e.method,e.bf);if(!(p>0))return;
+      var x=xOf(tOf(e)), y1=yOf(e.bf-p), y2=yOf(e.bf+p);
+      ctx.beginPath();ctx.moveTo(x,y1);ctx.lineTo(x,y2);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(x-3,y1);ctx.lineTo(x+3,y1);ctx.moveTo(x-3,y2);ctx.lineTo(x+3,y2);ctx.stroke();
+    });
+    if(pts.length>1){
+      ctx.beginPath();ctx.moveTo(xOf(tOf(pts[0])),yOf(pts[0].bf));
+      for(var i=1;i<pts.length;i++)ctx.lineTo(xOf(tOf(pts[i])),yOf(pts[i].bf));
+      ctx.strokeStyle=meta.color;ctx.lineWidth=2;ctx.lineJoin='round';ctx.stroke();
+    }
+    pts.forEach(function(e){
+      var x=xOf(tOf(e)), y=yOf(e.bf);
+      _bcMarker(ctx,meta.shape,x,y,4);
+      ctx.fillStyle=meta.color;ctx.fill();
+      ctx.strokeStyle=SURFACE;ctx.lineWidth=2;ctx.stroke();
+    });
+  });
+  // Date ticks come off the pooled timeline, not off any one series.
+  var byTime=rows.slice().sort(function(a,b){return tOf(a)-tOf(b);});
+  ctx.fillStyle='#555';ctx.font='9px -apple-system,system-ui,sans-serif';ctx.textAlign='center';
+  var step=Math.max(1,Math.floor(byTime.length/4));
+  byTime.forEach(function(e,i){
+    if(i!==0&&i!==byTime.length-1&&i%step!==0)return;
+    ctx.fillText(String(_bcLabel(e)||'').split(' ').slice(0,2).join(' '),xOf(tOf(e)),PAD.top+cH+18);
+  });
+  // ⚠️ A LEGEND, ALWAYS, ONCE THERE IS MORE THAN ONE SERIES. Four colours on a 120px
+  // canvas is not self-explanatory, and the shapes only pay off if something names them.
+  if(legend){
+    legend.innerHTML=present.map(function(k){
+      var meta=_BC_GROUP[k];
+      return '<span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;color:var(--muted2)">'
+        +'<span style="width:8px;height:8px;background:'+meta.color+';border-radius:'+(meta.shape==='square'?'2px':'50%')+';flex-shrink:0"></span>'
+        +meta.label+' ('+groups[k].length+')</span>';
+    }).join('');
+  }
 }
