@@ -15279,6 +15279,37 @@ if (typeof G._labDrawStatus === 'function') {
   check('  …and the draw recorder asks it rather than filtering its own',
     /var existing = _labEntryOnDate\(d\);/.test(_ldSrc));
 
+  // ⚠️ AND IT PREFERS THE PENDING ROW — RESULTS BELONG IN THE DRAW THEY CAME FROM.
+  // The comment above already names the hazard: "which wins is decided by ordering rather
+  // than by data". This is that hazard writing a row. _labConfirmAdd asks for the entry on
+  // the date, discards it unless it is still awaiting results, and POSTs a NEW row when it
+  // gets nothing back. So on a date holding both a pending draw and a completed one, the
+  // completed row could answer, _pending came back null, and the results landed as a third
+  // row instead of filling the draw that was waiting for them.
+  //
+  // Henrik's 2026-09-15 is the live example: one blank row and one carrying free T 634.
+  if (typeof G._labEntryOnDate === 'function') {
+    const _peSave = G._tcBwEntries;
+    const _done = {id:'done', date:'2026-09-15', free_t:634, total_t:43.3, shbg:39};
+    const _pend = {id:'pend', date:'2026-09-15', free_t:null, total_t:null, shbg:null};
+    G._tcBwEntries = [_done, _pend];
+    check('  …preferring the draw still awaiting results, whatever the order',
+      G._labEntryOnDate('2026-09-15') === _pend, 'picked ' + (G._labEntryOnDate('2026-09-15')||{}).id);
+    G._tcBwEntries = [_pend, _done];
+    check('  …and the same the other way round',
+      G._labEntryOnDate('2026-09-15') === _pend);
+    // Every row on the date already has results: the save path refuses it and creates a
+    // new row, which is deliberate — silently overwriting real numbers is worse than a
+    // duplicate. The "is there a draw on this day" caller still gets a truthy answer.
+    G._tcBwEntries = [_done];
+    check('  …while a date with only completed draws still answers truthily',
+      G._labEntryOnDate('2026-09-15') === _done);
+    G._tcBwEntries = [_done, _pend];
+    check('  …and a date with nothing on it answers null',
+      G._labEntryOnDate('2026-01-01') === null);
+    G._tcBwEntries = _peSave;
+  }
+
   if (typeof G._labConfirmAdd === 'function') {
     // ⚠️ ASSERTED SYNCHRONOUSLY, AND THIS BLOCK CANNOT `await`.
     // It sits in the suite's synchronous section, so there is no await available here —
@@ -15456,9 +15487,24 @@ if (typeof G._labDrawStatus === 'function') {
     /_labDeleteEntry\(id\) \{[\s\S]{0,200}_labCloseDetail\(\)/.test(_ldSrc));
   // One draw per day: a second tap is a mis-tap, and two entries on one date would give
   // the curve two anchors for the same measurement.
-  check('a second draw on a day that already has one is refused',
-    /filter\(function\(e\)\{ return e && e\.date === d; \}\)\[0\]/.test(_ldSrc) &&
-    /if\(existing\)\{/.test(_ldSrc));
+  // ⚠️ ASSERT THE PROPERTY, NOT THE LINE. This pinned _labEntryOnDate's exact
+  // `filter(...)[0]` spelling, so teaching it to prefer a PENDING row broke the guard
+  // while the rule it guards — one draw per day — was never weakened. The rule is that
+  // the helper answers truthily for ANY entry on the date and that logBloodDraw returns
+  // on it; that survives however the helper picks between two rows.
+  check('a second draw on a day that already has one is refused', (function(){
+    if (typeof G._labEntryOnDate !== 'function') return /if\(existing\)\{/.test(_ldSrc);
+    const _sv = G._tcBwEntries;
+    const done = {id:'d', date:'2026-09-15', free_t:634};
+    const pend = {id:'p', date:'2026-09-15', free_t:null};
+    let ok = true;
+    G._tcBwEntries = [done];        ok = ok && !!G._labEntryOnDate('2026-09-15');
+    G._tcBwEntries = [pend];        ok = ok && !!G._labEntryOnDate('2026-09-15');
+    G._tcBwEntries = [done, pend];  ok = ok && !!G._labEntryOnDate('2026-09-15');
+    G._tcBwEntries = [];            ok = ok && !G._labEntryOnDate('2026-09-15');
+    G._tcBwEntries = _sv;
+    return ok && /var existing = _labEntryOnDate\(d\);/.test(_ldSrc) && /if\(existing\)\{/.test(_ldSrc);
+  })());
   // A pending draw offers the one action that moves it forward, prefilled with ITS date
   // so the results stay tied to the day of the draw.
   check('a pending draw offers Add results, prefilled with the draw date',
