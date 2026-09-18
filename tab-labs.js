@@ -362,9 +362,30 @@ function _labStatusChip(entry){
 // Beyond the duplicate in the list, two rows on one date give the free-T curve two
 // candidate anchors for a single measurement — and the pending one carries no values,
 // so which of them wins is decided by ordering rather than by data.
+// ⚠️ PREFER THE PENDING ROW. RESULTS BELONG IN THE DRAW THEY CAME FROM.
+// Henrik's 15 Sep ended up as two rows — one blank, one carrying free T 634 — and this
+// is the other half of how. The save path asks for "the entry on this date", discards it
+// unless it is still awaiting results, and POSTs a new row when it gets nothing back. So
+// taking [0] blind meant that on a date holding BOTH a pending draw and a completed one,
+// the completed row could answer, _pending came back null, and the results were written
+// as a third row instead of into the draw that was waiting for them.
+//
+// Which of the two answered was decided by the sort, and until 2026-09-18 that sort's
+// comparator never returned 0 — same-date order came out of the engine's algorithm
+// rather than the data. Making the comparator honest stopped the order being arbitrary;
+// this stops the CHOICE being arbitrary, which is the part that writes a row.
 function _labEntryOnDate(d){
   if(!d) return null;
-  return (_tcBwEntries || []).filter(function(e){ return e && e.date === d; })[0] || null;
+  var on = (_tcBwEntries || []).filter(function(e){ return e && e.date === d; });
+  if(!on.length) return null;
+  for(var i=0;i<on.length;i++){
+    if(typeof _labDrawStatus === 'function' && _labDrawStatus(on[i]) === 'drawn') return on[i];
+  }
+  // Nothing pending — every row on this date already has results. The caller that fills
+  // results in will refuse this one and create a new row, which is the documented and
+  // deliberate behaviour: silently overwriting real numbers is worse than a duplicate.
+  // The caller that only asks "is there a draw on this day" is answered either way.
+  return on[0];
 }
 // Shared by the Labs header and the Today button, so the two cannot record a draw
 // differently. Dates default to today; the picker lets a draw be back-dated, which is
