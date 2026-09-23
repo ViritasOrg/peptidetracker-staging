@@ -7510,13 +7510,32 @@ console.log('\n── The price of an injection ──────────�
         trt:{enabled:true, compounds:[{id:'enanthate', name:'Test E', dose:'250',
           unit:'mg', cadence:'days', days:[1,3,5], time:'AM',
           plan_mode:mode, max_inj_week:'3', load_mg:'300'}]}});
-      const _saveCache=G._injectionsCache;
-      // The record that fills the window: three logged doses in the preceding week.
-      G._injectionsCache={};
-      [-6,-4,-2].forEach(function(o){ G._injectionsCache[_d0(o)]=
+      // ⚠️ SET INSIDE THE SANDBOX, NOT THROUGH G.
+      // This assigned G._injectionsCache. It passed here and FAILED on the promoted
+      // tree, blocking a promotion — an environment-sensitive test is worse than none.
+      // The cap reads the sandbox's own _injectionsCache, so the record is written there
+      // directly and the assertion no longer depends on how that global is declared or
+      // on what an earlier block happened to leave behind.
+      const _saveCache=vm.runInContext('JSON.stringify(_injectionsCache||{})',sandbox);
+      const _cache={};
+      [-6,-4,-2].forEach(function(o){ _cache[_d0(o)]=
         [{compound_id:'enanthate', date:_d0(o), logged:true}]; });
+      vm.runInContext('_injectionsCache='+JSON.stringify(_cache)+';',sandbox);
+      // Prove the record actually landed before asserting anything about the cap: an
+      // empty cache makes the Target assertion pass for the wrong reason, which is
+      // exactly how a green test here hid a red one there.
+      check('cap · the logged record the cap reads is in place',
+        vm.runInContext('Object.keys(_injectionsCache).length',sandbox)===3);
+      // ⚠️ MIDNIGHT, AS EVERY REAL CALLER PASSES.
+      // This passed `new Date(NOW)`, carrying the clock time. _injTakenMs normalises
+      // logged doses to 12:00, so with a from-date after noon the oldest dose fell
+      // outside the 7-day window and the cap stopped biting — the test's verdict
+      // depended on the time of day it ran. It passed here and failed on prod CI at
+      // 12:47, blocking a promotion. saveEdit and the rebuild card both pass midnight
+      // (setHours(0,0,0,0)); matching them makes this deterministic and tests what the
+      // app actually does.
       const _gen=(mode)=>G._genInjBatches(_capStack(mode),'cap',
-        vm.runInContext('new Date(NOW)',sandbox))
+        vm.runInContext('(function(){var x=new Date(NOW);x.setHours(0,0,0,0);return x;})()',sandbox))
         .reduce((a,b)=>a.concat((b.entries||[]).map(e=>e.date)),[]);
       const _fixed=_gen('fixed'), _target=_gen('target');
       check('cap · Fixed dose ignores the solver cap, so today still generates',
@@ -7530,7 +7549,7 @@ console.log('\n── The price of an injection ──────────�
       check('cap · …but the loading dose is untouched by the mode',
         _fixed.filter(d=>d===_d0(0)).length === 1,
         'today should carry its normal dose, with load handled as before');
-      G._injectionsCache=_saveCache;
+      vm.runInContext('_injectionsCache='+_saveCache+';',sandbox);
     }
   }
 }
