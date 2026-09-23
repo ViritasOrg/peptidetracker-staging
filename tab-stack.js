@@ -5566,13 +5566,45 @@ function _genInjBatches(stack,cycleId,fromDate){
       var cStart=c.start_date?new Date(Math.max(parseLocalDate(c.start_date).getTime(),genStart.getTime())):new Date(genStart);
       var cEnd=c.end_date?new Date(Math.min(parseLocalDate(c.end_date).getTime(),cycleEnd.getTime())):new Date(cycleEnd);
       var compEntries=[];
+      // ── FIXED DOSE MEANS FIXED: THE SOLVER'S WEEKLY CAP DOES NOT APPLY ─────
+      // Reported 2026-09-23: "Edit schedule to 250mg M/W/F but no injection gets planned
+      // for today (wednesday)???? Works for Mast E but not Test E???"
+      //
+      // It was the weekly cap. His Test E carries max_inj_week 3, written by the
+      // TARGET FREE T solver, and he had since switched PLAN back to
+      // Fixed dose. trtSetPlanMode stashes dose_phases into ramp_stash on that switch,
+      // deliberately, so a solve is not destroyed by one tap. It does NOT stash these
+      // two, and the generator applied them regardless of mode.
+      //
+      // So: three logged doses on 17, 19 and 21 Sep filled the 7-day window ending on
+      // the 23rd, the cap dropped that Wednesday, and 25 Sep onward generated normally —
+      // exactly the hole in the record. Masteron has no cap, which is why it was fine and
+      // why the two tiers looked inconsistent.
+      //
+      // Neither field is rendered or editable in Fixed dose mode, so nothing on screen
+      // could explain a missing dose, and nothing reads _injSuppressed to say so either.
+      // A hidden setting silently removing an injection is the same failure as the
+      // single-phase ramp deadening the Dose field (2026-09-10): stale solver state
+      // outliving the switch back to Fixed.
+      //
+      // Gated here rather than cleared in trtSetPlanMode on purpose. Gating fixes every
+      // protocol already saved with these values without rewriting anyone's stored data,
+      // and switching back to Target restores the solve exactly as ramp_stash does.
+      var _planFixed=(typeof _trtPlanMode==='function')&&_trtPlanMode(c)==='fixed';
+      // ⚠️ THE LOADING DOSE IS NOT GATED. Gating it too broke
+      // "the loading dose lands on the first scheduled injection": load_mg is set on
+      // compounds with no explicit plan_mode, which _trtPlanModeStored reads as 'fixed',
+      // so every one of them silently lost its loading dose. That is the same class of
+      // silent removal this fix exists to stop, pointed the other way. The reported bug
+      // was the CAP dropping a scheduled day; the loading dose adds a dose to a day that
+      // is already scheduled and takes nothing away, so it is left alone.
       var _loadDay=_trtLoadFirstDay(c,cycleStart,cycleEnd), _loadMg=parseDec(c.load_mg)||0;
       // ⚠️ THE SAME TRIM THE SOLVER SCORED, FROM THE SAME FUNCTION.
       // A cap of "3 a week" is a cap on 7-day WINDOWS counting doses already in the
       // record, not a quota the plan's own first week gets to spend afresh. Working it
       // out here independently would be two implementations of one rule, which is how
       // the plan and the curve come to disagree; _injCapTrim is the single copy.
-      var _capW=parseDec(c.max_inj_week)||0, _allowed=null;
+      var _capW=_planFixed?0:(parseDec(c.max_inj_week)||0), _allowed=null;
       if(_capW>0&&typeof _injCapTrim==='function'){
         var _cand=[];
         for(var _cd=new Date(cStart);_cd<=cEnd;_cd=_nextDay(_cd))
