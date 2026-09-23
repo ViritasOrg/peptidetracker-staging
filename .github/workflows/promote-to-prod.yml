@@ -120,8 +120,44 @@ jobs:
         run: |
           REPO="ViritasOrg/peptidetracker"
           echo "Waiting for CI on PR #$PR_NUMBER then merging..."
+          # ⚠️ A TRANSIENT API ERROR IS NOT A FAILED PROMOTION.
+          # This step runs under `bash -e`, and every poll shells out to `gh api`. A
+          # single hiccup from GitHub therefore aborted the whole promotion: run 160
+          # (2026-09-23) died with "gh: Server Error (HTTP 502)" on attempt 33 of 60,
+          # while prod CI was still running and had not failed anything. The promotion
+          # reported failure for a reason that had nothing to do with the code.
+          #
+          # gh_retry runs a read up to 3 times with a short backoff and prints nothing
+          # but the payload. If all three fail it returns non-zero WITHOUT killing the
+          # step, and the caller treats that as "no answer yet" and polls again — the
+          # loop's own 60 attempts remain the only thing that can time it out.
+          #
+          # Reads only. A failed read means wait; it never means merge. The merge itself
+          # is deliberately NOT retried: it is the one side effect here, and an ambiguous
+          # second attempt at merging is worse than a promotion that has to be re-run.
+          # ⚠️ `rc=$?` AFTER AN `if` WITH NO ELSE IS 0, NOT THE COMMAND'S STATUS.
+          # The first version of this helper did that and so returned SUCCESS with an
+          # empty payload once all three attempts had failed — the caller would then jq
+          # an empty string and poll a blank SHA. Caught by simulating a 502 against it
+          # rather than by reading it. The status is now explicit, and a response that
+          # is empty counts as a failure even when gh exits 0.
+          gh_retry() {
+            local out=""
+            for _a in 1 2 3; do
+              if out=$(gh api "$@" 2>/dev/null) && [ -n "$out" ]; then
+                printf '%s' "$out"
+                return 0
+              fi
+              sleep 3
+            done
+            return 1
+          }
           for i in $(seq 1 60); do
-            PR_DATA=$(gh api repos/$REPO/pulls/$PR_NUMBER --jq '{merged: .merged, state: .state, sha: .head.sha}')
+            if ! PR_DATA=$(gh_retry repos/$REPO/pulls/$PR_NUMBER --jq '{merged: .merged, state: .state, sha: .head.sha}'); then
+              echo "Attempt $i: could not read the PR (transient API error), waiting 10s..."
+              sleep 10
+              continue
+            fi
             MERGED=$(echo "$PR_DATA" | jq -r '.merged')
             STATE=$(echo "$PR_DATA" | jq -r '.state')
             SHA=$(echo "$PR_DATA" | jq -r '.sha')
@@ -132,7 +168,11 @@ jobs:
               echo "PR #$PR_NUMBER closed without merging — CI failed on prod"
               exit 1
             fi
-            RUNS=$(gh api repos/$REPO/commits/$SHA/check-runs)
+            if ! RUNS=$(gh_retry repos/$REPO/commits/$SHA/check-runs); then
+              echo "Attempt $i: could not read check runs (transient API error), waiting 10s..."
+              sleep 10
+              continue
+            fi
             # Gate on THIS repo's own CI job only. The gate used to fail if ANY check
             # on the commit was failed/cancelled, which meant a scanner the repo does
             # not control could block a deploy: moving to the ViritasOrg org turned on
