@@ -12761,6 +12761,31 @@ function _isProdCheckout(dir) {
     /if \[ "\$FAILED" -gt "0" \]/.test(_pgSrc));
   check('non-blocking failures are reported, not swallowed',
     /non-blocking checks not passing/.test(_pgSrc));
+
+  // ── A TRANSIENT API ERROR IS NOT A FAILED PROMOTION (2026-09-23) ───────────
+  // The step runs under `bash -e` and every poll shells out to `gh api`, so one hiccup
+  // aborted the whole promotion: run 160 died on "gh: Server Error (HTTP 502)" at
+  // attempt 33 of 60 while prod CI was still running and had failed nothing.
+  check('promote · reads go through a retry helper, not a bare gh api',
+    /gh_retry\(\)\s*\{/.test(_pgSrc) &&
+    /PR_DATA=\$\(gh_retry /.test(_pgSrc) &&
+    /RUNS=\$\(gh_retry /.test(_pgSrc));
+  check('promote · …and a read that never succeeds keeps polling instead of failing',
+    /could not read the PR \(transient API error\)/.test(_pgSrc) &&
+    /could not read check runs \(transient API error\)/.test(_pgSrc));
+  // `rc=$?` after an `if` with no else is 0, so the first version of the helper
+  // returned SUCCESS with an empty payload once every attempt had failed.
+  // Checked against CODE ONLY: the comment above the helper quotes `rc=$?` to explain
+  // the bug, and a whole-file match flagged its own documentation.
+  const _pgCode = _pgSrc.split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
+  check('promote · …the helper fails explicitly rather than inheriting an if status',
+    /return 1\n\s*\}/.test(_pgCode) && !/rc=\$\?/.test(_pgCode));
+  check('promote · …and an empty response counts as a failure even on exit 0',
+    /&&\s*\[ -n "\$out" \]/.test(_pgSrc));
+  // The merge is the one side effect here; retrying it is worse than re-running.
+  check('promote · the merge itself is NOT retried',
+    /gh pr merge "\$PR_NUMBER"/.test(_pgSrc) &&
+    !/gh_retry[^\n]*pr merge/.test(_pgSrc));
   }
 }
 
