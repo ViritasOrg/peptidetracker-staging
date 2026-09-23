@@ -6496,22 +6496,41 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
 
     setStacks([]);
     check('with no protocols the default is today', nextStart()===today, nextStart());
-    // The reported case.
-    setStacks([{id:'p1',cycle_start:'2026-06-01',end_date:'2026-09-13'}]);
-    check('  …a protocol ending 13 Sep defaults the next one to 14 Sep',
-      nextStart()==='2026-09-14', nextStart());
+    // ⚠️ RELATIVE TO TODAY, NOT A HARDCODED DATE (fixed 2026-09-23).
+    // These two assertions were written with the literal dates from the report —
+    // end_date '2026-09-13', expecting '2026-09-14'. That worked while 13 Sep was in the
+    // future. Once the real clock passed it the protocol was FINISHED, so
+    // _nextFreeStartDate correctly returned today ("never default into the past"), and the
+    // assertions failed on main with nothing having changed in the app. They also
+    // contradicted the assertion three lines below, which demands exactly that behaviour
+    // for an ended protocol.
+    //
+    // The product was right and the fixture had expired. Rebuilt relative to NOW so it
+    // keeps testing what it meant to — a protocol ending in the FUTURE pushes the next
+    // one to end+1 — and cannot rot again.
+    // Computed INSIDE the sandbox: NOW is the app's clock, and a Date built out here is
+    // a different realm's object. Getting that wrong produced an invalid end_date, which
+    // _nextFreeStartDate quietly treats as "no end" and answers today — the same answer
+    // the stale fixture gave, so the test would have looked merely un-fixed.
+    const _dayOff=(off)=>ev('(function(o){var x=new Date(NOW);x.setDate(x.getDate()+o);return dateKey(x);})('+off+')');
+    // The reported case, as a protocol still running: ends in 20 days.
+    setStacks([{id:'p1',cycle_start:_dayOff(-90),end_date:_dayOff(20)}]);
+    check('  …a protocol ending in future defaults the next one to the day after it',
+      nextStart()===_dayOff(21), nextStart());
     // An end derived from cycle_length counts too, not just an explicit end_date.
-    setStacks([{id:'p1',cycle_start:'2026-08-28',cycle_length:12}]);
+    // Same rot hazard: a 12-week protocol started at a fixed date eventually ends in the
+    // past. Anchored to today so the derived end stays in the future.
+    setStacks([{id:'p1',cycle_start:_dayOff(-7),cycle_length:12}]);
     check('  …a length-derived end counts the same as an explicit one',
-      nextStart()==='2026-11-21', nextStart());
+      nextStart()===_dayOff(-7+12*7+1), nextStart());
     // ⚠️ NEVER INTO THE PAST. A finished protocol must not drag the default backwards.
     setStacks([{id:'p1',cycle_start:'2026-01-01',end_date:'2026-03-01'}]);
     check('  …but a protocol that already ended yields today', nextStart()===today, nextStart());
     // The protocol being created has no cycle_start, so it contributes no end date and
     // cannot push its own default forward.
-    setStacks([{id:'p1',cycle_start:'2026-06-01',end_date:'2026-09-13'},{id:'new'}]);
+    setStacks([{id:'p1',cycle_start:_dayOff(-90),end_date:_dayOff(20)},{id:'new'}]);
     check('  …and the protocol being created does not count itself',
-      nextStart()==='2026-09-14', nextStart());
+      nextStart()===_dayOff(21), nextStart());
 
     setStacks(save);
     check('  …and the wizard first-injection follows the same default',
