@@ -7493,6 +7493,45 @@ console.log('\n── The price of an injection ──────────�
     check('  …and the cap travels with the plan so the generator can honour it',
       /comp\.max_inj_week=String\(_cap\)/.test(_stSrc3) &&
       /parseDec\(c\.max_inj_week\)/.test(_stSrc3));
+
+    // ── FIXED DOSE MEANS FIXED (2026-09-23) ──────────────────────────────────
+    // "Edit schedule to 250mg M/W/F but no injection gets planned for today
+    // (wednesday)???? Works for Mast E but not Test E???"
+    //
+    // His Test E carried max_inj_week 3 and load_mg 300 from the Target-free-T solver,
+    // and he had switched PLAN back to Fixed dose. trtSetPlanMode stashes dose_phases on
+    // that switch but not these, and the generator honoured them regardless of mode. Three
+    // logged doses on 17/19/21 Sep filled the window ending the 23rd, so the cap dropped
+    // that Wednesday. Neither field is shown or editable in Fixed mode, so nothing on
+    // screen could explain the hole.
+    {
+      const _d0=(off)=>vm.runInContext('(function(o){var x=new Date(NOW);x.setDate(x.getDate()+o);return dateKey(x);})('+off+')',sandbox);
+      const _capStack=(mode)=>({id:'cap', cycle_start:_d0(-6), cycle_length:13,
+        trt:{enabled:true, compounds:[{id:'enanthate', name:'Test E', dose:'250',
+          unit:'mg', cadence:'days', days:[1,3,5], time:'AM',
+          plan_mode:mode, max_inj_week:'3', load_mg:'300'}]}});
+      const _saveCache=G._injectionsCache;
+      // The record that fills the window: three logged doses in the preceding week.
+      G._injectionsCache={};
+      [-6,-4,-2].forEach(function(o){ G._injectionsCache[_d0(o)]=
+        [{compound_id:'enanthate', date:_d0(o), logged:true}]; });
+      const _gen=(mode)=>G._genInjBatches(_capStack(mode),'cap',
+        vm.runInContext('new Date(NOW)',sandbox))
+        .reduce((a,b)=>a.concat((b.entries||[]).map(e=>e.date)),[]);
+      const _fixed=_gen('fixed'), _target=_gen('target');
+      check('cap · Fixed dose ignores the solver cap, so today still generates',
+        _fixed.includes(_d0(0)), 'got first: ' + _fixed[0]);
+      check('cap · …and Target mode still honours it — the cap is not disabled outright',
+        !_target.includes(_d0(0)),
+        'the cap must keep working where the user actually set it');
+      // The loading dose is deliberately NOT gated — see the note in _genInjBatches.
+      // Gating it suppressed load_mg on every compound with no explicit plan_mode, which
+      // is the same silent removal pointed the other way.
+      check('cap · …but the loading dose is untouched by the mode',
+        _fixed.filter(d=>d===_d0(0)).length === 1,
+        'today should carry its normal dose, with load handled as before');
+      G._injectionsCache=_saveCache;
+    }
   }
 }
 
