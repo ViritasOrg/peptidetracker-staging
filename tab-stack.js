@@ -5822,6 +5822,7 @@ function _compScheduleWarning(stack,comp,tier){
   if(!stack||!comp)return '';
   if(comp.active===false)return '';            // switched off deliberately; not a surprise
   if(!stack.cycle_start)return '';             // no start yet — the editor says that already
+  var first='';
   try{
     var solo={id:stack.id,name:stack.name,cycle_start:stack.cycle_start,
               cycle_length:stack.cycle_length,end_date:stack.end_date,
@@ -5830,14 +5831,33 @@ function _compScheduleWarning(stack,comp,tier){
     else if(tier==='trt')solo.trt={enabled:true,compounds:[comp]};
     else solo.enhanced={enabled:true,compounds:[comp]};
     var from=new Date(NOW);from.setHours(0,0,0,0);
-    var n=_genInjBatches(solo,_stackCycleId(solo),from)
-      .reduce(function(a,b){return a+((b.entries||[]).length);},0);
-    if(n>0)return '';
+    var dates=_genInjBatches(solo,_stackCycleId(solo),from)
+      .reduce(function(a,b){return a.concat((b.entries||[]).map(function(e){return e.date;}));},[]);
+    dates.sort();
+    first=dates[0]||'';
+    // ⚠️ "SCHEDULES SOMETHING" IS NOT THE SAME AS "SCHEDULES ANYTHING SOON".
+    // Corrected 2026-09-25 against the reporting user's real record, and it reverses a
+    // call I had made and defended one commit earlier. I had this warn only when a
+    // compound scheduled NOTHING AT ALL, on the reasoning that a future protocol does
+    // schedule and warning about it would be noise.
+    //
+    // ivan@sarnmark.net: protocol "Fat Loss (GLP-1)" running to 2026-12-17, then a new
+    // protocol carrying Retatrutide on Thursdays — cycle_start 2026-12-18, which is
+    // _nextFreeStartDate putting it the day after the current one ends. He had added
+    // Thursday to log the dose he had just taken. Twelve weeks of Retatrutide were
+    // scheduled, correctly, starting in three months. Nothing was wrong and nothing was
+    // visible, so under the old rule this said nothing at all — the one case it was
+    // written for.
+    //
+    // A start date the app chose is worth stating whether or not rows exist beyond it.
+    var soon=new Date(from.getTime()+7*86400000);
+    if(first&&first<=dateKey(soon))return '';
   }catch(e){ return ''; }                      // never let a warning break the editor
   // It schedules nothing. Say WHICH of the ordinary causes it is, because "nothing is
   // scheduled" on its own sends the user back to the same screen none the wiser.
   var startsLater=_compStartsAfterToday(stack,comp);
-  if(startsLater)return 'Nothing is scheduled yet — this starts '+startsLater+'.';
+  if(startsLater)return 'Nothing is scheduled for the next week — this starts '+startsLater
+    +(first?(', first dose '+first):'')+'. Change the protocol\u2019s start date to begin sooner.';
   var slots=_compEmptySlots(comp,tier);
   if(slots)return 'No dose set for '+slots+', so nothing is scheduled. '
                  +'The dose belongs on the slot you have selected.';

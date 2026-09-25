@@ -7690,18 +7690,30 @@ console.log('\n── The loading dose ─────────────�
       check('warn · …and it names the slot rather than saying "nothing scheduled"',
         /PM/.test(_wPm) && /dose/i.test(_wPm), _wPm);
 
-      // ⚠️ A FUTURE START IS NOT WARNED ABOUT, DELIBERATELY.
-      // I first asserted the opposite and it failed — correctly. A protocol starting in
-      // ten days DOES schedule; it just does not schedule TODAY. Warning there would
-      // fire on every legitimately-future protocol, and the start date is already on
-      // screen in the field right above. The warning is for the case where a compound
-      // schedules NOTHING AT ALL, which is the one nothing on screen explains.
+      // ⚠️ THE REPORTED CASE, FROM THE REPORTING USER'S ACTUAL RECORD.
+      // ivan@sarnmark.net: "Fat Loss (GLP-1)" running to 2026-12-17, then a new protocol
+      // carrying Retatrutide on Thursdays with cycle_start 2026-12-18 — _nextFreeStartDate
+      // putting it the day after the current one ends. He had added Thursday to log the
+      // dose he had just taken. Twelve weeks were scheduled correctly, starting in three
+      // months, and nothing said so.
+      //
+      // This REVERSES the boundary asserted one commit earlier, which had this stay
+      // silent whenever a compound scheduled anything at all. That was wrong for exactly
+      // the case the warning exists for: a start date the app chose, not the user.
       const _future = _pep({});
-      const _fStack = Object.assign(_swStack(_future), {cycle_start:_swLater(10)});
-      check('warn · a protocol that starts later is not warned about — it does schedule',
-        G._compScheduleWarning(_fStack, _future, 'peptide') === '',
-        'warning here would be noise on every future protocol');
-      // But a start beyond the protocol's own end schedules nothing, and that IS silent.
+      const _fStack = Object.assign(_swStack(_future), {cycle_start:_swLater(84)});
+      const _wF = G._compScheduleWarning(_fStack, _future, 'peptide');
+      check('warn · a start the app chose months out is explained, not silent', !!_wF, _wF);
+      check('warn · …and it gives the date and how to start sooner',
+        _wF.indexOf(_swLater(84)) >= 0 && /start date/i.test(_wF), _wF);
+      // Still silent when it schedules within the week — otherwise every ordinary
+      // protocol carries a warning and the line stops meaning anything.
+      const _soon = _pep({});
+      const _sStack = Object.assign(_swStack(_soon), {cycle_start:_swLater(3)});
+      check('warn · a protocol starting within the week stays silent',
+        G._compScheduleWarning(_sStack, _soon, 'peptide') === '',
+        'a warning on every ordinary protocol would be noise');
+      // A start beyond the protocol's own end schedules nothing at all.
       const _never = _pep({start_date:_swLater(400)});
       const _wN = G._compScheduleWarning(_swStack(_never), _never, 'peptide');
       check('warn · a compound whose window never opens is explained', !!_wN, _wN);
