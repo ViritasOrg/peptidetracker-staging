@@ -1825,7 +1825,7 @@ function _renderEditTRT(trt){if(!trt)trt={};
     });
     return lockedHtml;
   }
-  var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';var _doseRow='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';html+=_renderTRTPlan(c,selData,'edit',_doseRow);html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+=_renderTRTTransition(c,selData,'edit');html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
+  var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';var _doseRow='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';html+=_renderTRTPlan(c,selData,'edit',_doseRow);html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+=_renderTRTTransition(c,selData,'edit');html+=_scheduleWarningHtml(_editBuf,selData,'trt');html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
 function editSetTRTTime(id,tm){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.time=(tm==='PM'?'PM':'AM');_collectEditInputs();renderStackEditor();}
 function editAddPeptide(){
   var currentIds=(_editBuf.peptides||[]).map(function(p){return p.id;});
@@ -2924,6 +2924,7 @@ function wizStepConfig(body,footer){
     html+=_renderSlotTimingHint(p.id,p.times);
     html+=_renderPepCadence(pi,p,'wiz');
     html+='<div class="cfg-row"><div class="cfg-lbl">Note (optional)</div><input class="note-in" type="text" value="'+String(p.note||'')+'" oninput="wizSetNote('+pi+',this.value)" placeholder="e.g. fasted, pre-sleep..."></div>';
+    html+=_scheduleWarningHtml(_editBuf,p,'peptide');
     html+='<div id="pep-guide-'+pi+'">'+_renderDoseGuide(p.id,parseDec(_slotFirstDose(p))||0,_weeklyDoseTotal(p))+'</div>';
     html+=_renderRampSection(p,pi);
     html+='</div>';
@@ -4156,6 +4157,7 @@ function _renderEditEnhanced(enh,opts){
           html+=_enhDrawLine(selData);
           html+=_renderEnhCadence(c,selData,'edit');
         }
+        html+=_scheduleWarningHtml(_editBuf,selData,'enhanced');
         html+='<div id="enh-guide-'+c.id+'">'+_renderEnhancedGuide(c,_amPm?_enhSplitTotal(selData):parseDec(selData.dose||0),selData.unit)+'</div>';
         html+='</div>';
       }
@@ -5790,6 +5792,108 @@ function confirmSavePrune(stack){
     + 'If you have already taken any of them, tick them first \u2014 an unchecked dose '
     + 'cannot be told apart from one you skipped, and if the new plan does not schedule '
     + 'it, the record of it is gone.\n\nSave anyway?');
+}
+
+// ── A COMPOUND THAT SCHEDULES NOTHING MUST SAY SO ───────────────────────────
+// Reported 2026-09-25: a new user created their first protocol, added a peptide on
+// today's weekday to log the injection they had just taken, and no dose appeared.
+//
+// The schedule logic is NOT at fault — the generator was driven through the whole
+// new-user path (wizard save, _ensureCycleStart, activation, confirmSavePrune) on both
+// prod and staging and it produces today correctly. What it does badly is FAIL SILENTLY.
+// Several ordinary configurations yield zero rows and say nothing at all:
+//
+//   times ['PM'] with the dose typed into the AM field   -> 0 rows
+//   dose left empty for the selected slot                -> 0 rows
+//   a protocol or compound whose start date is not yet   -> 0 rows
+//
+// The first is the easy trap: the dose is visibly filled in, just not on the slot that
+// is selected. `if(dose)` in the peptide branch and `if(!(parseDec(...)>0))continue` in
+// the other two are right to refuse a row carrying an empty dose — but nothing then
+// tells the user why their compound produced no injections, and _injSuppressed, which
+// exists for exactly this ("a row that vanishes with no explanation is the bug, not the
+// fix"), is written by one call site and rendered by none.
+//
+// ⚠️ ASKS THE REAL GENERATOR, rather than re-deriving the rules. A second copy of
+// "does this schedule anything" is how the warning and the schedule come to disagree —
+// the same mistake as two cadence implementations. This builds a one-compound stack and
+// runs _genInjBatches over it, so the answer is by construction the one the app acts on.
+function _compScheduleWarning(stack,comp,tier){
+  if(!stack||!comp)return '';
+  if(comp.active===false)return '';            // switched off deliberately; not a surprise
+  if(!stack.cycle_start)return '';             // no start yet — the editor says that already
+  var first='';
+  try{
+    var solo={id:stack.id,name:stack.name,cycle_start:stack.cycle_start,
+              cycle_length:stack.cycle_length,end_date:stack.end_date,
+              peptides:[],trt:{},enhanced:{}};
+    if(tier==='peptide')solo.peptides=[comp];
+    else if(tier==='trt')solo.trt={enabled:true,compounds:[comp]};
+    else solo.enhanced={enabled:true,compounds:[comp]};
+    var from=new Date(NOW);from.setHours(0,0,0,0);
+    var dates=_genInjBatches(solo,_stackCycleId(solo),from)
+      .reduce(function(a,b){return a.concat((b.entries||[]).map(function(e){return e.date;}));},[]);
+    dates.sort();
+    first=dates[0]||'';
+    // ⚠️ "SCHEDULES SOMETHING" IS NOT THE SAME AS "SCHEDULES ANYTHING SOON".
+    // Corrected 2026-09-25 against the reporting user's real record, and it reverses a
+    // call I had made and defended one commit earlier. I had this warn only when a
+    // compound scheduled NOTHING AT ALL, on the reasoning that a future protocol does
+    // schedule and warning about it would be noise.
+    //
+    // ivan@sarnmark.net: protocol "Fat Loss (GLP-1)" running to 2026-12-17, then a new
+    // protocol carrying Retatrutide on Thursdays — cycle_start 2026-12-18, which is
+    // _nextFreeStartDate putting it the day after the current one ends. He had added
+    // Thursday to log the dose he had just taken. Twelve weeks of Retatrutide were
+    // scheduled, correctly, starting in three months. Nothing was wrong and nothing was
+    // visible, so under the old rule this said nothing at all — the one case it was
+    // written for.
+    //
+    // A start date the app chose is worth stating whether or not rows exist beyond it.
+    var soon=new Date(from.getTime()+7*86400000);
+    if(first&&first<=dateKey(soon))return '';
+  }catch(e){ return ''; }                      // never let a warning break the editor
+  // It schedules nothing. Say WHICH of the ordinary causes it is, because "nothing is
+  // scheduled" on its own sends the user back to the same screen none the wiser.
+  var startsLater=_compStartsAfterToday(stack,comp);
+  if(startsLater)return 'Nothing is scheduled for the next week — this starts '+startsLater
+    +(first?(', first dose '+first):'')+'. Change the protocol\u2019s start date to begin sooner.';
+  var slots=_compEmptySlots(comp,tier);
+  if(slots)return 'No dose set for '+slots+', so nothing is scheduled. '
+                 +'The dose belongs on the slot you have selected.';
+  return 'Nothing is scheduled from today — check the dose, the days and the dates.';
+}
+// The later of the protocol's start and the compound's own, when it is still ahead.
+function _compStartsAfterToday(stack,comp){
+  var t0=new Date(NOW);t0.setHours(0,0,0,0);
+  var best='';
+  [stack.cycle_start,comp.start_date].forEach(function(ds){
+    if(!ds)return;
+    var d=parseLocalDate(ds);
+    if(d&&!isNaN(d.getTime())&&d>t0&&(!best||ds>best))best=ds;
+  });
+  return best;
+}
+// Selected slots that carry no dose. Peptides hold a dose per slot; TRT and Enhanced
+// hold one flat dose (Enhanced splits per slot only when amPm is on).
+function _compEmptySlots(comp,tier){
+  if(tier==='trt')return parseDec(comp.dose)>0?'':'this compound';
+  var times=(comp.times&&comp.times.length)?comp.times:null;
+  if(tier==='enhanced'&&!comp.amPm)return parseDec(comp.dose)>0?'':'this compound';
+  if(!times)return (parseDec(comp.dose_am)>0||parseDec(comp.dose)>0)?'':'this compound';
+  var empty=times.filter(function(t){
+    var k=_slotKey(t);
+    return !(parseDec(comp['dose_'+k])>0)&&!(parseDec(comp.dose)>0);
+  });
+  return empty.length?empty.join(' and '):'';
+}
+// The line itself. One renderer so the three tiers cannot drift apart — CLAUDE.md
+// requires every tier to carry the same features, and this is one of them.
+function _scheduleWarningHtml(stack,comp,tier){
+  var msg=_compScheduleWarning(stack,comp,tier);
+  if(!msg)return '';
+  return '<div style="font-size:11px;color:#f59e0b;line-height:1.5;margin-top:8px;'
+    +'font-weight:600">\u26a0 '+_esc(msg)+'</div>';
 }
 
 async function generateAndPushInjections(stack,fromDate){
