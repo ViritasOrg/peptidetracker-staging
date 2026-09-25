@@ -7664,6 +7664,66 @@ console.log('\n── The loading dose ─────────────�
     const comp={id:'enanthate',name:'Test E',dose:'50',unit:'mg',
                 cadence:'interval',freqVal:2,freqUnit:'days',load_mg:'150'};
     const rows=gen(comp);
+    // ── A COMPOUND THAT SCHEDULES NOTHING MUST SAY SO (2026-09-25) ───────────
+    // A new user created their first protocol, added a peptide on today's weekday to
+    // log the injection they had just taken, and no dose appeared. The generator was
+    // driven through the whole new-user path and schedules today correctly — what it
+    // does badly is fail SILENTLY when the configuration yields nothing.
+    {
+      const _swDay = () => vm.runInContext('NOW.getDay()', sandbox);
+      const _swToday = () => vm.runInContext('dateKey(NOW)', sandbox);
+      const _swLater = (n) => vm.runInContext(
+        '(function(o){var x=new Date(NOW);x.setDate(x.getDate()+o);return dateKey(x);})('+n+')', sandbox);
+      const _swStack = (pep) => ({id:'sw', name:'P', cycle_start:_swToday(),
+        cycle_length:12, peptides:[pep], trt:{}, enhanced:{}});
+      const _pep = (o) => Object.assign({id:'retatrutide', name:'Reta', times:['AM'],
+        days:[_swDay()], dose_am:'3', unit_am:'mg'}, o);
+
+      // The control: a config that DOES schedule must stay silent.
+      check('warn · a compound that schedules today says nothing',
+        G._compScheduleWarning(_swStack(_pep({})), _pep({}), 'peptide') === '');
+
+      // The trap: the dose is visibly filled in, just not on the selected slot.
+      const _pmOnly = _pep({times:['PM'], dose_am:'3', dose_pm:''});
+      const _wPm = G._compScheduleWarning(_swStack(_pmOnly), _pmOnly, 'peptide');
+      check('warn · a slot with no dose is explained, not silent', !!_wPm, _wPm);
+      check('warn · …and it names the slot rather than saying "nothing scheduled"',
+        /PM/.test(_wPm) && /dose/i.test(_wPm), _wPm);
+
+      // ⚠️ A FUTURE START IS NOT WARNED ABOUT, DELIBERATELY.
+      // I first asserted the opposite and it failed — correctly. A protocol starting in
+      // ten days DOES schedule; it just does not schedule TODAY. Warning there would
+      // fire on every legitimately-future protocol, and the start date is already on
+      // screen in the field right above. The warning is for the case where a compound
+      // schedules NOTHING AT ALL, which is the one nothing on screen explains.
+      const _future = _pep({});
+      const _fStack = Object.assign(_swStack(_future), {cycle_start:_swLater(10)});
+      check('warn · a protocol that starts later is not warned about — it does schedule',
+        G._compScheduleWarning(_fStack, _future, 'peptide') === '',
+        'warning here would be noise on every future protocol');
+      // But a start beyond the protocol's own end schedules nothing, and that IS silent.
+      const _never = _pep({start_date:_swLater(400)});
+      const _wN = G._compScheduleWarning(_swStack(_never), _never, 'peptide');
+      check('warn · a compound whose window never opens is explained', !!_wN, _wN);
+
+      // Switching a compound off is deliberate — warning about it would be noise.
+      const _off = _pep({active:false});
+      check('warn · a compound switched off is not warned about',
+        G._compScheduleWarning(_swStack(_off), _off, 'peptide') === '');
+
+      // CLAUDE.md: every tier carries the same features. The warning is one of them.
+      const _src = require('fs').readFileSync(
+        require('path').join(__dirname,'../tab-stack.js'),'utf8');
+      check('warn · all three tiers render the warning, not just peptides',
+        (_src.match(/_scheduleWarningHtml\(/g)||[]).length >= 4 &&
+        /_scheduleWarningHtml\(_editBuf,p,'peptide'\)/.test(_src) &&
+        /_scheduleWarningHtml\(_editBuf,selData,'trt'\)/.test(_src) &&
+        /_scheduleWarningHtml\(_editBuf,selData,'enhanced'\)/.test(_src));
+      // The warning must ask the real generator, or it drifts from what is scheduled.
+      check('warn · the warning asks _genInjBatches rather than re-deriving the rules',
+        /_compScheduleWarning[\s\S]{0,1200}_genInjBatches\(solo/.test(_src));
+    }
+
     check('the loading dose lands on the first scheduled injection',
       rows.length>1 && parseFloat(rows[0].dose)===200 && parseFloat(rows[1].dose)===50,
       rows.slice(0,3).map(r=>r.date+':'+r.dose).join(' '));
