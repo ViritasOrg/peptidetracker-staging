@@ -1931,7 +1931,7 @@ function wizStep4(body,footer){
     html+='<div style="color:var(--muted2);font-size:13px;">No peptides selected.</div>';
   }
   _trtCompounds(_wiz.trt).forEach(function(c){
-    html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(c.dot||'var(--accent4)')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+c.name+'</div><div style="font-size:12px;color:var(--muted2)">'+(c.dose?c.dose+(c.unit||'mg')+' ':'')+(c.days&&c.days.length?c.days.map(function(d){return DAYS_SHORT[d];}).join('/'):(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'TRT'))+'</div></div>';
+    html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(c.dot||'var(--accent4)')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+c.name+'</div><div style="font-size:12px;color:var(--muted2)">'+(c.dose?c.dose+(c.unit||'mg')+' ':'')+(c.days&&c.days.length?c.days.map(function(d){return DAYS_SHORT[d];}).join('/'):(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'Advanced'))+'</div></div>';
   });
   body.innerHTML=html;
   var saveLabel=hasErrors?'Save Anyway (conflicts)':'Save Protocol';
@@ -3132,7 +3132,7 @@ function _renderTRTViewTab(st){
   var _tcCard=(typeof _renderTcalcTrtCard==='function')?_renderTcalcTrtCard():'';
   if(_tcCard) html+=_tcCard;
   if(!compounds.length){
-    if(!_tcCard) html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No TRT configured for this protocol.</div>';
+    if(!_tcCard) html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No Advanced compounds configured for this protocol.</div>';
   }else{
     html+=_tcalcOwnsTestoNote('Testosterone');
     html+='<div class="wiz-section" style="margin-bottom:10px;">Protocol</div>';
@@ -3388,7 +3388,7 @@ function _getDynamicTRTDoses(d,withIds){
       var key=c.id+'_'+si;
       if(seenIds[key])return;
       seenIds[key]=true;
-      var entry={name:c.name+(c.dose?' '+c.dose+(c.unit||'mg'):''),detail:'TRT injection — IM',time:null,dot:cat?cat.dot:'#e8a020'};
+      var entry={name:c.name+(c.dose?' '+c.dose+(c.unit||'mg'):''),detail:'Advanced injection — IM',time:null,dot:cat?cat.dot:'#e8a020'};
       if(withIds)entry.id=c.id+'_'+si+'_'+dateKey(d);
       result.push(entry);
     });
@@ -3469,8 +3469,15 @@ function _renderTRTGuide(cId,weeklyDoseMg){
   if(profile.age>0&&profile.age<25)mods.push({type:'warn',text:'Age '+profile.age+': exogenous testosterone suppresses the HPTA and may impair endogenous production long-term at this age.'});
   if(profile.age>=50)mods.push({type:'info',text:'Age '+profile.age+': natural T decline is expected — start at the standard TRT range and titrate up only if bloodwork supports it.'});
   var modHtml=mods.length?'<div style="margin-top:5px;border-top:1px solid var(--border);padding-top:5px">'+mods.map(function(m){var c=colorMap[m.type]||'#3b9eff';return'<div style="display:flex;align-items:flex-start;gap:5px;margin-bottom:3px"><span style="color:'+c+';font-size:12px;line-height:1.4;margin-top:1px">●</span><span style="font-size:11px;color:var(--text);line-height:1.4">'+m.text+'</span></div>';}).join('')+'</div>':'';
+  // THE TIER IT USED TO POINT AT IS GONE. This block told the user to "track this
+  // compound in the Enhanced tab instead and run TRT-range Test here" — advice written
+  // before Phase 4 folded TRT and Enhanced into one Compounds tier. There is no second
+  // tab to move to any more, so the instruction just read as the app refusing a dose it
+  // was perfectly happy to schedule (Henrik, 2026-09-29, 525 mg/wk Test).
+  // The warning itself stays: 250 mg/wk really is above replacement, and saying so is
+  // the point. Only the relocation advice goes.
   var supraHtml='';
-  if(weeklyDoseMg>250){supraHtml='<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:7px 10px;margin-bottom:5px"><div style="font-size:11px;font-weight:700;color:#f59e0b;margin-bottom:2px">⚠ Supraphysiological dose</div><div style="font-size:11px;color:var(--muted2);line-height:1.5;">'+Math.round(weeklyDoseMg)+' mg/week exceeds the TRT range (100–200 mg/wk). At this dose you are running a blast, not a TRT protocol. Consider tracking this compound in the Enhanced tab instead and running TRT-range Test here.</div></div>';}
+  if(weeklyDoseMg>250){supraHtml='<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:7px 10px;margin-bottom:5px"><div style="font-size:11px;font-weight:700;color:#f59e0b;margin-bottom:2px">⚠ Supraphysiological dose</div><div style="font-size:11px;color:var(--muted2);line-height:1.5;">'+Math.round(weeklyDoseMg)+' mg/week is above the replacement range (100–200 mg/wk). At this dose you are running a blast, not a replacement protocol.</div></div>';}
   // TIER PARITY (CLAUDE.md): the female guard lives on the Enhanced tier via
   // _renderEnhancedGuide, and it has to be here too. The TRT tier is where `topical`
   // and `test_e` actually live — the two compounds the female table has the most to say
@@ -3488,7 +3495,7 @@ function _renderTRTGuide(cId,weeklyDoseMg){
     }
   }catch(e){if(typeof _logErr==='function')_logErr('trtFemaleGuard',e);}
   return'<div class="cfg-row" style="display:block;margin-top:10px">'
-    +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">TRT Guide</div>'
+    +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Advanced Guide</div>'
     +femHtml+supraHtml+cadHtml+tiersHtml+modHtml+'</div>'+_renderSafetyNote('trt');
 }
 function _refreshTRTGuide(id,freqVal,freqUnit,dose){var el=document.getElementById('trt-guide-'+id);if(!el)return;var doseNum=parseDec(dose)||0;var freqDays=(freqUnit||'weeks')==='weeks'?(freqVal||1)*7:(freqVal||1);var weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;el.innerHTML=_renderTRTGuide(id,weeklyDoseMg);}
@@ -5187,7 +5194,7 @@ function _wizTrtSummaryRows(){
     // TRT's own resolver, so the label matches what _genInjBatches actually schedules.
     // This read days[] first and ignored c.cadence, so a solved every-3-days plan
     // rendered as "1x/week" — the summary contradicting the schedule underneath it.
-    var days=c.id||c.cadence||c.days||c.freqVal?_trtCadenceLabel(c):'TRT';
+    var days=c.id||c.cadence||c.days||c.freqVal?_trtCadenceLabel(c):'Advanced';
     rows.push({id:c.id||'',name:c.name||nameOf(c.id),dot:c.dot||'var(--accent4)',
                dose:c.dose?c.dose+(c.unit||'mg'):'',cadence:days});
   });
@@ -5205,7 +5212,7 @@ function wizStepValidate(body,footer){
   }
   var _trtRows=_wizTrtSummaryRows();
   if(_trtRows.length){
-    html+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:10px 0 6px">TRT</div>';
+    html+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:10px 0 6px">Advanced</div>';
     _trtRows.forEach(function(r){
       html+='<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><div style="width:7px;height:7px;border-radius:50%;background:'+r.dot+';flex-shrink:0"></div><span style="font-size:13px;color:var(--text)">'+_esc(r.name)+'</span></div>';
     });
