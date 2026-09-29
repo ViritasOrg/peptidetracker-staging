@@ -2408,8 +2408,10 @@ function buildStackStore(){
     html+='<div class="stack-card-meta">';
     var _chips='';
     if(_tf.peptide)_chips+=_stackTierChip('PEPTIDES','var(--accent3)');
-    if(_tf.trt)_chips+=_stackTierChip('ADVANCED','#e05050');
-    if(_tf.enhanced)_chips+=_stackTierChip('ENHANCED','var(--accent4)');
+    // ONE CHIP FOR ONE TIER. Testosterone and the rest of the compounds stopped being
+    // separate tiers at Phase 4, so a protocol carrying both used to wear two chips for
+    // one thing — and once both read Enhanced it would have worn the same chip twice.
+    if(_tf.trt||_tf.enhanced)_chips+=_stackTierChip('ENHANCED','var(--accent4)');
     if(!_chips)_chips='<span style="font-size:10px;color:var(--muted2)">Empty</span>';
     html+='<div style="display:flex;flex-wrap:wrap;margin-bottom:4px">'+_chips+'</div>';
     if(_tf.peptide)html+='<div style="font-size:10px;color:var(--muted2);margin-bottom:4px">'+pCount+' peptide'+(pCount===1?'':'s')+'</div>';
