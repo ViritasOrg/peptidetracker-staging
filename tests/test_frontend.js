@@ -415,15 +415,15 @@ if(typeof G._tcalcTrtSummary==='function'){
   check('_renderTcalcTrtCard: labels it as doses with no compound', /Doses with no compound/.test(_ttCard));
   check('_renderTcalcTrtCard: names the compound', /Testosterone Enanthate/.test(_ttCard));
   check('_renderTcalcTrtCard: deep-links to the T-Calc tab', /tab-btn-tcalc/.test(_ttCard));
-  // _renderTRTViewTab shows the card and suppresses "No TRT configured"
+  // _renderTRTViewTab shows the card and suppresses "No Advanced compounds configured"
   if(typeof G._renderTRTViewTab==='function'){
     var _ttView=G._renderTRTViewTab({trt:{enabled:false,compounds:[]}});
     check('_renderTRTViewTab: shows the orphan-dose card', /Doses with no compound/.test(_ttView));
-    check('_renderTRTViewTab: suppresses "No TRT configured" when T-Calc card shows', !/No TRT configured/.test(_ttView));
+    check('_renderTRTViewTab: suppresses "No Advanced compounds configured" when T-Calc card shows', !/No Advanced compounds configured/.test(_ttView));
     // with no tcalc plan, the empty message returns
     G._injectionsCache={};
     var _ttViewEmpty=G._renderTRTViewTab({trt:{enabled:false,compounds:[]}});
-    check('_renderTRTViewTab: "No TRT configured" when nothing planned', /No TRT configured/.test(_ttViewEmpty));
+    check('_renderTRTViewTab: "No Advanced compounds configured" when nothing planned', /No Advanced compounds configured/.test(_ttViewEmpty));
   }
   // edit view (_renderEditTRT) shows the card above the compound list, regardless of toggle
   if(typeof G._renderEditTRT==='function'){
@@ -9221,7 +9221,7 @@ console.log('\n── dose dedup migration ────────────�
   if (typeof G.wizStepValidate === 'function') {
     const vb=_mkEl2(), vf=_mkEl2();
     G.wizStepValidate(vb,vf);
-    check('Validate shows a TRT heading when a plan exists', /TRT</.test(vb.innerHTML) || />TRT/.test(vb.innerHTML),
+    check('Validate shows an Advanced heading when a plan exists', />Advanced</.test(vb.innerHTML),
       vb.innerHTML.slice(0,200));
     check('  …and names the ester', /Enanthate|Testosterone/i.test(vb.innerHTML));
     check('  …alongside the peptides', /Retatrutide/.test(vb.innerHTML));
@@ -10596,7 +10596,7 @@ console.log('\n── View & Edit tab render functions ────────�
       _stkSrc.indexOf('_fetchTRTLog') === -1 && _stkSrc.indexOf('_trtLogCache') === -1 &&
       _todaySrc.indexOf('_trtLogCache') === -1);
   }
-  check('_renderTRTViewTab empty: mentions no TRT configured', tvH1.includes('No TRT configured'));
+  check('_renderTRTViewTab empty: mentions no TRT configured', tvH1.includes('No Advanced compounds configured'));
   // ⚠️ NO INJECTION LOG IN PROTOCOL DETAILS. Removed 2026-09-03 on request
   // ("Injection Log in Protocol details? Why?"). It listed date + compound name
   // for the cycle's logged TRT doses and was the third and weakest view of that
@@ -11722,7 +11722,7 @@ console.log('\n── _renderTRTGuide: runtime HTML for all 6 TRT compounds ─�
     G.TRT_CAT.forEach(function(c){
       var html=G._renderTRTGuide(c.id,150);
       check('_renderTRTGuide('+c.id+'): returns non-empty HTML', typeof html==='string'&&html.length>50);
-      check('_renderTRTGuide('+c.id+'): contains TRT Guide heading', html.includes('TRT Guide'));
+      check('_renderTRTGuide('+c.id+'): contains Advanced Guide heading', html.includes('Advanced Guide'));
       check('_renderTRTGuide('+c.id+'): contains halfLife from guide', html.includes('½-life'));
       check('_renderTRTGuide('+c.id+'): contains cadence rec', html.includes(G.TRT_GUIDE[c.id].cadence.rec.slice(0,10)));
     });
@@ -11738,6 +11738,15 @@ console.log('\n── _renderTRTGuide: runtime HTML for all 6 TRT compounds ─�
     var noSupra=G._renderTRTGuide('testoviron',200);
     check('_renderTRTGuide: no supraphysiological warning block at 200mg/wk',
       !noSupra.includes('Supraphysiological dose'));
+
+    // THE WARNING MUST NOT SEND ANYONE TO A TAB THAT NO LONGER EXISTS. Enhanced and
+    // TRT were folded into one Compounds tier (Phase 4), so "track this compound in
+    // the Enhanced tab instead" named a destination the app stopped having. Henrik
+    // reported it against a 525 mg/wk Test protocol, 2026-09-29.
+    check('_renderTRTGuide: supraphysiological warning no longer points at the Enhanced tab',
+      !/Enhanced tab/.test(supraNebido) && !/Enhanced tab/.test(supraTesto));
+    check('_renderTRTGuide: supraphysiological warning still states the dose and the range',
+      /300 mg\/week/.test(supraTesto) && /100\u2013200 mg\/wk|100–200 mg\/wk/.test(supraTesto));
 
     // --- Unknown compound returns empty string ---
     check('_renderTRTGuide unknown id returns empty string', G._renderTRTGuide('not-a-compound',100)==='');
@@ -15801,7 +15810,7 @@ if (typeof G._stackTierFlags === 'function') {
 }
 {
   const idxSrc = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
-  check('stack card renders TRT + Enhanced chips', idxSrc.includes("_stackTierChip('TRT','#e05050')") && idxSrc.includes("_stackTierChip('ENHANCED'"));
+  check('stack card renders Advanced + Enhanced chips', idxSrc.includes("_stackTierChip('ADVANCED','#e05050')") && idxSrc.includes("_stackTierChip('ENHANCED'"));
   check('stack card uses injection-aware tier flags',  idxSrc.includes('_stackTierFlags(st,isActive,_stackHasScheduledTrt(st.id))'));
 }
 

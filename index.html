@@ -2408,7 +2408,7 @@ function buildStackStore(){
     html+='<div class="stack-card-meta">';
     var _chips='';
     if(_tf.peptide)_chips+=_stackTierChip('PEPTIDES','var(--accent3)');
-    if(_tf.trt)_chips+=_stackTierChip('TRT','#e05050');
+    if(_tf.trt)_chips+=_stackTierChip('ADVANCED','#e05050');
     if(_tf.enhanced)_chips+=_stackTierChip('ENHANCED','var(--accent4)');
     if(!_chips)_chips='<span style="font-size:10px;color:var(--muted2)">Empty</span>';
     html+='<div style="display:flex;flex-wrap:wrap;margin-bottom:4px">'+_chips+'</div>';
