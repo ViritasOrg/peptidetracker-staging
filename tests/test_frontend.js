@@ -7506,10 +7506,22 @@ console.log('\n── The price of an injection ──────────�
     // screen could explain the hole.
     {
       const _d0=(off)=>vm.runInContext('(function(o){var x=new Date(NOW);x.setDate(x.getDate()+o);return dateKey(x);})('+off+')',sandbox);
+      // ⚠️ DERIVED FROM TODAY'S WEEKDAY, NEVER HARDCODED.
+      // This said days:[1,3,5] — Henrik's own Mon/Wed/Fri — and then asserted that
+      // TODAY generates. Those agree only when the suite runs on a Mon, Wed or Fri, so
+      // the test was red on main four days in seven and blocked every unrelated PR that
+      // happened to land on the wrong day (caught 2026-09-29, a Tuesday). The note a few
+      // lines down already says an environment-sensitive test is worse than none; the
+      // day of the week is the same trap as the time of day. Every-other-day from today
+      // matches the -6/-4/-2 logged doses seeded below, which is what the cap reads.
+      const _dow=(off)=>vm.runInContext('(function(o){var x=new Date(NOW);x.setDate(x.getDate()+o);return x.getDay();})('+off+')',sandbox);
+      const _capDays=[_dow(-4),_dow(-2),_dow(0)];
       const _capStack=(mode)=>({id:'cap', cycle_start:_d0(-6), cycle_length:13,
         trt:{enabled:true, compounds:[{id:'enanthate', name:'Test E', dose:'250',
-          unit:'mg', cadence:'days', days:[1,3,5], time:'AM',
+          unit:'mg', cadence:'days', days:_capDays.slice(), time:'AM',
           plan_mode:mode, max_inj_week:'3', load_mg:'300'}]}});
+      check('cap · today is a scheduled day whatever weekday the suite runs on',
+        _capDays.indexOf(_dow(0))>=0 && _capDays.length===3);
       // ⚠️ SET INSIDE THE SANDBOX, NOT THROUGH G.
       // This assigned G._injectionsCache. It passed here and FAILED on the promoted
       // tree, blocking a promotion — an environment-sensitive test is worse than none.
