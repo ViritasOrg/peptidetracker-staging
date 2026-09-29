@@ -1931,7 +1931,7 @@ function wizStep4(body,footer){
     html+='<div style="color:var(--muted2);font-size:13px;">No peptides selected.</div>';
   }
   _trtCompounds(_wiz.trt).forEach(function(c){
-    html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(c.dot||'var(--accent4)')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+c.name+'</div><div style="font-size:12px;color:var(--muted2)">'+(c.dose?c.dose+(c.unit||'mg')+' ':'')+(c.days&&c.days.length?c.days.map(function(d){return DAYS_SHORT[d];}).join('/'):(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'Advanced'))+'</div></div>';
+    html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="width:8px;height:8px;border-radius:50%;background:'+(c.dot||'var(--accent4)')+';flex-shrink:0"></div><div style="flex:1;font-size:13px;color:var(--text)">'+c.name+'</div><div style="font-size:12px;color:var(--muted2)">'+(c.dose?c.dose+(c.unit||'mg')+' ':'')+(c.days&&c.days.length?c.days.map(function(d){return DAYS_SHORT[d];}).join('/'):(c.freqVal?'every '+c.freqVal+' '+c.freqUnit:'Enhanced'))+'</div></div>';
   });
   body.innerHTML=html;
   var saveLabel=hasErrors?'Save Anyway (conflicts)':'Save Protocol';
@@ -3132,7 +3132,7 @@ function _renderTRTViewTab(st){
   var _tcCard=(typeof _renderTcalcTrtCard==='function')?_renderTcalcTrtCard():'';
   if(_tcCard) html+=_tcCard;
   if(!compounds.length){
-    if(!_tcCard) html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No Advanced compounds configured for this protocol.</div>';
+    if(!_tcCard) html+='<div style="color:var(--muted2);font-size:13px;padding:8px 0;">No Enhanced compounds configured for this protocol.</div>';
   }else{
     html+=_tcalcOwnsTestoNote('Testosterone');
     html+='<div class="wiz-section" style="margin-bottom:10px;">Protocol</div>';
@@ -3388,7 +3388,7 @@ function _getDynamicTRTDoses(d,withIds){
       var key=c.id+'_'+si;
       if(seenIds[key])return;
       seenIds[key]=true;
-      var entry={name:c.name+(c.dose?' '+c.dose+(c.unit||'mg'):''),detail:'Advanced injection — IM',time:null,dot:cat?cat.dot:'#e8a020'};
+      var entry={name:c.name+(c.dose?' '+c.dose+(c.unit||'mg'):''),detail:'Enhanced injection — IM',time:null,dot:cat?cat.dot:'#e8a020'};
       if(withIds)entry.id=c.id+'_'+si+'_'+dateKey(d);
       result.push(entry);
     });
@@ -3495,7 +3495,7 @@ function _renderTRTGuide(cId,weeklyDoseMg){
     }
   }catch(e){if(typeof _logErr==='function')_logErr('trtFemaleGuard',e);}
   return'<div class="cfg-row" style="display:block;margin-top:10px">'
-    +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Advanced Guide</div>'
+    +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Enhanced Guide</div>'
     +femHtml+supraHtml+cadHtml+tiersHtml+modHtml+'</div>'+_renderSafetyNote('trt');
 }
 function _refreshTRTGuide(id,freqVal,freqUnit,dose){var el=document.getElementById('trt-guide-'+id);if(!el)return;var doseNum=parseDec(dose)||0;var freqDays=(freqUnit||'weeks')==='weeks'?(freqVal||1)*7:(freqVal||1);var weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;el.innerHTML=_renderTRTGuide(id,weeklyDoseMg);}
@@ -5194,7 +5194,7 @@ function _wizTrtSummaryRows(){
     // TRT's own resolver, so the label matches what _genInjBatches actually schedules.
     // This read days[] first and ignored c.cadence, so a solved every-3-days plan
     // rendered as "1x/week" — the summary contradicting the schedule underneath it.
-    var days=c.id||c.cadence||c.days||c.freqVal?_trtCadenceLabel(c):'Advanced';
+    var days=c.id||c.cadence||c.days||c.freqVal?_trtCadenceLabel(c):'Enhanced';
     rows.push({id:c.id||'',name:c.name||nameOf(c.id),dot:c.dot||'var(--accent4)',
                dose:c.dose?c.dose+(c.unit||'mg'):'',cadence:days});
   });
@@ -5210,16 +5210,21 @@ function wizStepValidate(body,footer){
     html+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Peptides</div>';
     _wiz.peptides.forEach(function(p){html+='<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><div style="width:7px;height:7px;border-radius:50%;background:'+(p.dot||'#888')+';flex-shrink:0"></div><span style="font-size:13px;color:var(--text)">'+p.name+'</span></div>';});
   }
+  // ONE TIER, ONE HEADING. The testosterone block and the rest of the compounds are
+  // the same tier since Phase 4, so they sit under a single Enhanced heading. Emitting
+  // it from whichever block comes first stops the summary printing "Enhanced" twice
+  // when a protocol carries both (Henrik, 2026-09-29: "No use Enhanced").
+  var _enhRows=(hasEnhanced&&_wiz.enhanced&&_wiz.enhanced.compounds)?_wiz.enhanced.compounds:[];
+  var _enhHead='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:10px 0 6px">Enhanced</div>';
   var _trtRows=_wizTrtSummaryRows();
+  if(_trtRows.length||_enhRows.length)html+=_enhHead;
   if(_trtRows.length){
-    html+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:10px 0 6px">Advanced</div>';
     _trtRows.forEach(function(r){
       html+='<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><div style="width:7px;height:7px;border-radius:50%;background:'+r.dot+';flex-shrink:0"></div><span style="font-size:13px;color:var(--text)">'+_esc(r.name)+'</span></div>';
     });
   }
 
-  if(hasEnhanced&&_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length){
-    html+='<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin:10px 0 6px">Enhanced</div>';
+  if(_enhRows.length){
     _wiz.enhanced.compounds.forEach(function(c){html+='<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><div style="width:7px;height:7px;border-radius:50%;background:'+(c.dot||'var(--accent2)')+';flex-shrink:0"></div><span style="font-size:13px;color:var(--text)">'+_esc(c.name||c.id)+'</span></div>';});
   }
   var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});

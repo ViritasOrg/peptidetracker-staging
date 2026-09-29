@@ -415,15 +415,15 @@ if(typeof G._tcalcTrtSummary==='function'){
   check('_renderTcalcTrtCard: labels it as doses with no compound', /Doses with no compound/.test(_ttCard));
   check('_renderTcalcTrtCard: names the compound', /Testosterone Enanthate/.test(_ttCard));
   check('_renderTcalcTrtCard: deep-links to the T-Calc tab', /tab-btn-tcalc/.test(_ttCard));
-  // _renderTRTViewTab shows the card and suppresses "No Advanced compounds configured"
+  // _renderTRTViewTab shows the card and suppresses "No Enhanced compounds configured"
   if(typeof G._renderTRTViewTab==='function'){
     var _ttView=G._renderTRTViewTab({trt:{enabled:false,compounds:[]}});
     check('_renderTRTViewTab: shows the orphan-dose card', /Doses with no compound/.test(_ttView));
-    check('_renderTRTViewTab: suppresses "No Advanced compounds configured" when T-Calc card shows', !/No Advanced compounds configured/.test(_ttView));
+    check('_renderTRTViewTab: suppresses "No Enhanced compounds configured" when T-Calc card shows', !/No Enhanced compounds configured/.test(_ttView));
     // with no tcalc plan, the empty message returns
     G._injectionsCache={};
     var _ttViewEmpty=G._renderTRTViewTab({trt:{enabled:false,compounds:[]}});
-    check('_renderTRTViewTab: "No Advanced compounds configured" when nothing planned', /No Advanced compounds configured/.test(_ttViewEmpty));
+    check('_renderTRTViewTab: "No Enhanced compounds configured" when nothing planned', /No Enhanced compounds configured/.test(_ttViewEmpty));
   }
   // edit view (_renderEditTRT) shows the card above the compound list, regardless of toggle
   if(typeof G._renderEditTRT==='function'){
@@ -9221,10 +9221,21 @@ console.log('\n── dose dedup migration ────────────�
   if (typeof G.wizStepValidate === 'function') {
     const vb=_mkEl2(), vf=_mkEl2();
     G.wizStepValidate(vb,vf);
-    check('Validate shows an Advanced heading when a plan exists', />Advanced</.test(vb.innerHTML),
+    check('Validate shows an Enhanced heading when a plan exists', />Enhanced</.test(vb.innerHTML),
       vb.innerHTML.slice(0,200));
     check('  …and names the ester', /Enanthate|Testosterone/i.test(vb.innerHTML));
     check('  …alongside the peptides', /Retatrutide/.test(vb.innerHTML));
+    // ONE TIER, ONE HEADING. Testosterone and the rest of the compounds are the same
+    // tier since Phase 4, so a protocol carrying both must not print "Enhanced" twice.
+    G._wiz.goals=['trt','enhanced'];
+    G._wiz.enhanced={enabled:true,compounds:[{id:'masteron_e',name:'Masteron E',dose:'300',unit:'mg/week'}]};
+    const vb2=_mkEl2(), vf2=_mkEl2();
+    G.wizStepValidate(vb2,vf2);
+    check('  …and both compound blocks sit under ONE Enhanced heading',
+      (vb2.innerHTML.match(/>Enhanced</g)||[]).length===1,
+      'got ' + (vb2.innerHTML.match(/>Enhanced</g)||[]).length);
+    check('  …with the testosterone and the other compound both listed',
+      /Enanthate|Testosterone/i.test(vb2.innerHTML) && /Masteron/i.test(vb2.innerHTML));
   }
   if (typeof G.wizStepReview === 'function') {
     const rb=_mkEl2(), rf=_mkEl2();
@@ -10596,7 +10607,7 @@ console.log('\n── View & Edit tab render functions ────────�
       _stkSrc.indexOf('_fetchTRTLog') === -1 && _stkSrc.indexOf('_trtLogCache') === -1 &&
       _todaySrc.indexOf('_trtLogCache') === -1);
   }
-  check('_renderTRTViewTab empty: mentions no TRT configured', tvH1.includes('No Advanced compounds configured'));
+  check('_renderTRTViewTab empty: mentions no Enhanced compounds configured', tvH1.includes('No Enhanced compounds configured'));
   // ⚠️ NO INJECTION LOG IN PROTOCOL DETAILS. Removed 2026-09-03 on request
   // ("Injection Log in Protocol details? Why?"). It listed date + compound name
   // for the cycle's logged TRT doses and was the third and weakest view of that
@@ -11722,7 +11733,7 @@ console.log('\n── _renderTRTGuide: runtime HTML for all 6 TRT compounds ─�
     G.TRT_CAT.forEach(function(c){
       var html=G._renderTRTGuide(c.id,150);
       check('_renderTRTGuide('+c.id+'): returns non-empty HTML', typeof html==='string'&&html.length>50);
-      check('_renderTRTGuide('+c.id+'): contains Advanced Guide heading', html.includes('Advanced Guide'));
+      check('_renderTRTGuide('+c.id+'): contains Enhanced Guide heading', html.includes('Enhanced Guide'));
       check('_renderTRTGuide('+c.id+'): contains halfLife from guide', html.includes('½-life'));
       check('_renderTRTGuide('+c.id+'): contains cadence rec', html.includes(G.TRT_GUIDE[c.id].cadence.rec.slice(0,10)));
     });
@@ -15810,7 +15821,12 @@ if (typeof G._stackTierFlags === 'function') {
 }
 {
   const idxSrc = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
-  check('stack card renders Advanced + Enhanced chips', idxSrc.includes("_stackTierChip('ADVANCED','#e05050')") && idxSrc.includes("_stackTierChip('ENHANCED'"));
+  // ONE CHIP FOR ONE TIER: testosterone and the rest of the compounds share it, so the
+  // card must not be able to grow a second chip for the same tier again.
+  check('stack card renders one Enhanced chip covering both compound blocks',
+    idxSrc.includes("if(_tf.trt||_tf.enhanced)_chips+=_stackTierChip('ENHANCED'"));
+  check('stack card has no separate TRT/Advanced chip',
+    !/_stackTierChip\('(TRT|ADVANCED)'/.test(idxSrc));
   check('stack card uses injection-aware tier flags',  idxSrc.includes('_stackTierFlags(st,isActive,_stackHasScheduledTrt(st.id))'));
 }
 
