@@ -18523,6 +18523,152 @@ console.log('\n── Deploy card: push status ───────────
     /<span id="push-to-prod-lbl">\$\{_lbl\}<\/span><\/summary>/.test(html));
 }
 
+// ── Screenshot-safe compound names in Today ──────────────────────────────────
+// Henrik, 2026-10-02: Today has to be screenshottable without putting a restricted
+// compound name on a social platform, where the post reads as unpaid drug advertising.
+console.log('\n── Screenshot-safe names (Today) ──────────────────────────');
+{
+  const _sfSave = G.getData('proto-safe-names', false);
+  const _sfSavePush = G.pushPepSettingsToAgent;
+  G.pushPepSettingsToAgent = () => {};
+
+  // OFF is the default, and off means untouched — not "mostly untouched".
+  G.setData('proto-safe-names', false); G._sfxMapCache = null; G._sfxMapKey = '';
+  check('off by default: the real name is returned unchanged',
+    G._safeCompoundName('Retatrutide') === 'Retatrutide');
+  check('  …and _sfxEnabled() reads false', G._sfxEnabled() === false);
+
+  G.setData('proto-safe-names', true); G._sfxMapCache = null; G._sfxMapKey = '';
+  check('on: _sfxEnabled() reads true', G._sfxEnabled() === true);
+  // THE NAME HENRIK ASKED FOR, EXACTLY. "Retatrutide is r3t@ or similar" — first
+  // letter, then a/e/i/o/s swapped, four characters. If the cap or the table moves,
+  // this is the assertion that says so.
+  check('on: Retatrutide shows as R3t@', G._safeCompoundName('Retatrutide') === 'R3t@',
+    'got ' + G._safeCompoundName('Retatrutide'));
+  check('  …and nothing is left that spells the real name',
+    !/retatrutide/i.test(G._safeCompoundName('Retatrutide')));
+
+  // Structure survives, so an ester is still tellable from its siblings.
+  check('a two-word name keeps both words', G._safeCompoundName('Testosterone Enanthate') === 'T35t En@n',
+    'got ' + G._safeCompoundName('Testosterone Enanthate'));
+  check('  …and the esters stay distinguishable',
+    G._safeCompoundName('Testosterone Enanthate') !== G._safeCompoundName('Testosterone Cypionate'));
+  check('digits and punctuation are left alone', /-157$/.test(G._safeCompoundName('BPC-157')),
+    'got ' + G._safeCompoundName('BPC-157'));
+
+  // ⚠️ AN ACRONYM MUST NOT PASS THROUGH AS ITSELF. HGH, HCG, BPC and TB have no
+  // a/e/i/o/s to swap, so without the fallback table they would render as the real
+  // name with the setting on — the one outcome the whole setting exists to prevent.
+  ['HGH', 'HCG', 'BPC-157', 'TB-500', 'NAD+', 'MOTS-C', 'GHK-Cu'].forEach(function(n){
+    check('acronym "' + n + '" is still changed', G._safeCompoundName(n) !== n,
+      'got ' + G._safeCompoundName(n));
+  });
+
+  // ⚠️ TWO COMPOUNDS MUST NEVER SHARE AN ALIAS. Four characters collapses Semaglutide
+  // and Semax onto S3m@; two Today rows with the same name and different doses is
+  // worse than showing the real names. The widening in _sfxAliasMap is what prevents
+  // it, and it has to hold for the whole catalogue, not just that known pair.
+  check('Semaglutide and Semax do not collide',
+    G._safeCompoundName('Semaglutide') !== G._safeCompoundName('Semax'),
+    G._safeCompoundName('Semaglutide') + ' vs ' + G._safeCompoundName('Semax'));
+  {
+    const _m = G._sfxAliasMap(), _seen = {}, _dups = [];
+    Object.keys(_m).forEach(function(n){
+      if (_seen[_m[n]]) _dups.push(_m[n] + ' = ' + _seen[_m[n]] + ' + ' + n);
+      _seen[_m[n]] = n;
+    });
+    check('no two catalogue names share an alias', _dups.length === 0, _dups.join('; '));
+    check('  …over a catalogue that is actually populated', Object.keys(_m).length >= 25,
+      'only ' + Object.keys(_m).length + ' names');
+  }
+  // Widening is order-independent: every member of a clashing group grows, so the
+  // alias cannot depend on which tier finished syncing first.
+  check('both halves of a clashing pair widen, not just one',
+    G._safeCompoundName('Semaglutide').length === G._safeCompoundName('Semax').length);
+
+  check('an unknown name still gets an alias', G._safeCompoundName('Enclomiphene') !== 'Enclomiphene');
+  check('blank input stays blank', G._safeCompoundName('') === '' && G._safeCompoundName(null) === '');
+
+  // ── Today actually uses it, and stored data does not ──────────────────────
+  const _tdSrc = fs.readFileSync(path.join(path.dirname(htmlPath), 'tab-today.js'), 'utf8');
+  check('source: the Today dose rows render through _tdName',
+    /nameEl\.textContent=_tdName\(dose\.compound_name\)/.test(_tdSrc));
+  check('source: no Today row prints compound_name raw',
+    !/nameEl\.textContent=dose\.compound_name/.test(_tdSrc));
+  check('source: _tdName falls back to the real name if the engine is missing',
+    /_safeCompoundName==='function'/.test(_tdSrc));
+
+  // ⚠️ DISPLAY ONLY. If an alias ever reached _injectionsCache it would be posted to
+  // the backend as the compound's name, and the curve, the bloodwork join and the
+  // history would all key on a joke. Render with the setting on, then prove the row
+  // still carries what the backend gave us.
+  {
+    const _origDoc = G.document, _stub = Object.create(_origDoc);
+    let _alert = '';
+    _stub.getElementById = (id) => {
+      const e = _origDoc.getElementById(id);
+      if (id !== 'today-alerts') return e;
+      return new Proxy(e, {get:(t,k)=> k==='innerHTML' ? _alert : t[k],
+                           set:(t,k,v)=>{ if(k==='innerHTML') _alert=v; else t[k]=v; return true; }});
+    };
+    const _save = {doc:G.document, stacks:G._userStacks, act:G._activeStackIndices,
+                   cache:G._injectionsCache, loaded:G._stacksLoaded, pend:G._syncPending,
+                   ready:G._injCacheReady, hidden:G._injHidden};
+    const _TD = G.dateKey(new Date(G.NOW));
+    G.document = _stub;
+    G._stacksLoaded = true; G._syncPending = false; G._injCacheReady = true;
+    G._injHidden = {count:0, stacks:{}, noStart:[], orphans:{}};
+    G._activeStackIndices = [0];
+    G._userStacks = [{id:'SFX', name:'P', cycle_start:_TD, cycle_length:12, peptides:[], trt:{},
+      enhanced:{enabled:true, compounds:[{id:'test_u', name:'Testosterone Undecanoate (Nebido)', dose:'250', unit:'mg'}]}}];
+    G._injectionsCache = {[_TD]:[
+      {id:'sfx1', compound_id:'reta', compound_name:'Retatrutide', tier:'peptide', cycle_id:'SFX',
+       date:_TD, dose:'2', unit:'mg', active:true, logged:false, time_of_day:'AM'}]};
+
+    _alert = ''; try { G.buildToday(); } catch(e) { _alert = 'THREW: ' + e.message; }
+    check('Today renders with the setting on without throwing', !/^THREW/.test(_alert), _alert.slice(0,140));
+    // The "not scheduled" banner names the configured ester, and it is capturable.
+    check('the Today banner shows the alias, not the compound',
+      !/Nebido|Undecanoate/.test(_alert), _alert.slice(0,200));
+    check('  …and the banner still names something', /Und3|N3b1|T35t/.test(_alert), _alert.slice(0,200));
+    check('the cached row keeps its real compound_name',
+      G._injectionsCache[_TD][0].compound_name === 'Retatrutide');
+
+    // Off again → the real name is back on screen, from the same untouched row.
+    G.setData('proto-safe-names', false); G._sfxMapCache = null; G._sfxMapKey = '';
+    _alert = ''; try { G.buildToday(); } catch(e) { _alert = 'THREW: ' + e.message; }
+    check('turning it off puts the real name back', /Nebido|Undecanoate/.test(_alert), _alert.slice(0,200));
+
+    G.document = _save.doc; G._userStacks = _save.stacks; G._activeStackIndices = _save.act;
+    G._injectionsCache = _save.cache; G._stacksLoaded = _save.loaded; G._syncPending = _save.pend;
+    G._injCacheReady = _save.ready; G._injHidden = _save.hidden;
+  }
+
+  // ── The setting itself ───────────────────────────────────────────────────
+  check('source: the Settings row is in the App section and calls toggleSafeNames',
+    /id="s-safenames-btn"[^>]*onclick="toggleSafeNames\(\)"/.test(html));
+  check('source: loadSettings paints the row', /loadSettings\(\)\{[^]{0,200}buildSafeNamesRow\(\)/.test(html));
+  check('source: the toggle follows the account through /user-settings',
+    /pushPepSettingsToAgent\(\{'proto-safe-names':v\}\)/.test(html)
+    && /s\['proto-safe-names'\]/.test(html));
+  {
+    let _pushed = null;
+    G.pushPepSettingsToAgent = (kv) => { _pushed = kv; };
+    G.setData('proto-safe-names', false); G._sfxMapCache = null; G._sfxMapKey = '';
+    try { G.toggleSafeNames(); } catch(e) {}
+    check('toggleSafeNames turns it on', G._sfxEnabled() === true);
+    check('  …and pushes the new value to the backend',
+      !!_pushed && _pushed['proto-safe-names'] === true, JSON.stringify(_pushed));
+    try { G.toggleSafeNames(); } catch(e) {}
+    check('  …and toggles back off', G._sfxEnabled() === false);
+    check('  …pushing false too', !!_pushed && _pushed['proto-safe-names'] === false);
+  }
+
+  G.setData('proto-safe-names', _sfSave === true);
+  G._sfxMapCache = null; G._sfxMapKey = '';
+  G.pushPepSettingsToAgent = _sfSavePush;
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
