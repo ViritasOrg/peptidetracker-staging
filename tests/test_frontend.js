@@ -18589,10 +18589,70 @@ console.log('\n── Screenshot-safe names (Today) ─────────�
   check('an unknown name still gets an alias', G._safeCompoundName('Enclomiphene') !== 'Enclomiphene');
   check('blank input stays blank', G._safeCompoundName('') === '' && G._safeCompoundName(null) === '');
 
+  // ── The fun names: curated jokes from the backend win over the derived rule ──
+  // Henrik, on the leetspeak first cut: "Make it fun!" R3t@ is obvious but it is not
+  // funny, so the jokes come from GET /compound-nicknames and leetspeak drops to being
+  // the safety net for whatever that list has not reached.
+  {
+    const _nickSave = G._compNicknames;
+    G._compNicknames = {retatrutide:'Rita Tootsie', tren_a:'Trevor Short',
+                        test_u:'Big Yule', sustanon:'Four Horsemen', hcg:'Ball Boy'};
+    G._sfxMapCache = null; G._sfxMapKey = '';
+    check('the curated joke wins over the derived alias',
+      G._safeCompoundName('Retatrutide','retatrutide') === 'Rita Tootsie',
+      'got ' + G._safeCompoundName('Retatrutide','retatrutide'));
+    check('  …and it is fun, not leetspeak',
+      !/[@0135]/.test(G._safeCompoundName('Retatrutide','retatrutide')));
+    check('the id picks the joke, whatever the stored name says',
+      G._safeCompoundName('Testosterone Undecanoate (Nebido)','test_u') === 'Big Yule');
+    check('an id with no joke yet still falls back to the derived alias',
+      G._safeCompoundName('Semaglutide','semaglutide') === G._sfxAliasMap()['Semaglutide'],
+      'got ' + G._safeCompoundName('Semaglutide','semaglutide'));
+    check('  …so "on" never leaves the real name on screen',
+      G._safeCompoundName('Semaglutide','semaglutide') !== 'Semaglutide');
+    check('an id is matched case-insensitively',
+      G._safeCompoundName('Trenbolone Acetate','TREN_A') === 'Trevor Short');
+    check('a row with an id but no name still gets the joke',
+      G._safeCompoundName('','hcg') === 'Ball Boy');
+
+    // ⚠️ A JOKE THAT CARRIES THE REAL NAME DOES NOTHING. "Uncle Tren" is funny and
+    // obvious and still matches a keyword scan for `tren`. The backend suite enforces
+    // this over the real list; here we only prove the app does not reintroduce it.
+    Object.keys(G._compNicknames).forEach(function(id){
+      const nick = G._compNicknames[id].toLowerCase();
+      check('nickname for ' + id + ' does not echo its id', nick.indexOf(id.split('_')[0]) < 0,
+        G._compNicknames[id]);
+    });
+
+    // No network, or a cold start before the fetch lands: the setting must still work.
+    G._compNicknames = null; G._sfxMapCache = null; G._sfxMapKey = '';
+    check('with no nicknames cached at all, the derived rule still hides the name',
+      G._safeCompoundName('Retatrutide','retatrutide') === 'R3t@',
+      'got ' + G._safeCompoundName('Retatrutide','retatrutide'));
+    G._compNicknames = _nickSave; G._sfxMapCache = null; G._sfxMapKey = '';
+  }
+  check('source: the app fetches the jokes rather than hardcoding them',
+    /syncCompoundNicknames/.test(html) && /\/compound-nicknames/.test(html));
+  {
+    // SCOPED TO CODE, NOT COMMENTS. The first version of this matched the joke quoted
+    // in _safeCompoundName's own comment, and so failed on the change it exists to
+    // protect — the same trap as the gh_retry test that matched its own comment.
+    const _noCmt = html.split('\n')
+      .filter(function(l){ return !/^\s*(\/\/|\*|\/\*)/.test(l); }).join('\n');
+    check('source: no nickname table is hardcoded in the app',
+      !/Rita Tootsie|Trevor Short|Four Horsemen|Nipple Guard|Pippa Payne|Wind Troll/.test(_noCmt),
+      'a joke was pasted into the frontend — it is compound data, it belongs in the backend');
+  }
+  check('source: the fetched map is cached so the setting works offline',
+    /proto-compound-nicknames/.test(html));
+  check('source: every Today call site passes the compound id',
+    /_tdName\(dose\.compound_name,dose\.compound_id\)/.test(
+      fs.readFileSync(path.join(path.dirname(htmlPath), 'tab-today.js'), 'utf8')));
+
   // ── Today actually uses it, and stored data does not ──────────────────────
   const _tdSrc = fs.readFileSync(path.join(path.dirname(htmlPath), 'tab-today.js'), 'utf8');
   check('source: the Today dose rows render through _tdName',
-    /nameEl\.textContent=_tdName\(dose\.compound_name\)/.test(_tdSrc));
+    /nameEl\.textContent=_tdName\(dose\.compound_name,\s*dose\.compound_id\)/.test(_tdSrc));
   check('source: no Today row prints compound_name raw',
     !/nameEl\.textContent=dose\.compound_name/.test(_tdSrc));
   check('source: _tdName falls back to the real name if the engine is missing',
