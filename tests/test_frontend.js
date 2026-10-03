@@ -8739,6 +8739,17 @@ console.log('\n── Injection site (Today) ───────────�
     check(pair[0] + '1/2/3 run top to bottom as asked',
       ys[0] < ys[1] && ys[1] < ys[2], JSON.stringify(ys));
   });
+  // ⚠️ 2 IS THE GLUTE. Henrik asked for glutes as a seventh and eighth site; the
+  // ventrogluteal one was already on the picture at spot 2 under the name "hip", so it
+  // was relabelled rather than duplicated (2026-10-03). Pinned here because a silent
+  // revert to "hip" would make him look for a glute site that is not missing. "ventro"
+  // stays in the label: a dorsogluteal spot on a future back view is a DIFFERENT
+  // injection and the two must never read as the same place.
+  check('site 2 is named as the glute, on both sides',
+    G.INJ_SITES.filter(s => /glute/i.test(s.label)).map(s => s.id).sort().join(',') === 'L2,R2',
+    JSON.stringify(G.INJ_SITES.map(s => [s.id, s.label])));
+  check('  …and says which glute it is, so a back view could add the other',
+    G.INJ_SITES.filter(s => /glute/i.test(s.label)).every(s => /ventro/i.test(s.label)));
   check('every hotspot is inside the image box',
     G.INJ_SITES.every(s => s.x > 0 && s.x < 100 && s.y > 0 && s.y < 100));
   check('the six ids are distinct', new Set(G.INJ_SITES.map(s=>s.id)).size === 6);
