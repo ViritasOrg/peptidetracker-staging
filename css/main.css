@@ -348,6 +348,11 @@
   .pcard-goal{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:3px 8px;border-radius:10px;border:1px solid;}
   .info-btn{background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--muted2);font-size:14px;font-weight:700;cursor:pointer;padding:5px 8px;line-height:1;flex-shrink:0;transition:background 0.15s,color 0.15s;}
   .info-btn:active{background:var(--border);color:var(--text);}
+  /* The site button sits next to the compound's info button and has to read as a
+     sibling of it, not a second thing. Wider, because it carries a label (R2), and
+     tinted once a site is recorded so a glance down the list shows what is logged. */
+  .inj-site-btn{font-size:11px;letter-spacing:0.5px;min-width:34px;padding:5px 7px;}
+  .inj-site-btn.set{color:var(--accent);border-color:var(--accent);}
   .conflict-peps{margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px;}
   .conflict-pep{display:flex;align-items:center;gap:10px;padding:5px 0;cursor:pointer;user-select:none;}
   .conflict-chk{width:20px;height:20px;border-radius:5px;background:var(--accent3);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
