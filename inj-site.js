@@ -11,15 +11,26 @@
 // picture, so the mirroring is visible at the moment of tapping and never has to be
 // reasoned about.
 //
-// Numbering is top down as asked: 1 = deltoid, 2 = hip (ventrogluteal), 3 = quad.
+// Numbering is top down as asked: 1 = deltoid, 2 = glute, 3 = quad.
+//
+// ⚠️ 2 IS THE GLUTE, AND IT IS THE VENTROGLUTEAL ONE. Henrik asked whether glutes
+// could be added as a seventh and eighth site, and whether that needed a new image.
+// It would have: the dorsogluteal site people usually mean is on the BACK, and this
+// figure faces front, so there is nowhere honest to put a spot for it. But spot 2 is
+// already drawn on the outer hip at the level the VENTROgluteal site is taught — the
+// gluteus medius, over the greater trochanter — so the site he wanted was on the
+// picture all along under the wrong name. Relabelled rather than duplicated
+// (2026-10-03). "(ventro)" stays in the label on purpose: if a back view is ever
+// added, the dorsogluteal spot is a different injection and the two must not read
+// as the same place.
 //
 // Coordinates are percentages of the image box, measured off the artwork's own
 // crosshairs rather than eyeballed, so they hold at any rendered width.
 var INJ_SITES=[
   {id:'R1',x:20.9,y:33.4,label:'Right delt'},
   {id:'L1',x:81.0,y:33.3,label:'Left delt'},
-  {id:'R2',x:29.6,y:63.9,label:'Right hip'},
-  {id:'L2',x:70.0,y:63.8,label:'Left hip'},
+  {id:'R2',x:29.6,y:63.9,label:'Right glute (ventro)'},
+  {id:'L2',x:70.0,y:63.8,label:'Left glute (ventro)'},
   {id:'R3',x:30.0,y:82.4,label:'Right quad'},
   {id:'L3',x:69.8,y:82.5,label:'Left quad'}
 ];
