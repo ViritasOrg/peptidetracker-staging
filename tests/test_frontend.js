@@ -80,7 +80,7 @@ const sandbox = vm.createContext({
 });
 vm.runInContext(patchedScript, sandbox);
 // Load tab files so their functions/vars are available in the same sandbox
-const tabFiles = ['inj-writer.js','tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js',
+const tabFiles = ['inj-writer.js','inj-site.js','tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js',
                   'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-tdose.js','tab-labs.js','tab-supplements.js'];
 const dir = path.dirname(path.resolve(htmlPath));
 tabFiles.forEach(f => {
@@ -8706,6 +8706,180 @@ console.log('\n── The loading dose ─────────────�
     G.fetch=_bbSave.f; G.authHeaders=_bbSave.ah; G.buildTCalc=_bbSave.bt;
     G._tcp=_bbSave.tp; G._tcBwEntries=_bbSave.bw; G._tcRateAtDate=_bbSave.rate;
   }
+
+// ── Injection site (Today) ───────────────────────────────────────────────────
+// Henrik, 2026-10-03: a button next to each oil injection in Today, opening the
+// body image, tap one of six spots. R1-R3 / L1-L3, numbered top down.
+console.log('\n── Injection site (Today) ─────────────────────────────────');
+{
+  const IDS = ['R1','R2','R3','L1','L2','L3'];
+  check('six sites, exactly the six asked for',
+    Array.isArray(G.INJ_SITES) && G.INJ_SITES.length === 6 &&
+    IDS.every(id => G.INJ_SITES.some(s => s.id === id)),
+    JSON.stringify((G.INJ_SITES||[]).map(s=>s.id)));
+
+  // ⚠️ R AND L ARE HIS SIDES, NOT THE PICTURE'S. The figure faces the viewer, so his
+  // right deltoid is DRAWN ON THE LEFT of the image. "I did my right delt" has to
+  // store R1, which means every R hotspot sits in the left half of the artwork. Get
+  // this backwards and the log is mirrored — silently, and for every row.
+  const R = G.INJ_SITES.filter(s => s.id[0] === 'R');
+  const L = G.INJ_SITES.filter(s => s.id[0] === 'L');
+  check('R sites sit on the LEFT of the image — the figure faces you',
+    R.length === 3 && R.every(s => s.x < 50), JSON.stringify(R.map(s=>[s.id,s.x])));
+  check('L sites sit on the RIGHT of the image',
+    L.length === 3 && L.every(s => s.x > 50), JSON.stringify(L.map(s=>[s.id,s.x])));
+  check('  …and each R site names a right-side muscle',
+    R.every(s => /^Right /.test(s.label)), JSON.stringify(R.map(s=>s.label)));
+  check('  …each L site a left-side one',
+    L.every(s => /^Left /.test(s.label)), JSON.stringify(L.map(s=>s.label)));
+
+  // "start from the top down" — 1 above 2 above 3, on both sides.
+  [['R',R],['L',L]].forEach(function(pair){
+    const ys = pair[1].slice().sort((a,b) => a.id.localeCompare(b.id)).map(s => s.y);
+    check(pair[0] + '1/2/3 run top to bottom as asked',
+      ys[0] < ys[1] && ys[1] < ys[2], JSON.stringify(ys));
+  });
+  check('every hotspot is inside the image box',
+    G.INJ_SITES.every(s => s.x > 0 && s.x < 100 && s.y > 0 && s.y < 100));
+  check('the six ids are distinct', new Set(G.INJ_SITES.map(s=>s.id)).size === 6);
+  check('_injSiteValid accepts the six and nothing else',
+    IDS.every(id => G._injSiteValid(id)) &&
+    !G._injSiteValid('R4') && !G._injSiteValid('r1') && !G._injSiteValid('') &&
+    !G._injSiteValid(null) && !G._injSiteValid('LEFT'));
+
+  // ── Oils only ────────────────────────────────────────────────────────────
+  // "testosterone and other oils injections". A peptide goes subcutaneously into the
+  // belly and a tablet is swallowed; neither has a site to rotate, and a button on
+  // every row would be noise on most of the list.
+  const _apSave = G._enhConcMgPerMl;
+  G._enhConcMgPerMl = (id) => (id === 'tren_e' ? 200 : 0);   // vial vs tablet
+  check('a testosterone row gets the button',
+    G._injSiteApplies({tier:'trt', compound_id:'enanthate'}) === true);
+  check('an injectable in the enhanced tier gets it too',
+    G._injSiteApplies({tier:'enhanced', compound_id:'tren_e'}) === true);
+  check('an oral in the enhanced tier does not — nothing to rotate',
+    G._injSiteApplies({tier:'enhanced', compound_id:'anavar'}) === false);
+  check('a peptide does not either',
+    G._injSiteApplies({tier:'peptide', compound_id:'retatrutide'}) === false);
+  check('and neither does nothing at all', G._injSiteApplies(null) === false);
+
+  // ── The button on the row ────────────────────────────────────────────────
+  // The suite's shared mock element has no-op setters for className and textContent,
+  // which is fine for code that only builds markup and useless for asserting what a
+  // button SAYS. Same workaround as the time-cell block above: elements that remember.
+  const _sbDoc = G.document;
+  G.document = Object.assign({}, _sbDoc,
+    {createElement: () => ({style:{}, className:'', textContent:'', title:'', onclick:null})});
+  const _btn = (dose) => G._injSiteButton(dose);
+  check('no button where it does not apply',
+    _btn({tier:'peptide', compound_id:'reta', id:'x'}) === null);
+  {
+    const b = _btn({tier:'trt', compound_id:'enanthate', id:'i1'});
+    check('an unrecorded oil row offers the button', !!b && !/\bset\b/.test(b.className));
+    check('  …carrying a prompt, not a fake site', !!b && b.textContent !== '' && !/^[RL][123]$/.test(b.textContent));
+    const b2 = _btn({tier:'trt', compound_id:'enanthate', id:'i1', site:'L3'});
+    check('a recorded row shows the site on the button itself', b2.textContent === 'L3');
+    check('  …and is marked as set, so a glance down the list shows what is logged',
+      /\bset\b/.test(b2.className));
+    check('  …and names the muscle for anyone who has not memorised the grid',
+      /Left quad/.test(b2.title));
+    // ⚠️ THE ROW ITSELF TOGGLES THE DOSE. Without stopPropagation, opening the picker
+    // would also tick or untick the injection — the single worst thing this button
+    // could do, because the tick is what the whole log is built on.
+    let _bubbled = false, _opened = false;
+    const _openSave = G.openInjSitePicker;
+    G.openInjSitePicker = () => { _opened = true; };
+    b2.onclick({stopPropagation(){ _bubbled = true; }});
+    check('tapping the button opens the picker', _opened);
+    check('  …and does NOT also tick the dose', _bubbled);
+    G.openInjSitePicker = _openSave;
+  }
+  G.document = _sbDoc;
+
+  // ── The write ────────────────────────────────────────────────────────────
+  {
+    const _save = {f:G.fetch, c:G._injectionsCache, vd:G._viewDate, d:G.document};
+    const _puts = [];
+    const DK = G.dateKey(new Date(G.NOW));
+    G._viewDate = null;
+    G._injectionsCache = {[DK]: [{id:'s1', compound_id:'enanthate', compound_name:'Testosterone Enanthate',
+      tier:'trt', date:DK, dose:'125', unit:'mg', active:true, logged:true, time_of_day:'AM'}]};
+    const _row = () => G._injectionsCache[DK][0];
+
+    await (async () => {
+      G.fetch = async (url, opt) => {
+        if (opt && opt.method === 'PUT') _puts.push({url:String(url), body:JSON.parse(opt.body)});
+        return {ok:true, status:200, json:async()=>({})};
+      };
+      await G._setInjectionSite('s1', 'R2');
+      check('recording a site PUTs site and nothing else',
+        _puts.length === 1 && Object.keys(_puts[0].body).length === 1 && _puts[0].body.site === 'R2',
+        JSON.stringify(_puts[0] && _puts[0].body));
+      check('  …to that injection', /\/injections\/s1$/.test(_puts[0].url), _puts[0].url);
+      check('  …and the row carries it immediately', _row().site === 'R2');
+
+      await G._setInjectionSite('s1', null);
+      check('clearing sends an explicit null, which is what clears it server-side',
+        _puts.length === 2 && _puts[1].body.site === null &&
+        Object.prototype.hasOwnProperty.call(_puts[1].body, 'site'),
+        JSON.stringify(_puts[1].body));
+      check('  …and the row is cleared', _row().site === null);
+
+      // ⚠️ A FAILED WRITE MUST NOT LEAVE THE SCREEN CLAIMING A SITE. The update is
+      // optimistic so the tap feels instant; the rollback is what makes that honest.
+      await G._setInjectionSite('s1', 'L1');
+      G.fetch = async () => ({ok:false, status:500, json:async()=>({})});
+      await G._setInjectionSite('s1', 'R3');
+      check('a rejected write rolls the site back to what it was',
+        _row().site === 'L1', String(_row().site));
+      G.fetch = async () => { throw new Error('offline'); };
+      await G._setInjectionSite('s1', 'R1');
+      check('  …and so does a network failure', _row().site === 'L1', String(_row().site));
+    })();
+
+    // setInjSite is the tap handler — it must refuse anything the picture has no spot
+    // for, so a client bug cannot write a site the backend would reject anyway.
+    G.fetch = async () => ({ok:true, status:200, json:async()=>({})});
+    G._injSiteEditId = 's1';
+    _row().site = 'L1';
+    await G.setInjSite('R9');
+    check('setInjSite refuses a site that is not on the picture', _row().site === 'L1');
+    await G.setInjSite(null);
+    check('  …while a null still clears, because that is the undo', _row().site === null);
+
+    G.fetch = _save.f; G._injectionsCache = _save.c; G._viewDate = _save.vd; G.document = _save.d;
+  }
+  G._enhConcMgPerMl = _apSave;
+
+  // ── Wiring ───────────────────────────────────────────────────────────────
+  {
+    const base = path.dirname(htmlPath);
+    const tdSrc = fs.readFileSync(path.join(base, 'tab-today.js'), 'utf8');
+    const siteSrc = fs.readFileSync(path.join(base, 'inj-site.js'), 'utf8');
+    // BOTH renderers. Today and the inline day view build the same row twice, and a
+    // feature added to one of them only is the tier-parity break in miniature.
+    check('source: both Today row renderers append the site button',
+      (tdSrc.match(/_injSiteButton\(dose\)/g) || []).length === 2);
+    check('source: the picker is loaded by the app',
+      /<script src="inj-site\.js/.test(html));
+    check('source: the image ships with the app',
+      fs.existsSync(path.join(base, 'inject-sites.jpg')));
+    check('source: the picker renders all six spots off INJ_SITES, not a copy',
+      /INJ_SITES\.map/.test(siteSrc) && !/left:20\.9%/.test(siteSrc));
+    check('source: the picker says whose left and right it means',
+      /your own right and left/.test(siteSrc));
+    check('source: the write is optimistic WITH a rollback',
+      /row\.site=prev; redraw\(\);/.test(tdSrc));
+    // ⚠️ THE WRITE LIVES WITH THE OTHER TODAY WRITES, NOT IN THE PICKER. One module
+    // owns every injection write and Today's PUT is the documented exception, scoped
+    // to tab-today.js by name — so the site write goes through that same door rather
+    // than the picker opening a second one.
+    check('source: the picker issues no injection write of its own',
+      !/fetch\(\s*AGENT_URL\s*\+\s*'\/injections/.test(siteSrc));
+    check('source: the site write sits with the tick, the time and the dose',
+      /async function _setInjectionSite/.test(tdSrc));
+  }
+}
 
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
   process.exit(failed===0?0:1);
@@ -19080,16 +19254,22 @@ console.log('\n── One writer for injections ──────────�
   check('nothing outside inj-writer.js writes an injection', _offenders.length === 0,
         _offenders.join(' | '));
 
-  // …and the exception is still exactly the three record-writes, not a door left
+  // …and the exception is still exactly the four record-writes, not a door left
   // open. Each one PUTs a field that describes a dose the user has already taken —
-  // the tick, the Reset Today bulk untick, and the administration-time edit. None of
-  // them POSTs, DELETEs, or otherwise plans. Raise this number only for another
-  // write of that same kind, and name it here.
+  // the tick, the Reset Today bulk untick, the administration-time edit, and (from
+  // 2026-10-03) the injection site. None of them POSTs, DELETEs, or otherwise plans.
+  // Raise this number only for another write of that same kind, and name it here.
+  //
+  // The site write was first drafted in inj-site.js alongside the picker, and this
+  // guard caught it: the exception is scoped to tab-today.js BY NAME, so a new file
+  // issuing the same PUT is an offender however reasonable it looks. Moving the write
+  // here beside its siblings was the fix — not widening the filename list.
   const _todaySrc = _fs2.readFileSync(_p2.join(__dirname, '../tab-today.js'), 'utf8');
   check('  …except Today\'s tick, which records rather than plans',
-    (_todaySrc.match(/method:'PUT'/g) || []).length === 3 &&
+    (_todaySrc.match(/method:'PUT'/g) || []).length === 4 &&
     /body:JSON.stringify\(\{logged:newLogged,logged_at:_stamp\}\)/.test(_todaySrc) &&
-    /body:JSON.stringify\(\{logged_at:stamp\}\)/.test(_todaySrc));
+    /body:JSON.stringify\(\{logged_at:stamp\}\)/.test(_todaySrc) &&
+    /body:JSON.stringify\(\{site:site\}\)/.test(_todaySrc));
 
   // Behavioural: drive the writer against a stubbed fetch. The stub is re-armed
   // immediately before each call — this block runs after the synchronous suite, and
