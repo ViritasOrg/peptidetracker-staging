@@ -58,10 +58,23 @@ jobs:
           cp ../staging/.github/workflows/ci.yml .github/workflows/ci.yml
           cp -r ../staging/tests .
 
-          # Copy web app manifest, icons, and CSS
+          # Copy web app manifest, CSS, and EVERY root-level static asset.
+          #
+          # This copied `*-icon.png` only. inject-sites.jpg — the injection-site picker's
+          # artwork — matches no part of that, so the promotion shipped a page loading an
+          # image prod does not have and prod CI failed on PR #425 (2026-10-03) at the
+          # test asserting the asset is there. Exactly the inj-writer.js failure of
+          # 2026-08-20 wearing a different extension: a pattern narrow enough to miss the
+          # next file somebody adds. An extension list cannot be forgotten the way a
+          # name-shaped glob can.
           [ -f ../staging/manifest.json ] && cp ../staging/manifest.json ./
-          for f in ../staging/*-icon.png; do [ -f "$f" ] && cp "$f" ./; done
           [ -d ../staging/css ] && cp -r ../staging/css ./
+          for ext in png jpg jpeg svg webp gif ico; do
+            for f in ../staging/*."$ext"; do
+              [ -f "$f" ] || continue
+              cp "$f" ./
+            done
+          done
 
           # Reset VERSION and ?v= cache-bust strings to prod's current version so
           # const VERSION, version.json, and tab script src tags all stay in sync
@@ -79,6 +92,24 @@ jobs:
           done
           if [ -n "$MISSING" ]; then
             echo "::error::prod would be missing modules index.html loads:$MISSING"
+            exit 1
+          fi
+
+          # And the same for the files those modules REFERENCE. The check above only
+          # ever looked at <script src>, so an asset loaded from inside a module —
+          # inj-site.js asking for inject-sites.jpg — sailed straight past it and became
+          # a red CI run on a PR already open against prod, which is the exact failure
+          # that check exists to prevent. Scan the promoted HTML, JS and CSS for quoted
+          # local asset names and prove each one actually landed.
+          MISSING_ASSETS=""
+          ASSET_REFS=$(cat index.html ./*.js ./css/*.css 2>/dev/null \
+            | grep -oE '["'"'"'(][A-Za-z0-9._-]+\.(png|jpe?g|svg|webp|gif|ico)' \
+            | sed 's/^.//' | sort -u)
+          for f in $ASSET_REFS; do
+            [ -f "./$f" ] || MISSING_ASSETS="$MISSING_ASSETS $f"
+          done
+          if [ -n "$MISSING_ASSETS" ]; then
+            echo "::error::prod would be missing assets its own files reference:$MISSING_ASSETS"
             exit 1
           fi
 

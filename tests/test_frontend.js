@@ -5794,6 +5794,22 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
       check('  …and refusing to promote a prod tree that cannot load',
         /prod would be missing modules index\.html loads/.test(y));
 
+      // ⚠️ ASSETS SHIP TOO, AND THE GUARD HAS TO SEE THEM.
+      // The copy step matched `*-icon.png`, so inject-sites.jpg — the injection-site
+      // picker's artwork — was left behind and prod CI failed on PR #425 (2026-10-03).
+      // The module guard right above missed it because it only reads <script src>, and
+      // this asset is loaded from inside a module. Same shape as inj-writer.js in
+      // 2026-08-20: a pattern narrow enough to miss the next file somebody adds.
+      check('  …copying every root asset by extension, not a name-shaped glob',
+        /for ext in png jpg jpeg svg webp gif ico/.test(y) &&
+        !/for f in \.\.\/staging\/\*-icon\.png/.test(y),
+        'an icon-only glob leaves the next image behind');
+      check('  …and refusing to promote when a referenced asset would be absent',
+        /prod would be missing assets its own files reference/.test(y));
+      check('  …scanning the modules and CSS for it, not just index.html',
+        /ASSET_REFS=\$\(cat index\.html \.\/\*\.js \.\/css\/\*\.css/.test(y),
+        'the asset that broke #425 is referenced from a module, not from index.html');
+
     }
     // OUTSIDE the guard on purpose: index.html IS promoted, so this one is just as true
     // on prod — and prod is exactly where its absence broke the build.
