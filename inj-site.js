@@ -27,18 +27,45 @@
 // Coordinates are percentages of the image box, measured off the artwork's own
 // crosshairs rather than eyeballed, so they hold at any rendered width.
 var INJ_SITES=[
-  {id:'R1',x:20.9,y:33.4,label:'Right delt'},
-  {id:'L1',x:81.0,y:33.3,label:'Left delt'},
-  {id:'R2',x:29.6,y:63.9,label:'Right glute (ventro)'},
-  {id:'L2',x:70.0,y:63.8,label:'Left glute (ventro)'},
-  {id:'R3',x:30.0,y:82.4,label:'Right quad'},
-  {id:'L3',x:69.8,y:82.5,label:'Left quad'}
+  {id:'r_delt', label:'R1', name:'Right delt',  x:22.45, y:17.76},
+  {id:'l_delt', label:'L1', name:'Left delt',   x:77.00, y:17.70},
+  {id:'r_lat',  label:'R2', name:'Right lat',   x:34.57, y:34.80},
+  {id:'l_lat',  label:'L2', name:'Left lat',    x:64.30, y:34.65},
+  {id:'r_glute',label:'R3', name:'Right glute', x:30.97, y:57.88},
+  {id:'l_glute',label:'L3', name:'Left glute',  x:68.05, y:57.87},
+  {id:'r_quad', label:'R4', name:'Right quad',  x:32.01, y:80.08},
+  {id:'l_quad', label:'L4', name:'Left quad',   x:66.62, y:80.11}
 ];
-function _injSiteLabel(id){
-  for(var i=0;i<INJ_SITES.length;i++) if(INJ_SITES[i].id===id) return INJ_SITES[i].label;
+// ⚠️ THE NUMBER IS A LABEL; THE ANATOMY IS THE ID.
+// The first cut stored R1/R2/R3 — the position. Henrik added lats as the new site 2
+// the same day ("All now reads 1. Delts 2. Lats 3. Glute 4. Quads"), which silently
+// changed what R2 and R3 MEANT: R2 went from glute to lat, R3 from quad to glute.
+// Every stored row would have moved up the body without anything being rewritten.
+//
+// A position is not an identity. The id is now the muscle, so inserting a site
+// renumbers only what is printed. It also expresses something the numbers cannot:
+// the glute has TWO sites, side and rear, and both are "3" — the rear one gets its
+// own id the day a back view exists, with nothing else disturbed.
+var _INJ_SITE_LEGACY={R1:'r_delt', L1:'l_delt',
+                      R2:'r_glute', L2:'l_glute',    // old 2 was the glute
+                      R3:'r_quad',  L3:'l_quad'};    // old 3 was the quad
+function _injSiteCanon(id){
+  if(!id)return '';
+  var k=String(id);
+  if(_INJ_SITE_LEGACY[k])return _INJ_SITE_LEGACY[k];
+  for(var i=0;i<INJ_SITES.length;i++) if(INJ_SITES[i].id===k) return k;
   return '';
 }
-function _injSiteValid(id){ return !!id && !!_injSiteLabel(id); }
+function _injSiteOf(id){
+  var c=_injSiteCanon(id);
+  for(var i=0;i<INJ_SITES.length;i++) if(INJ_SITES[i].id===c) return INJ_SITES[i];
+  return null;
+}
+// What the row's button prints: the short number Henrik asked for.
+function _injSiteLabel(id){ var s=_injSiteOf(id); return s?s.label:''; }
+// What the tooltip and the picker caption say.
+function _injSiteName(id){ var s=_injSiteOf(id); return s?s.name:''; }
+function _injSiteValid(id){ return !!_injSiteCanon(id); }
 
 // ⚠️ OILS ONLY, WHICH IS WHAT A VIAL CONCENTRATION ALREADY MEANS. Peptides go
 // subcutaneously into the belly and tablets are swallowed; neither has a site to
@@ -63,13 +90,14 @@ function _closeInjSitePicker(){
 function _injSiteButton(dose){
   if(!_injSiteApplies(dose)) return null;
   var b=document.createElement('button');
-  b.className='info-btn inj-site-btn'+(dose.site?' set':'');
-  b.textContent=dose.site||'⊕';
+  var _lbl=_injSiteLabel(dose.site);
+  b.className='info-btn inj-site-btn'+(_lbl?' set':'');
+  b.textContent=_lbl||'⊕';
   // `title` only, like every other button on a Today row. A setAttribute call here
   // threw straight through buildToday and took the whole list down with it; the row
   // buttons this sits beside have never used one, and one button reaching for a DOM
   // API none of its neighbours touch is how a render dies on a surface that lacks it.
-  b.title=dose.site?('Injection site: '+_injSiteLabel(dose.site)):'Record injection site';
+  b.title=_lbl?('Injection site: '+_injSiteName(dose.site)):'Record injection site';
   (function(_id){
     b.onclick=function(e){ e.stopPropagation(); openInjSitePicker(_id); };
   }(dose.id));
@@ -88,15 +116,15 @@ function openInjSitePicker(id){
     +'overflow-y:auto;-webkit-overflow-scrolling:touch;padding:20px 16px 40px;';
   o.onclick=function(e){ if(e.target===o) _closeInjSitePicker(); };
   var spots=INJ_SITES.map(function(s){
-    var sel=row.site===s.id;
-    return '<button onclick="setInjSite(\''+s.id+'\')" aria-label="'+_esc(s.id+' — '+s.label)+'"'
+    var sel=_injSiteCanon(row.site)===s.id;
+    return '<button onclick="setInjSite(\''+s.id+'\')" aria-label="'+_esc(s.label+' — '+s.name)+'"'
       +' style="position:absolute;left:'+s.x+'%;top:'+s.y+'%;transform:translate(-50%,-50%);'
       +'width:52px;height:52px;border-radius:50%;cursor:pointer;padding:0;'
       +'display:flex;align-items:center;justify-content:center;font-family:inherit;'
       +'font-size:13px;font-weight:800;letter-spacing:0.5px;'
       +(sel?'background:rgba(232,255,60,0.9);color:#000;border:3px solid #000;'
            :'background:rgba(0,0,0,0.55);color:#fff;border:2px solid rgba(255,255,255,0.9);')
-      +'">'+s.id+'</button>';
+      +'">'+s.label+'</button>';
   }).join('');
   var btn='display:block;width:100%;padding:12px 14px;border-radius:10px;border:none;font-size:13px;'
     +'font-weight:800;letter-spacing:0.4px;cursor:pointer;margin-top:10px;text-align:center;font-family:inherit;';
@@ -115,14 +143,14 @@ function openInjSitePicker(id){
       // being filtered into the dark theme, which would turn an anatomical reference
       // into mud. The rounded light panel makes that look deliberate.
       +'<div style="position:relative;border-radius:12px;overflow:hidden;background:#f4f3ef">'
-        +'<img src="inject-sites.jpg" alt="Front view of a torso with six injection sites marked"'
+        +'<img src="inject-sites-v2.webp" alt="Front view of a muscular figure with eight injection sites marked"'
         +' style="display:block;width:100%;height:auto">'
         +spots
       +'</div>'
       +'<div id="inj-site-current" style="font-size:12px;color:var(--muted2);text-align:center;margin-top:10px;min-height:16px">'
-        +(row.site?('Recorded: <b style="color:var(--accent)">'+_esc(row.site)+'</b> &middot; '+_esc(_injSiteLabel(row.site))):'No site recorded yet')
+        +(_injSiteLabel(row.site)?('Recorded: <b style="color:var(--accent)">'+_esc(_injSiteLabel(row.site))+'</b> &middot; '+_esc(_injSiteName(row.site))):'No site recorded yet')
       +'</div>'
-      +(row.site?('<button onclick="setInjSite(null)" style="'+btn+'background:var(--surface2);color:var(--muted2);border:1px solid var(--border)">CLEAR SITE</button>'):'')
+      +(_injSiteLabel(row.site)?('<button onclick="setInjSite(null)" style="'+btn+'background:var(--surface2);color:var(--muted2);border:1px solid var(--border)">CLEAR SITE</button>'):'')
       +'<button onclick="_closeInjSitePicker()" style="'+btn+'background:var(--surface2);color:var(--text);border:1px solid var(--border)">CLOSE</button>'
     +'</div></div>';
   document.body.appendChild(o);

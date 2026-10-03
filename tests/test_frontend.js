@@ -8728,32 +8728,48 @@ console.log('\n── The loading dose ─────────────�
 // body image, tap one of six spots. R1-R3 / L1-L3, numbered top down.
 console.log('\n── Injection site (Today) ─────────────────────────────────');
 {
-  const IDS = ['R1','R2','R3','L1','L2','L3'];
-  check('six sites, exactly the six asked for',
-    Array.isArray(G.INJ_SITES) && G.INJ_SITES.length === 6 &&
+  const IDS = ['r_delt','l_delt','r_lat','l_lat','r_glute','l_glute','r_quad','l_quad'];
+  check('eight sites — delts, lats, glutes, quads, both sides',
+    Array.isArray(G.INJ_SITES) && G.INJ_SITES.length === 8 &&
     IDS.every(id => G.INJ_SITES.some(s => s.id === id)),
     JSON.stringify((G.INJ_SITES||[]).map(s=>s.id)));
+  // ⚠️ THE NUMBER IS A LABEL; THE ANATOMY IS THE ID. Adding lats at position 2 changed
+  // what R2 and R3 MEANT — glute→lat, quad→glute — so every stored row would have moved
+  // up the body with nothing rewriting it. The id is the muscle now; only the printed
+  // number renumbers. Storing the position again is the regression this guards.
+  check('ids name the muscle, not the position',
+    G.INJ_SITES.every(s => /^[rl]_[a-z]+$/.test(s.id)),
+    JSON.stringify(G.INJ_SITES.map(s=>s.id)));
+  check('  …while the label is still the number Henrik asked for',
+    G.INJ_SITES.map(s=>s.label).sort().join(',') === 'L1,L2,L3,L4,R1,R2,R3,R4',
+    JSON.stringify(G.INJ_SITES.map(s=>s.label)));
+  // The positional ids were live for part of one day; a row written then still resolves.
+  check('legacy positional ids map to the right muscle',
+    G._injSiteCanon('R2') === 'r_glute' && G._injSiteCanon('R3') === 'r_quad' &&
+    G._injSiteCanon('L2') === 'l_glute' && G._injSiteCanon('R1') === 'r_delt',
+    'old 2 was the glute and old 3 the quad — not the new 2 and 3');
+  check('  …and a legacy row still prints a label', G._injSiteLabel('R2') === 'R3');
 
   // ⚠️ R AND L ARE HIS SIDES, NOT THE PICTURE'S. The figure faces the viewer, so his
   // right deltoid is DRAWN ON THE LEFT of the image. "I did my right delt" has to
   // store R1, which means every R hotspot sits in the left half of the artwork. Get
   // this backwards and the log is mirrored — silently, and for every row.
-  const R = G.INJ_SITES.filter(s => s.id[0] === 'R');
-  const L = G.INJ_SITES.filter(s => s.id[0] === 'L');
+  const R = G.INJ_SITES.filter(s => s.id.startsWith('r_'));
+  const L = G.INJ_SITES.filter(s => s.id.startsWith('l_'));
   check('R sites sit on the LEFT of the image — the figure faces you',
-    R.length === 3 && R.every(s => s.x < 50), JSON.stringify(R.map(s=>[s.id,s.x])));
+    R.length === 4 && R.every(s => s.x < 50), JSON.stringify(R.map(s=>[s.id,s.x])));
   check('L sites sit on the RIGHT of the image',
-    L.length === 3 && L.every(s => s.x > 50), JSON.stringify(L.map(s=>[s.id,s.x])));
+    L.length === 4 && L.every(s => s.x > 50), JSON.stringify(L.map(s=>[s.id,s.x])));
   check('  …and each R site names a right-side muscle',
-    R.every(s => /^Right /.test(s.label)), JSON.stringify(R.map(s=>s.label)));
+    R.every(s => /^Right /.test(s.name)), JSON.stringify(R.map(s=>s.name)));
   check('  …each L site a left-side one',
-    L.every(s => /^Left /.test(s.label)), JSON.stringify(L.map(s=>s.label)));
+    L.every(s => /^Left /.test(s.name)), JSON.stringify(L.map(s=>s.name)));
 
   // "start from the top down" — 1 above 2 above 3, on both sides.
   [['R',R],['L',L]].forEach(function(pair){
-    const ys = pair[1].slice().sort((a,b) => a.id.localeCompare(b.id)).map(s => s.y);
-    check(pair[0] + '1/2/3 run top to bottom as asked',
-      ys[0] < ys[1] && ys[1] < ys[2], JSON.stringify(ys));
+    const ys = pair[1].slice().sort((a,b) => a.label.localeCompare(b.label)).map(s => s.y);
+    check(pair[0] + '1/2/3/4 run top to bottom as asked',
+      ys[0] < ys[1] && ys[1] < ys[2] && ys[2] < ys[3], JSON.stringify(ys));
   });
   // ⚠️ 2 IS THE GLUTE. Henrik asked for glutes as a seventh and eighth site; the
   // ventrogluteal one was already on the picture at spot 2 under the name "hip", so it
@@ -8761,17 +8777,24 @@ console.log('\n── Injection site (Today) ───────────�
   // revert to "hip" would make him look for a glute site that is not missing. "ventro"
   // stays in the label: a dorsogluteal spot on a future back view is a DIFFERENT
   // injection and the two must never read as the same place.
-  check('site 2 is named as the glute, on both sides',
-    G.INJ_SITES.filter(s => /glute/i.test(s.label)).map(s => s.id).sort().join(',') === 'L2,R2',
-    JSON.stringify(G.INJ_SITES.map(s => [s.id, s.label])));
-  check('  …and says which glute it is, so a back view could add the other',
-    G.INJ_SITES.filter(s => /glute/i.test(s.label)).every(s => /ventro/i.test(s.label)));
+  // Henrik, 2026-10-03: "1. Delts 2. Lats 3. Glute (2 sites side and rear) 4. Quads".
+  const byLabel = (l) => G.INJ_SITES.find(s => s.label === l);
+  check('the four positions read delt, lat, glute, quad top down',
+    ['delt','lat','glute','quad'].every((m,i) =>
+      new RegExp(m,'i').test(byLabel('R'+(i+1)).name) &&
+      new RegExp(m,'i').test(byLabel('L'+(i+1)).name)),
+    JSON.stringify(G.INJ_SITES.map(s => [s.label, s.name])));
+  // The rear glute is a DIFFERENT injection that needs a back view; when it arrives it
+  // gets its own id rather than overloading this one. Nothing may silently become it.
+  check('  …and only the side glute exists so far, not a second one',
+    G.INJ_SITES.filter(s => /glute/i.test(s.name)).length === 2);
   check('every hotspot is inside the image box',
     G.INJ_SITES.every(s => s.x > 0 && s.x < 100 && s.y > 0 && s.y < 100));
-  check('the six ids are distinct', new Set(G.INJ_SITES.map(s=>s.id)).size === 6);
-  check('_injSiteValid accepts the six and nothing else',
-    IDS.every(id => G._injSiteValid(id)) &&
-    !G._injSiteValid('R4') && !G._injSiteValid('r1') && !G._injSiteValid('') &&
+  check('the ids and the labels are both distinct',
+    new Set(G.INJ_SITES.map(s=>s.id)).size === 8 && new Set(G.INJ_SITES.map(s=>s.label)).size === 8);
+  check('_injSiteValid accepts the eight (and the legacy six) and nothing else',
+    IDS.every(id => G._injSiteValid(id)) && G._injSiteValid('R2') &&
+    !G._injSiteValid('r_calf') && !G._injSiteValid('R9') && !G._injSiteValid('') &&
     !G._injSiteValid(null) && !G._injSiteValid('LEFT'));
 
   // ── Oils only ────────────────────────────────────────────────────────────
@@ -8803,13 +8826,16 @@ console.log('\n── Injection site (Today) ───────────�
   {
     const b = _btn({tier:'trt', compound_id:'enanthate', id:'i1'});
     check('an unrecorded oil row offers the button', !!b && !/\bset\b/.test(b.className));
-    check('  …carrying a prompt, not a fake site', !!b && b.textContent !== '' && !/^[RL][123]$/.test(b.textContent));
-    const b2 = _btn({tier:'trt', compound_id:'enanthate', id:'i1', site:'L3'});
-    check('a recorded row shows the site on the button itself', b2.textContent === 'L3');
+    check('  …carrying a prompt, not a fake site', !!b && b.textContent !== '' && !/^[RL][1234]$/.test(b.textContent));
+    const b2 = _btn({tier:'trt', compound_id:'enanthate', id:'i1', site:'l_glute'});
+    check('a recorded row shows the site NUMBER on the button', b2.textContent === 'L3');
     check('  …and is marked as set, so a glance down the list shows what is logged',
       /\bset\b/.test(b2.className));
     check('  …and names the muscle for anyone who has not memorised the grid',
-      /Left quad/.test(b2.title));
+      /Left glute/.test(b2.title), b2.title);
+    const b3 = _btn({tier:'trt', compound_id:'enanthate', id:'i1', site:'R2'});
+    check('  …and a legacy row renders as its muscle, not its old number',
+      b3.textContent === 'R3' && /Right glute/.test(b3.title), b3.textContent+'/'+b3.title);
     // ⚠️ THE ROW ITSELF TOGGLES THE DOSE. Without stopPropagation, opening the picker
     // would also tick or untick the injection — the single worst thing this button
     // could do, because the tick is what the whole log is built on.
@@ -8838,12 +8864,12 @@ console.log('\n── Injection site (Today) ───────────�
         if (opt && opt.method === 'PUT') _puts.push({url:String(url), body:JSON.parse(opt.body)});
         return {ok:true, status:200, json:async()=>({})};
       };
-      await G._setInjectionSite('s1', 'R2');
+      await G._setInjectionSite('s1', 'r_glute');
       check('recording a site PUTs site and nothing else',
-        _puts.length === 1 && Object.keys(_puts[0].body).length === 1 && _puts[0].body.site === 'R2',
+        _puts.length === 1 && Object.keys(_puts[0].body).length === 1 && _puts[0].body.site === 'r_glute',
         JSON.stringify(_puts[0] && _puts[0].body));
       check('  …to that injection', /\/injections\/s1$/.test(_puts[0].url), _puts[0].url);
-      check('  …and the row carries it immediately', _row().site === 'R2');
+      check('  …and the row carries it immediately', _row().site === 'r_glute');
 
       await G._setInjectionSite('s1', null);
       check('clearing sends an explicit null, which is what clears it server-side',
@@ -8854,23 +8880,23 @@ console.log('\n── Injection site (Today) ───────────�
 
       // ⚠️ A FAILED WRITE MUST NOT LEAVE THE SCREEN CLAIMING A SITE. The update is
       // optimistic so the tap feels instant; the rollback is what makes that honest.
-      await G._setInjectionSite('s1', 'L1');
+      await G._setInjectionSite('s1', 'l_delt');
       G.fetch = async () => ({ok:false, status:500, json:async()=>({})});
-      await G._setInjectionSite('s1', 'R3');
+      await G._setInjectionSite('s1', 'r_quad');
       check('a rejected write rolls the site back to what it was',
-        _row().site === 'L1', String(_row().site));
+        _row().site === 'l_delt', String(_row().site));
       G.fetch = async () => { throw new Error('offline'); };
-      await G._setInjectionSite('s1', 'R1');
-      check('  …and so does a network failure', _row().site === 'L1', String(_row().site));
+      await G._setInjectionSite('s1', 'r_delt');
+      check('  …and so does a network failure', _row().site === 'l_delt', String(_row().site));
     })();
 
     // setInjSite is the tap handler — it must refuse anything the picture has no spot
     // for, so a client bug cannot write a site the backend would reject anyway.
     G.fetch = async () => ({ok:true, status:200, json:async()=>({})});
     G._injSiteEditId = 's1';
-    _row().site = 'L1';
-    await G.setInjSite('R9');
-    check('setInjSite refuses a site that is not on the picture', _row().site === 'L1');
+    _row().site = 'l_delt';
+    await G.setInjSite('r_calf');
+    check('setInjSite refuses a site that is not on the picture', _row().site === 'l_delt');
     await G.setInjSite(null);
     check('  …while a null still clears, because that is the undo', _row().site === null);
 
@@ -8890,9 +8916,11 @@ console.log('\n── Injection site (Today) ───────────�
     check('source: the picker is loaded by the app',
       /<script src="inj-site\.js/.test(html));
     check('source: the image ships with the app',
-      fs.existsSync(path.join(base, 'inject-sites.jpg')));
+      fs.existsSync(path.join(base, 'inject-sites-v2.webp')));
+    check('source: the superseded six-site artwork is gone',
+      !fs.existsSync(path.join(base, 'inject-sites.jpg')));
     check('source: the picker renders all six spots off INJ_SITES, not a copy',
-      /INJ_SITES\.map/.test(siteSrc) && !/left:20\.9%/.test(siteSrc));
+      /INJ_SITES\.map/.test(siteSrc) && !/left:22\.45%/.test(siteSrc));
     check('source: the picker says whose left and right it means',
       /your own right and left/.test(siteSrc));
     check('source: the write is optimistic WITH a rollback',
