@@ -8728,27 +8728,54 @@ console.log('\n── The loading dose ─────────────�
 // body image, tap one of six spots. R1-R3 / L1-L3, numbered top down.
 console.log('\n── Injection site (Today) ─────────────────────────────────');
 {
-  const IDS = ['r_delt','l_delt','r_lat','l_lat','r_glute','l_glute','r_quad','l_quad'];
-  check('eight sites — delts, lats, glutes, quads, both sides',
-    Array.isArray(G.INJ_SITES) && G.INJ_SITES.length === 8 &&
+  const IDS = ['r_delt','l_delt','r_lat','l_lat','r_glute','l_glute',
+               'r_glute_rear','l_glute_rear','r_quad','l_quad'];
+  check('ten sites — delts, lats, both glutes, quads, each side',
+    Array.isArray(G.INJ_SITES) && G.INJ_SITES.length === 10 &&
     IDS.every(id => G.INJ_SITES.some(s => s.id === id)),
     JSON.stringify((G.INJ_SITES||[]).map(s=>s.id)));
+  // ⚠️ THE MIRRORING INVERTS ON THE BACK VIEW. Front: the figure faces you, so his
+  // right is drawn on the image's LEFT. Back: he faces away, so his right is on the
+  // image's RIGHT. Copy a front coordinate onto the back view and every entry made
+  // there records the wrong side, silently. The lats live on BOTH views, so their two
+  // x values must sit on opposite halves — that pair is the canary.
+  check('front view: R sites on the image LEFT, L on the right',
+    G.INJ_SITES.filter(s=>s.front).every(s =>
+      s.id.startsWith('r_') ? s.front.x < 50 : s.front.x > 50),
+    JSON.stringify(G.INJ_SITES.filter(s=>s.front).map(s=>[s.id,s.front.x])));
+  check('back view: R sites on the image RIGHT, L on the left — it is mirrored',
+    G.INJ_SITES.filter(s=>s.back).every(s =>
+      s.id.startsWith('r_') ? s.back.x > 50 : s.back.x < 50),
+    JSON.stringify(G.INJ_SITES.filter(s=>s.back).map(s=>[s.id,s.back.x])));
+  check('  …so a site on both views has its x on opposite halves',
+    G.INJ_SITES.filter(s => s.front && s.back)
+      .every(s => (s.front.x - 50) * (s.back.x - 50) < 0),
+    JSON.stringify(G.INJ_SITES.filter(s=>s.front&&s.back).map(s=>[s.id,s.front.x,s.back.x])));
+  check('every site appears on at least one view',
+    G.INJ_SITES.every(s => s.front || s.back));
+  check('the two glute spots are distinct sites, not one',
+    G._injSiteCanon('r_glute') !== G._injSiteCanon('r_glute_rear') &&
+    G._injSiteLabel('r_glute') !== G._injSiteLabel('r_glute_rear'));
+  check('  …and the picker opens on the view the recorded site is actually on',
+    G._injSiteView('r_glute') === 'front' && G._injSiteView('r_glute_rear') === 'back' &&
+    G._injSiteView('') === 'front');
   // ⚠️ THE NUMBER IS A LABEL; THE ANATOMY IS THE ID. Adding lats at position 2 changed
   // what R2 and R3 MEANT — glute→lat, quad→glute — so every stored row would have moved
   // up the body with nothing rewriting it. The id is the muscle now; only the printed
   // number renumbers. Storing the position again is the regression this guards.
   check('ids name the muscle, not the position',
-    G.INJ_SITES.every(s => /^[rl]_[a-z]+$/.test(s.id)),
+    G.INJ_SITES.every(s => /^[rl]_[a-z]+(_[a-z]+)?$/.test(s.id)),
     JSON.stringify(G.INJ_SITES.map(s=>s.id)));
   check('  …while the label is still the number Henrik asked for',
-    G.INJ_SITES.map(s=>s.label).sort().join(',') === 'L1,L2,L3,L4,R1,R2,R3,R4',
+    G.INJ_SITES.map(s=>s.label).sort().join(',') ===
+      'L1,L2,L3r,L3s,L4,R1,R2,R3r,R3s,R4',
     JSON.stringify(G.INJ_SITES.map(s=>s.label)));
   // The positional ids were live for part of one day; a row written then still resolves.
   check('legacy positional ids map to the right muscle',
     G._injSiteCanon('R2') === 'r_glute' && G._injSiteCanon('R3') === 'r_quad' &&
     G._injSiteCanon('L2') === 'l_glute' && G._injSiteCanon('R1') === 'r_delt',
     'old 2 was the glute and old 3 the quad — not the new 2 and 3');
-  check('  …and a legacy row still prints a label', G._injSiteLabel('R2') === 'R3');
+  check('  …and a legacy row still prints a label', G._injSiteLabel('R2') === 'R3s');
 
   // ⚠️ R AND L ARE HIS SIDES, NOT THE PICTURE'S. The figure faces the viewer, so his
   // right deltoid is DRAWN ON THE LEFT of the image. "I did my right delt" has to
@@ -8756,10 +8783,8 @@ console.log('\n── Injection site (Today) ───────────�
   // this backwards and the log is mirrored — silently, and for every row.
   const R = G.INJ_SITES.filter(s => s.id.startsWith('r_'));
   const L = G.INJ_SITES.filter(s => s.id.startsWith('l_'));
-  check('R sites sit on the LEFT of the image — the figure faces you',
-    R.length === 4 && R.every(s => s.x < 50), JSON.stringify(R.map(s=>[s.id,s.x])));
-  check('L sites sit on the RIGHT of the image',
-    L.length === 4 && L.every(s => s.x > 50), JSON.stringify(L.map(s=>[s.id,s.x])));
+  check('every muscle exists on both sides', R.length === 5 && L.length === 5,
+    R.length + ' vs ' + L.length);
   check('  …and each R site names a right-side muscle',
     R.every(s => /^Right /.test(s.name)), JSON.stringify(R.map(s=>s.name)));
   check('  …each L site a left-side one',
@@ -8767,9 +8792,10 @@ console.log('\n── Injection site (Today) ───────────�
 
   // "start from the top down" — 1 above 2 above 3, on both sides.
   [['R',R],['L',L]].forEach(function(pair){
-    const ys = pair[1].slice().sort((a,b) => a.label.localeCompare(b.label)).map(s => s.y);
-    check(pair[0] + '1/2/3/4 run top to bottom as asked',
-      ys[0] < ys[1] && ys[1] < ys[2] && ys[2] < ys[3], JSON.stringify(ys));
+    const ys = pair[1].filter(s => s.front)
+      .sort((a,b) => a.label.localeCompare(b.label)).map(s => s.front.y);
+    check(pair[0] + '1/2/3/4 run top to bottom on the front view',
+      ys.every((y,i) => i === 0 || ys[i-1] < y), JSON.stringify(ys));
   });
   // ⚠️ 2 IS THE GLUTE. Henrik asked for glutes as a seventh and eighth site; the
   // ventrogluteal one was already on the picture at spot 2 under the name "hip", so it
@@ -8779,19 +8805,21 @@ console.log('\n── Injection site (Today) ───────────�
   // injection and the two must never read as the same place.
   // Henrik, 2026-10-03: "1. Delts 2. Lats 3. Glute (2 sites side and rear) 4. Quads".
   const byLabel = (l) => G.INJ_SITES.find(s => s.label === l);
-  check('the four positions read delt, lat, glute, quad top down',
-    ['delt','lat','glute','quad'].every((m,i) =>
-      new RegExp(m,'i').test(byLabel('R'+(i+1)).name) &&
-      new RegExp(m,'i').test(byLabel('L'+(i+1)).name)),
+  check('the positions read delt, lat, glute, glute, quad top down',
+    [['R1','delt'],['R2','lat'],['R3s','glute'],['R3r','glute'],['R4','quad']]
+      .every(([l,m]) => new RegExp(m,'i').test(byLabel(l).name) &&
+                        new RegExp(m,'i').test(byLabel(l.replace('R','L')).name)),
     JSON.stringify(G.INJ_SITES.map(s => [s.label, s.name])));
-  // The rear glute is a DIFFERENT injection that needs a back view; when it arrives it
-  // gets its own id rather than overloading this one. Nothing may silently become it.
-  check('  …and only the side glute exists so far, not a second one',
-    G.INJ_SITES.filter(s => /glute/i.test(s.name)).length === 2);
-  check('every hotspot is inside the image box',
-    G.INJ_SITES.every(s => s.x > 0 && s.x < 100 && s.y > 0 && s.y < 100));
+  check('  …and the two glutes say which is which',
+    /side/i.test(byLabel('R3s').name) && /rear/i.test(byLabel('R3r').name));
+  check('every hotspot is inside its image box',
+    G.INJ_SITES.every(s => ['front','back'].every(v =>
+      !s[v] || (s[v].x > 0 && s[v].x < 100 && s[v].y > 0 && s[v].y < 100))));
+  // Count derived from the table, not hardcoded — the last two times this was a
+  // literal it went red for a site being ADDED, which is not a defect.
   check('the ids and the labels are both distinct',
-    new Set(G.INJ_SITES.map(s=>s.id)).size === 8 && new Set(G.INJ_SITES.map(s=>s.label)).size === 8);
+    new Set(G.INJ_SITES.map(s=>s.id)).size === G.INJ_SITES.length &&
+    new Set(G.INJ_SITES.map(s=>s.label)).size === G.INJ_SITES.length);
   check('_injSiteValid accepts the eight (and the legacy six) and nothing else',
     IDS.every(id => G._injSiteValid(id)) && G._injSiteValid('R2') &&
     !G._injSiteValid('r_calf') && !G._injSiteValid('R9') && !G._injSiteValid('') &&
@@ -8828,14 +8856,14 @@ console.log('\n── Injection site (Today) ───────────�
     check('an unrecorded oil row offers the button', !!b && !/\bset\b/.test(b.className));
     check('  …carrying a prompt, not a fake site', !!b && b.textContent !== '' && !/^[RL][1234]$/.test(b.textContent));
     const b2 = _btn({tier:'trt', compound_id:'enanthate', id:'i1', site:'l_glute'});
-    check('a recorded row shows the site NUMBER on the button', b2.textContent === 'L3');
+    check('a recorded row shows the site NUMBER on the button', b2.textContent === 'L3s');
     check('  …and is marked as set, so a glance down the list shows what is logged',
       /\bset\b/.test(b2.className));
     check('  …and names the muscle for anyone who has not memorised the grid',
       /Left glute/.test(b2.title), b2.title);
     const b3 = _btn({tier:'trt', compound_id:'enanthate', id:'i1', site:'R2'});
     check('  …and a legacy row renders as its muscle, not its old number',
-      b3.textContent === 'R3' && /Right glute/.test(b3.title), b3.textContent+'/'+b3.title);
+      b3.textContent === 'R3s' && /Right glute/.test(b3.title), b3.textContent+'/'+b3.title);
     // ⚠️ THE ROW ITSELF TOGGLES THE DOSE. Without stopPropagation, opening the picker
     // would also tick or untick the injection — the single worst thing this button
     // could do, because the tick is what the whole log is built on.
@@ -8915,12 +8943,18 @@ console.log('\n── Injection site (Today) ───────────�
       (tdSrc.match(/_injSiteButton\(dose\)/g) || []).length === 2);
     check('source: the picker is loaded by the app',
       /<script src="inj-site\.js/.test(html));
-    check('source: the image ships with the app',
-      fs.existsSync(path.join(base, 'inject-sites-v2.webp')));
+    check('source: both images ship with the app',
+      fs.existsSync(path.join(base, 'inject-sites-v2.webp')) &&
+      fs.existsSync(path.join(base, 'inject-sites-back.webp')));
+    check('source: switching view only changes display, never the record',
+      /function injSiteView/.test(siteSrc) && !/injSiteView[\s\S]{0,400}_setInjectionSite/.test(siteSrc));
     check('source: the superseded six-site artwork is gone',
       !fs.existsSync(path.join(base, 'inject-sites.jpg')));
-    check('source: the picker renders all six spots off INJ_SITES, not a copy',
-      /INJ_SITES\.map/.test(siteSrc) && !/left:22\.45%/.test(siteSrc));
+    check('source: the picker renders every spot off the table, not a copy',
+      /_injSitesFor\(view\)\.map/.test(siteSrc) && !/left:22\.45%/.test(siteSrc));
+    check('source: both views come from INJ_VIEWS rather than a hardcoded <img>',
+      /INJ_VIEWS\.map/.test(siteSrc) &&
+      (siteSrc.match(/inject-sites[a-z0-9.-]*\.webp/g) || []).length === 2);
     check('source: the picker says whose left and right it means',
       /your own right and left/.test(siteSrc));
     check('source: the write is optimistic WITH a rollback',
