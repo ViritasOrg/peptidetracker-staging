@@ -1,5 +1,9 @@
 # Peptide Tracker Staging — Claude Instructions
 
+## Answer first (Henrik, 2026-10-10)
+
+- **Answer first, then say what you will do before doing it** ("You're right. I'll answer first and say what I'm doing before I start."). A question gets its answer in the first lines, before any tool call. Before starting any work (a workflow, a PR, a deploy, waiting on CI), say in one line what you are about to do and why; never disappear into tool calls on a simple question.
+
 ## 🚦 THE WORKFLOW — STAGE, THEN PING. NEVER PROD. 🚦
 **Henrik, 2026-09-08, verbatim: "you must move code to Stage, and once ready for
 test ping me, but never ever push to prod!!"**
