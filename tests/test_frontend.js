@@ -8928,6 +8928,54 @@ console.log('\n── Injection site (Today) ───────────�
     await G.setInjSite(null);
     check('  …while a null still clears, because that is the undo', _row().site === null);
 
+    // ── Tapping an unlogged oil row: the site tap IS the tick (Henrik, 2026-10-10) ──
+    {
+      const _ts = {open:G.openInjSitePicker, tog:G.toggleInjection};
+      const _calls = [];
+      G.toggleInjection = async (id, cur) => { _calls.push(['toggle', id, cur]); };
+      let _opened = null;
+      G.openInjSitePicker = (id, opts) => { _opened = {id, opts}; return true; };
+      G._todayRowTap({id:'s1', tier:'trt', compound_id:'enanthate', logged:false});
+      check('tapping an unlogged oil row opens the picker in log mode instead of ticking',
+        _opened && _opened.id === 's1' && _opened.opts && _opened.opts.logOnPick === true && _calls.length === 0,
+        JSON.stringify({_opened, _calls}));
+      _opened = null;
+      G._todayRowTap({id:'s1', tier:'trt', compound_id:'enanthate', logged:true});
+      check('  …but a logged oil row still unticks in one tap',
+        _opened === null && _calls.length === 1 && _calls[0][2] === true, JSON.stringify(_calls));
+      _calls.length = 0;
+      G._todayRowTap({id:'p1', tier:'peptide', compound_id:'retatrutide', logged:false});
+      check('  …and a peptide row ticks directly, as before',
+        _opened === null && _calls.length === 1 && _calls[0][1] === 'p1', JSON.stringify(_calls));
+      _calls.length = 0;
+      G.openInjSitePicker = () => false;
+      G._todayRowTap({id:'zz', tier:'trt', compound_id:'enanthate', logged:false});
+      check('  …and if the picker cannot open, the tap still ticks rather than doing nothing',
+        _calls.length === 1 && _calls[0][1] === 'zz', JSON.stringify(_calls));
+      G.openInjSitePicker = _ts.open;
+
+      // Picking a site in log mode records the site AND ticks the dose.
+      _calls.length = 0;
+      _row().logged = false; _row().site = null;
+      G._injSiteEditId = 's1'; G._injSiteLogOnPick = true;
+      await G.setInjSite('l_glute');
+      check('in log mode, tapping a site records it', _row().site === 'l_glute', String(_row().site));
+      check('  …and checks off that injection',
+        _calls.length === 1 && _calls[0][1] === 's1' && _calls[0][2] === false, JSON.stringify(_calls));
+      check('  …and leaves log mode', G._injSiteLogOnPick === false);
+      // Outside log mode (the ⊕ button) a site tap never ticks.
+      _calls.length = 0;
+      G._injSiteEditId = 's1'; G._injSiteLogOnPick = false;
+      await G.setInjSite('r_delt');
+      check('the row button records a site without ticking', _calls.length === 0 && _row().site === 'r_delt');
+      // Closing the picker in log mode logs nothing.
+      G._injSiteEditId = 's1'; G._injSiteLogOnPick = true;
+      G._closeInjSitePicker();
+      check('closing the picker without a site logs nothing',
+        _calls.length === 0 && G._injSiteLogOnPick === false && G._injSiteEditId === null);
+      G.toggleInjection = _ts.tog;
+    }
+
     G.fetch = _save.f; G._injectionsCache = _save.c; G._viewDate = _save.vd; G.document = _save.d;
   }
   G._enhConcMgPerMl = _apSave;

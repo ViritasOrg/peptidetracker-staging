@@ -104,6 +104,9 @@ function _injSiteApplies(dose){
 }
 
 var _injSiteEditId=null;
+// True when the picker was opened by tapping an unlogged row: picking a site then also
+// ticks the dose (see _todayRowTap in tab-today.js).
+var _injSiteLogOnPick=false;
 // Switching views is pure display — it must never touch what is recorded. The panes
 // are already in the DOM, so this only flips visibility and the caption, and the hint
 // has to flip with it because the left/right mirroring is opposite on the two views.
@@ -126,6 +129,7 @@ function _closeInjSitePicker(){
   var o=document.getElementById('inj-site-modal');
   if(o&&o.parentNode)o.parentNode.removeChild(o);
   _injSiteEditId=null;
+  _injSiteLogOnPick=false;
 }
 // The button on the Today row: the site when there is one, a target glyph when not.
 function _injSiteButton(dose){
@@ -144,10 +148,12 @@ function _injSiteButton(dose){
   }(dose.id));
   return b;
 }
-function openInjSitePicker(id){
+function openInjSitePicker(id,opts){
   var row=(typeof _findCachedInjection==='function')?_findCachedInjection(id):null;
-  if(!row) return;
+  if(!row) return false;
   _injSiteEditId=id;
+  var logMode=!!(opts&&opts.logOnPick)&&!row.logged;
+  _injSiteLogOnPick=logMode;
   var name=(typeof _tdName==='function')?_tdName(row.compound_name||row.compound_id,row.compound_id)
                                         :(row.compound_name||row.compound_id||'');
   var amount=(row.dose||'')+(row.unit?' '+((typeof UNIT_LABELS!=='undefined'&&UNIT_LABELS[row.unit])||row.unit):'');
@@ -194,7 +200,7 @@ function openInjSitePicker(id){
     +'</div>'
     +'<div style="padding:14px 16px">'
       +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:10px">'
-        +'Tap where you injected. <b>R</b> and <b>L</b> are always your own right and left.'
+        +(logMode?'Tap where you injected to log this dose. ':'Tap where you injected. ')+'<b>R</b> and <b>L</b> are always your own right and left.'
         +'<span id="inj-site-hint"> '+(_view==='front'
             ?'The figure faces you, so your right side is on the left of the picture.'
             :'This view is from behind, so your right side is on the right of the picture.')
@@ -209,17 +215,25 @@ function openInjSitePicker(id){
       +'<div id="inj-site-current" style="font-size:12px;color:var(--muted2);text-align:center;margin-top:10px;min-height:16px">'
         +(_injSiteLabel(row.site)?('Recorded: <b style="color:var(--accent)">'+_esc(_injSiteLabel(row.site))+'</b> &middot; '+_esc(_injSiteName(row.site))):'No site recorded yet')
       +'</div>'
-      +(_injSiteLabel(row.site)?('<button onclick="setInjSite(null)" style="'+btn+'background:var(--surface2);color:var(--muted2);border:1px solid var(--border)">CLEAR SITE</button>'):'')
+      +((_injSiteLabel(row.site)&&!logMode)?('<button onclick="setInjSite(null)" style="'+btn+'background:var(--surface2);color:var(--muted2);border:1px solid var(--border)">CLEAR SITE</button>'):'')
       +'<button onclick="_closeInjSitePicker()" style="'+btn+'background:var(--surface2);color:var(--text);border:1px solid var(--border)">CLOSE</button>'
     +'</div></div>';
   document.body.appendChild(o);
+  return true;
 }
 // Tapping a spot records it and closes — one tap, which is the whole point of the
 // button being on the row rather than buried in an editor.
 async function setInjSite(site){
   var id=_injSiteEditId;
+  var logIt=_injSiteLogOnPick;
   if(!id) return;
   if(site!==null&&!_injSiteValid(site)) return;   // only the six the picture has
   _closeInjSitePicker();
   await _setInjectionSite(id,site);
+  // Log mode: the site tap IS the tick. Sequential, so the two PUTs to the same row
+  // never race; the site write redraws optimistically before its await anyway.
+  if(logIt&&site!==null){
+    var row=(typeof _findCachedInjection==='function')?_findCachedInjection(id):null;
+    if(row&&!row.logged&&typeof toggleInjection==='function') await toggleInjection(id,false);
+  }
 }
