@@ -153,7 +153,26 @@ function _injBodyFor(sex,bf){
   list.forEach(function(b){ if(Math.abs(b.bf-want)<Math.abs(best.bf-want)) best=b; });
   return best;
 }
+// STAGING ONLY: a Settings override that pins one figure (Henrik, 2026-10-14: "On stage
+// only I would need a Settings option to pick different BF and male/female images").
+// 'auto' — or anything not a figure key — leaves the choice to sex and body fat.
+var INJ_BODY_OVERRIDE_KEY='inj-body-override';
+function _injBodyOverrideFor(staging,k){
+  if(!staging) return null;
+  var all=INJ_BODIES.male.concat(INJ_BODIES.female);
+  for(var i=0;i<all.length;i++) if(all[i].key===k) return all[i];
+  return null;
+}
+function _injBodyOverride(){
+  var k=''; try{ k=localStorage.getItem(INJ_BODY_OVERRIDE_KEY)||''; }catch(e){}
+  return _injBodyOverrideFor(typeof IS_STAGING!=='undefined'&&!!IS_STAGING,k);
+}
+function setInjBodyOverride(k){
+  try{ localStorage.setItem(INJ_BODY_OVERRIDE_KEY,k||'auto'); }catch(e){}
+  if(typeof pushPepSettingsToAgent==='function') pushPepSettingsToAgent({'inj-body-override':k||'auto'});
+}
 function _injBody(){
+  var ov=_injBodyOverride(); if(ov) return ov;
   var sex='male';
   try{ sex=String(localStorage.getItem('user_sex')||'male').toLowerCase(); }catch(e){}
   var bf=null;
