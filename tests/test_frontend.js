@@ -9087,6 +9087,14 @@ console.log('\n── Injection site (Today) ───────────�
         /No published guidance/.test(html) && /Delts/.test(html) && /Lats/.test(html));
       check('needle: it says it is an estimate from sex, weight and height', /ESTIMATE FROM YOUR SEX, WEIGHT AND HEIGHT/.test(html));
       check('needle: nothing to print without a response', G._injNeedleHtml(null) === '');
+      {
+        const h2 = G._injNeedleHtml({muscles:{deltoid:{mm_min:14.3,mm_max:26.2,label:'16 or 25 mm',
+          basis:'Needs 14–26 mm to land in muscle', note:'Fat ≈ 7 mm, muscle ≈ 17 mm'}}});
+        check('needle: a range shows its sizes AND how it was worked out',
+          /16 or 25 mm/.test(h2) && /Needs 14–26 mm to land in muscle/.test(h2) && /Fat ≈ 7 mm/.test(h2));
+      }
+      check('needle: the age in Body is sent, since the deltoid fat model uses it',
+        /&age='\+a/.test(siteSrc));
       check('needle: no number is written in the frontend — it comes from /injection-needles',
         /\/injection-needles/.test(siteSrc) && !/\b(16|25|38)\s*mm/.test(siteSrc.replace(/\/\/.*$/gm, '')));
     }
