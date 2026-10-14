@@ -61,9 +61,9 @@ var _INJ_SITE_LEGACY={R1:'r_delt', L1:'l_delt',
                       R2:'r_glute', L2:'l_glute',    // old 2 was the glute
                       R3:'r_quad',  L3:'l_quad'};    // old 3 was the quad
 var INJ_VIEWS=[{k:'front',label:'Front',img:'inject-sites-v2.webp',
-                alt:'Front view of a muscular figure with eight injection sites marked'},
+                alt:'Front view of a figure with eight injection sites marked'},
                {k:'back', label:'Back', img:'inject-sites-back.webp',
-                alt:'Back view of a muscular figure with the lats and rear glutes marked'}];
+                alt:'Back view of a figure with the lats and rear glutes marked'}];
 function _injSitesFor(view){
   return INJ_SITES.filter(function(s){return !!s[view];});
 }
@@ -101,6 +101,115 @@ function _injSiteApplies(dose){
   if(dose.tier==='trt') return true;
   if(dose.tier!=='enhanced') return false;
   return (typeof _enhConcMgPerMl==='function') && _enhConcMgPerMl(dose.compound_id)>0;
+}
+
+
+// ── A BODY LIKE THE USER'S ───────────────────────────────────────────────────
+// Henrik, 2026-10-13: "put haircrosses in a clear color on images of bodies for the
+// injection guide? I have generated three different for male and female with
+// different bodyfat % and want the app to show the user a more realistic self image
+// when choosing injection site". Six figures per sex view pair, cut from his sheet:
+// men at 10/20/35 % and women at 15/20/35 % body fat, each front and back.
+//
+// The picture follows the sex set in Body and the latest LOGGED body fat, taking the
+// closest figure. With no body fat logged it shows the 20 % figure — the middle of
+// both sets — rather than guessing one from weight, because choosing a picture is a
+// display decision and an estimate here would be a number nobody can check.
+//
+// Filenames are written out in full, never built from a key: promote-to-prod.yml
+// proves every quoted asset name exists before promoting, and a name assembled at
+// runtime is invisible to that check.
+var INJ_BODIES={
+  male:  [{bf:10,key:'m10',front:'inject-body-m10-front.webp',back:'inject-body-m10-back.webp'},
+          {bf:20,key:'m20',front:'inject-body-m20-front.webp',back:'inject-body-m20-back.webp'},
+          {bf:35,key:'m35',front:'inject-body-m35-front.webp',back:'inject-body-m35-back.webp'}],
+  female:[{bf:15,key:'f15',front:'inject-body-f15-front.webp',back:'inject-body-f15-back.webp'},
+          {bf:20,key:'f20',front:'inject-body-f20-front.webp',back:'inject-body-f20-back.webp'},
+          {bf:35,key:'f35',front:'inject-body-f35-front.webp',back:'inject-body-f35-back.webp'}]
+};
+var INJ_BODY_DEFAULT_BF=20;
+// Where each site sits on each figure, as [x%, y%] of the image box. The bodies differ
+// in width — the 35 % figures' delts and hips sit well outside the 10 % ones' — so a
+// single table cannot be shared between them. Same mirroring rule as INJ_SITES: on a
+// front view an r_ site is on the image's LEFT (x < 50), on a back view on its RIGHT.
+var INJ_BODY_SPOTS={
+  m10:{front:{r_delt:[22,23],l_delt:[79,23],r_lat:[30,33],l_lat:[70,33],r_glute:[28,50],l_glute:[73,50],r_quad:[30,60],l_quad:[70,60]},
+       back:{r_lat:[66,33],l_lat:[34,33],r_glute_rear:[62,49],l_glute_rear:[38,49]}},
+  m20:{front:{r_delt:[23,24],l_delt:[79,24],r_lat:[31,34],l_lat:[70,34],r_glute:[27,51],l_glute:[74,51],r_quad:[31,61],l_quad:[70,61]},
+       back:{r_lat:[67,33],l_lat:[33,33],r_glute_rear:[63,49],l_glute_rear:[37,49]}},
+  m35:{front:{r_delt:[18,24],l_delt:[82,24],r_lat:[26,33],l_lat:[75,33],r_glute:[25,51],l_glute:[76,51],r_quad:[28,62],l_quad:[73,62]},
+       back:{r_lat:[70,34],l_lat:[30,34],r_glute_rear:[64,50],l_glute_rear:[36,50]}},
+  f15:{front:{r_delt:[21,23],l_delt:[79,23],r_lat:[29,33],l_lat:[71,33],r_glute:[29,50],l_glute:[72,50],r_quad:[30,62],l_quad:[71,62]},
+       back:{r_lat:[64,37],l_lat:[36,37],r_glute_rear:[62,49],l_glute_rear:[38,49]}},
+  f20:{front:{r_delt:[22,24],l_delt:[78,24],r_lat:[29,34],l_lat:[71,34],r_glute:[28,50],l_glute:[73,50],r_quad:[30,62],l_quad:[71,62]},
+       back:{r_lat:[66,37],l_lat:[34,37],r_glute_rear:[64,50],l_glute_rear:[36,50]}},
+  f35:{front:{r_delt:[17,24],l_delt:[83,24],r_lat:[27,34],l_lat:[73,34],r_glute:[25,51],l_glute:[76,51],r_quad:[27,63],l_quad:[74,63]},
+       back:{r_lat:[68,38],l_lat:[32,38],r_glute_rear:[65,51],l_glute_rear:[35,51]}}
+};
+function _injBodyFor(sex,bf){
+  var list=INJ_BODIES[sex==='female'?'female':'male'];
+  var want=(typeof bf==='number'&&isFinite(bf)&&bf>0)?bf:INJ_BODY_DEFAULT_BF;
+  var best=list[0];
+  list.forEach(function(b){ if(Math.abs(b.bf-want)<Math.abs(best.bf-want)) best=b; });
+  return best;
+}
+function _injBody(){
+  var sex='male';
+  try{ sex=String(localStorage.getItem('user_sex')||'male').toLowerCase(); }catch(e){}
+  var bf=null;
+  try{ if(typeof _latestBodyFat==='function') bf=_latestBodyFat(); }catch(e){}
+  return _injBodyFor(sex,bf);
+}
+// A crosshair, drawn rather than baked into the artwork, so the mark and the tap
+// target are the same object and cannot drift apart. Cyan reads on both the pale skin
+// and the black shorts; the dark under-stroke keeps it legible on either.
+function _injCrosshair(col){
+  var seg=function(c,w){ return '<g stroke="'+c+'" stroke-width="'+w+'" fill="none" stroke-linecap="round">'
+    +'<circle cx="17" cy="17" r="7"/><line x1="2" y1="17" x2="10" y2="17"/><line x1="24" y1="17" x2="32" y2="17"/>'
+    +'<line x1="17" y1="2" x2="17" y2="10"/><line x1="17" y1="24" x2="17" y2="32"/></g>'; };
+  return '<svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">'+seg('#000',5)+seg(col,2.5)+'</svg>';
+}
+
+// ── NEEDLE LENGTH FOR THIS BODY ──────────────────────────────────────────────
+// Henrik, 2026-10-13: recommend needle lengths, as "some kind of educated guess based
+// on length weight … not everyone will have a BF measurement". The numbers and their
+// sources live in the backend (GET /injection-needles, doc 21): CDC Table 6-2 for the
+// deltoid and thigh, Zaybak 2007 for the glutes (BMI 25+ only), nothing for the lats.
+// This only asks for the user's sex, weight and height and prints what comes back —
+// including the gaps, which the backend states in words instead of inventing a number.
+var INJ_NEEDLE_ROWS=[['deltoid','Delts'],['thigh','Quads'],['ventrogluteal','Glute side'],
+                     ['dorsogluteal','Glute rear'],['lat','Lats']];
+var _injNeedleCache={};
+function _injNeedleQuery(){
+  var g=function(k){ try{ return localStorage.getItem(k)||''; }catch(e){ return ''; } };
+  var sex=String(g('user_sex')||'male').toLowerCase()==='female'?'female':'male';
+  var w=parseFloat(String(g('user_weight')).replace(',','.'))||0;
+  var h=parseFloat(String(g('user_height')).replace(',','.'))||0;
+  return '?sex='+sex+(w>0?'&weight_kg='+w:'')+(h>0?'&height_cm='+h:'');
+}
+function _injNeedleHtml(d){
+  if(!d||!d.muscles) return '';
+  return '<div style="font-size:11px;font-weight:700;letter-spacing:0.4px;color:var(--muted2);margin-bottom:4px">'
+      +'NEEDLE FOR IM — ESTIMATE FROM YOUR SEX, WEIGHT AND HEIGHT</div>'
+    +INJ_NEEDLE_ROWS.map(function(r){
+      var m=d.muscles[r[0]]||{};
+      return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:2px 0">'
+        +'<span style="color:var(--muted2)">'+r[1]+'</span>'
+        +'<span style="color:'+(m.mm_min!=null?'var(--text)':'var(--muted2)')+';text-align:right">'+_esc(m.label||'—')+'</span></div>';
+    }).join('');
+}
+async function _injLoadNeedles(){
+  var el=document.getElementById('inj-needle'); if(!el) return;
+  var q=_injNeedleQuery();
+  try{
+    if(!_injNeedleCache[q]){
+      var r=await fetch(AGENT_URL+'/injection-needles'+q);
+      if(!r.ok){ if(typeof _logHttp==='function')_logHttp('injNeedles',r.status,'/injection-needles'); return; }
+      _injNeedleCache[q]=await r.json();
+    }
+    var cur=document.getElementById('inj-needle');
+    if(cur) cur.innerHTML=_injNeedleHtml(_injNeedleCache[q]);
+  }catch(e){ if(typeof _logErr==='function')_logErr('injNeedles',e); }
 }
 
 var _injSiteEditId=null;
@@ -163,25 +272,31 @@ function openInjSitePicker(id,opts){
     +'overflow-y:auto;-webkit-overflow-scrolling:touch;padding:20px 16px 40px;';
   o.onclick=function(e){ if(e.target===o) _closeInjSitePicker(); };
   var _view=_injSiteView(row.site);
+  var body=_injBody();
   var spots=function(view){ return _injSitesFor(view).map(function(s){
+    var p=(INJ_BODY_SPOTS[body.key]&&INJ_BODY_SPOTS[body.key][view]||{})[s.id];
+    if(!p) return '';
     var sel=_injSiteCanon(row.site)===s.id;
-    var p=s[view];
     return '<button onclick="setInjSite(\''+s.id+'\')" aria-label="'+_esc(s.label+' — '+s.name)+'"'
-      +' style="position:absolute;left:'+p.x+'%;top:'+p.y+'%;transform:translate(-50%,-50%);'
-      +'width:52px;height:52px;border-radius:50%;cursor:pointer;padding:0;'
-      +'display:flex;align-items:center;justify-content:center;font-family:inherit;'
-      +'font-size:13px;font-weight:800;letter-spacing:0.5px;'
-      +(sel?'background:rgba(232,255,60,0.9);color:#000;border:3px solid #000;'
-           :'background:rgba(0,0,0,0.55);color:#fff;border:2px solid rgba(255,255,255,0.9);')
-      +'">'+s.label+'</button>';
+      +' style="position:absolute;left:'+p[0]+'%;top:'+p[1]+'%;transform:translate(-50%,-50%);'
+      +'width:44px;height:44px;border:none;background:transparent;cursor:pointer;padding:0;'
+      +'display:flex;align-items:center;justify-content:center;font-family:inherit;">'
+      +_injCrosshair(sel?'#e8ff3c':'#00e5ff')
+      +'<span style="position:absolute;top:100%;left:50%;transform:translate(-50%,-8px);white-space:nowrap;'
+      +'font-size:10px;font-weight:800;letter-spacing:0.3px;padding:1px 5px;border-radius:6px;'
+      +(sel?'background:#e8ff3c;color:#000;':'background:rgba(0,0,0,0.72);color:#fff;')
+      +'">'+s.label+'</span></button>';
   }).join(''); };
   // Both views are rendered up front and one is hidden, so switching is instant and the
   // back image is already decoded by the time it is wanted.
   var panes=INJ_VIEWS.map(function(v){
-    return '<div data-injview="'+v.k+'" style="position:relative;border-radius:12px;overflow:hidden;'
-      +'background:#f4f3ef;'+(v.k===_view?'':'display:none;')+'">'
-      +'<img src="'+v.img+'" alt="'+_esc(v.alt)+'" style="display:block;width:100%;height:auto">'
-      +spots(v.k)+'</div>';
+    // The figures are tall and narrow, so the image is sized by HEIGHT and the spot
+    // layer wraps it exactly (fit-content) — the percentages are of the image box.
+    return '<div data-injview="'+v.k+'" style="border-radius:12px;overflow:hidden;'
+      +'background:#f4f4f4;'+(v.k===_view?'':'display:none;')+'">'
+      +'<div style="position:relative;width:fit-content;margin:0 auto">'
+      +'<img src="'+body[v.k]+'" alt="'+_esc(v.alt)+'" style="display:block;height:min(60vh,540px);width:auto">'
+      +spots(v.k)+'</div></div>';
   }).join('');
   var tabs=INJ_VIEWS.map(function(v){
     return '<button data-injtab="'+v.k+'" onclick="injSiteView(\''+v.k+'\')" style="flex:1;padding:8px;'
@@ -212,6 +327,7 @@ function openInjSitePicker(id,opts){
         +tabs
       +'</div>'
       +panes
+      +'<div id="inj-needle" style="margin-top:12px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;min-height:16px"></div>'
       +'<div id="inj-site-current" style="font-size:12px;color:var(--muted2);text-align:center;margin-top:10px;min-height:16px">'
         +(_injSiteLabel(row.site)?('Recorded: <b style="color:var(--accent)">'+_esc(_injSiteLabel(row.site))+'</b> &middot; '+_esc(_injSiteName(row.site))):'No site recorded yet')
       +'</div>'
@@ -219,6 +335,7 @@ function openInjSitePicker(id,opts){
       +'<button onclick="_closeInjSitePicker()" style="'+btn+'background:var(--surface2);color:var(--text);border:1px solid var(--border)">CLOSE</button>'
     +'</div></div>';
   document.body.appendChild(o);
+  _injLoadNeedles();
   return true;
 }
 // Tapping a spot records it and closes — one tap, which is the whole point of the

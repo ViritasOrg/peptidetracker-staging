@@ -9005,6 +9005,68 @@ console.log('\n── Injection site (Today) ───────────�
       (siteSrc.match(/inject-sites[a-z0-9.-]*\.webp/g) || []).length === 2);
     check('source: the picker says whose left and right it means',
       /your own right and left/.test(siteSrc));
+
+    // ── A body like the user's (Henrik, 2026-10-13) ──────────────────────────
+    // Men at 10/20/35 %, women at 15/20/35 %, each front and back; the closest figure
+    // to the latest LOGGED body fat, and the 20 % figure when none is logged.
+    check('body: a lean man gets the 10 % figure', G._injBodyFor('male', 14).key === 'm10');
+    check('body: a man at 28 % gets the 35 % figure', G._injBodyFor('male', 28).key === 'm35');
+    check('body: a woman at 33 % gets the 35 % figure', G._injBodyFor('female', 33).key === 'f35');
+    check('body: a woman at 16 % gets the 15 % figure', G._injBodyFor('female', 16).key === 'f15');
+    check('body: no body fat logged shows the 20 % figure for both sexes',
+      G._injBodyFor('male', null).key === 'm20' && G._injBodyFor('female', undefined).key === 'f20' &&
+      G._injBodyFor('male', 0).key === 'm20' && G._injBodyFor('male', NaN).key === 'm20');
+    check('body: an unknown sex falls back to the male set, as user_sex does everywhere',
+      G._injBodyFor('', 10).key === 'm10');
+    {
+      const bodies = [...G.INJ_BODIES.male, ...G.INJ_BODIES.female];
+      check('body: six figures, each with a front and a back image that ships with the app',
+        bodies.length === 6 && bodies.every(b =>
+          ['front', 'back'].every(v => /^inject-body-[mf]\d+-(front|back)\.webp$/.test(b[v]) &&
+            fs.existsSync(path.join(base, b[v])))),
+        bodies.map(b => b.front + '/' + b.back).join(' '));
+      // promote-to-prod.yml copies ROOT-level images only, and its asset check reads
+      // quoted names from the source — so every name must be a literal at the root.
+      check('body: every image name is written out literally in inj-site.js',
+        bodies.every(b => siteSrc.includes("'" + b.front + "'") && siteSrc.includes("'" + b.back + "'")));
+      // Every site the picker offers on a view has a spot on every body for that view,
+      // and nothing else — a missing entry would silently drop a button.
+      const missing = [];
+      bodies.forEach(b => ['front', 'back'].forEach(v => {
+        const want = G._injSitesFor(v).map(x => x.id).sort().join(',');
+        const have = Object.keys((G.INJ_BODY_SPOTS[b.key] || {})[v] || {}).sort().join(',');
+        if (want !== have) missing.push(b.key + '.' + v + ': ' + have);
+      }));
+      check('body: every figure places every site of each view, and only those', missing.length === 0,
+        missing.join(' | '));
+      // The mirroring rule from INJ_SITES, per figure: front r_ on the image's left, back r_ on its right.
+      const wrongSide = [];
+      bodies.forEach(b => ['front', 'back'].forEach(v => {
+        Object.entries(G.INJ_BODY_SPOTS[b.key][v]).forEach(([id, [x, y]]) => {
+          const right = id.startsWith('r_');
+          const ok = v === 'front' ? (right ? x < 50 : x > 50) : (right ? x > 50 : x < 50);
+          if (!ok || !(y > 0 && y < 100)) wrongSide.push(b.key + '.' + v + '.' + id + '=' + x + ',' + y);
+        });
+      }));
+      check('body: right is the user\'s right on every figure (front mirrored, back not)',
+        wrongSide.length === 0, wrongSide.join(' '));
+    }
+
+    // ── Needle length: the backend's answer, printed as given ────────────────
+    {
+      const html = G._injNeedleHtml({muscles:{
+        deltoid:{mm_min:25,mm_max:38,label:'25–38 mm'}, thigh:{mm_min:38,mm_max:38,label:'38 mm'},
+        ventrogluteal:{mm_min:null,mm_max:null,label:'No sourced figure below BMI 25'},
+        dorsogluteal:{mm_min:null,mm_max:null,label:'No sourced figure below BMI 25'},
+        lat:{mm_min:null,mm_max:null,label:'No published guidance'}}});
+      check('needle: every muscle row is printed with the backend\'s own words',
+        /25–38 mm/.test(html) && /38 mm/.test(html) && /No sourced figure below BMI 25/.test(html) &&
+        /No published guidance/.test(html) && /Delts/.test(html) && /Lats/.test(html));
+      check('needle: it says it is an estimate from sex, weight and height', /ESTIMATE FROM YOUR SEX, WEIGHT AND HEIGHT/.test(html));
+      check('needle: nothing to print without a response', G._injNeedleHtml(null) === '');
+      check('needle: no number is written in the frontend — it comes from /injection-needles',
+        /\/injection-needles/.test(siteSrc) && !/\b(16|25|38)\s*mm/.test(siteSrc.replace(/\/\/.*$/gm, '')));
+    }
     check('source: the write is optimistic WITH a rollback',
       /row\.site=prev; redraw\(\);/.test(tdSrc));
     // ⚠️ THE WRITE LIVES WITH THE OTHER TODAY WRITES, NOT IN THE PICKER. One module
