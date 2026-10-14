@@ -215,7 +215,9 @@ function _injNeedleQuery(){
 function _injNeedleHtml(d){
   if(!d||!d.muscles) return '';
   return '<div style="font-size:11px;font-weight:700;letter-spacing:0.4px;color:var(--muted2);margin-bottom:4px">'
-      +'NEEDLE FOR IM — ESTIMATE FROM YOUR SEX, WEIGHT AND HEIGHT</div>'
+      // The heading names what the backend actually used: a logged body fat outranks BMI.
+      +'NEEDLE FOR IM — ESTIMATE FROM YOUR '
+      +((d.inputs&&d.inputs.body_fat)?'BODY FAT, SEX AND AGE':'SEX, WEIGHT AND HEIGHT')+'</div>'
     +INJ_NEEDLE_ROWS.map(function(r){
       var m=d.muscles[r[0]]||{};
       // The backend now answers with a RANGE (long enough for the fat, short enough to
