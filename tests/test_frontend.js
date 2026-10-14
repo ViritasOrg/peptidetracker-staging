@@ -9086,6 +9086,9 @@ console.log('\n── Injection site (Today) ───────────�
         /25–38 mm/.test(html) && /38 mm/.test(html) && /No sourced figure below BMI 25/.test(html) &&
         /No published guidance/.test(html) && /Delts/.test(html) && /Lats/.test(html));
       check('needle: it says it is an estimate from sex, weight and height', /ESTIMATE FROM YOUR SEX, WEIGHT AND HEIGHT/.test(html));
+      check('needle: the heading says body fat when the backend used it, not weight and height',
+        /ESTIMATE FROM YOUR BODY FAT, SEX AND AGE/.test(G._injNeedleHtml({inputs:{body_fat:13}, muscles:{}})) &&
+        !/WEIGHT AND HEIGHT/.test(G._injNeedleHtml({inputs:{body_fat:13}, muscles:{}})));
       check('needle: nothing to print without a response', G._injNeedleHtml(null) === '');
       {
         const h2 = G._injNeedleHtml({muscles:{deltoid:{mm_min:14.3,mm_max:26.2,label:'16 or 25 mm',
