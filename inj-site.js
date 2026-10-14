@@ -60,9 +60,9 @@ var INJ_SITES=[
 var _INJ_SITE_LEGACY={R1:'r_delt', L1:'l_delt',
                       R2:'r_glute', L2:'l_glute',    // old 2 was the glute
                       R3:'r_quad',  L3:'l_quad'};    // old 3 was the quad
-var INJ_VIEWS=[{k:'front',label:'Front',img:'inject-sites-v2.webp',
+var INJ_VIEWS=[{k:'front',label:'Front',
                 alt:'Front view of a figure with eight injection sites marked'},
-               {k:'back', label:'Back', img:'inject-sites-back.webp',
+               {k:'back', label:'Back',
                 alt:'Back view of a figure with the lats and rear glutes marked'}];
 function _injSitesFor(view){
   return INJ_SITES.filter(function(s){return !!s[view];});
