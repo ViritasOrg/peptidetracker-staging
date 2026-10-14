@@ -205,7 +205,12 @@ function _injNeedleQuery(){
   var w=parseFloat(String(g('user_weight')).replace(',','.'))||0;
   var h=parseFloat(String(g('user_height')).replace(',','.'))||0;
   var a=parseFloat(String(g('user_age')).replace(',','.'))||0;
-  return '?sex='+sex+(w>0?'&weight_kg='+w:'')+(h>0?'&height_cm='+h:'')+(a>0?'&age='+a:'');
+  // Henrik, 2026-10-14: "use BF if it is available not just bmi". The latest logged body
+  // fat — the same reading that picks the picture — goes to the backend, which then uses
+  // it instead of BMI (Deurenberg 1991) so muscle no longer reads as fat.
+  var bf=null; try{ if(typeof _latestBodyFat==='function') bf=_latestBodyFat(); }catch(e){}
+  return '?sex='+sex+(w>0?'&weight_kg='+w:'')+(h>0?'&height_cm='+h:'')+(a>0?'&age='+a:'')
+    +((typeof bf==='number'&&isFinite(bf)&&bf>0)?'&body_fat='+bf:'');
 }
 function _injNeedleHtml(d){
   if(!d||!d.muscles) return '';

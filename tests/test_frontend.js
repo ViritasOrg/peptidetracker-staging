@@ -9095,6 +9095,15 @@ console.log('\n── Injection site (Today) ───────────�
       }
       check('needle: the age in Body is sent, since the deltoid fat model uses it',
         /&age='\+a/.test(siteSrc));
+      {
+        const _bfSave = G._latestBodyFat;
+        G._latestBodyFat = () => 14;
+        check('needle: a logged body fat is sent too, so it can outrank BMI',
+          /&body_fat=14/.test(G._injNeedleQuery()), G._injNeedleQuery());
+        G._latestBodyFat = () => null;
+        check('  …and nothing is sent when none is logged', !/body_fat/.test(G._injNeedleQuery()));
+        G._latestBodyFat = _bfSave;
+      }
       check('needle: no number is written in the frontend — it comes from /injection-needles',
         /\/injection-needles/.test(siteSrc) && !/\b(16|25|38)\s*mm/.test(siteSrc.replace(/\/\/.*$/gm, '')));
     }
