@@ -8991,9 +8991,11 @@ console.log('\n── Injection site (Today) ───────────�
       (tdSrc.match(/_injSiteButton\(dose\)/g) || []).length === 2);
     check('source: the picker is loaded by the app',
       /<script src="inj-site\.js/.test(html));
-    check('source: both images ship with the app',
-      fs.existsSync(path.join(base, 'inject-sites-v2.webp')) &&
-      fs.existsSync(path.join(base, 'inject-sites-back.webp')));
+    // The single generic figures were replaced by the body-fat figures (INJ_BODIES) and
+    // deleted on Henrik's say-so, 2026-10-14. Nothing may ask for them again.
+    check('source: the superseded generic figures are gone',
+      !fs.existsSync(path.join(base, 'inject-sites-v2.webp')) &&
+      !fs.existsSync(path.join(base, 'inject-sites-back.webp')));
     check('source: switching view only changes display, never the record',
       /function injSiteView/.test(siteSrc) && !/injSiteView[\s\S]{0,400}_setInjectionSite/.test(siteSrc));
     check('source: the superseded six-site artwork is gone',
@@ -9002,7 +9004,7 @@ console.log('\n── Injection site (Today) ───────────�
       /_injSitesFor\(view\)\.map/.test(siteSrc) && !/left:22\.45%/.test(siteSrc));
     check('source: both views come from INJ_VIEWS rather than a hardcoded <img>',
       /INJ_VIEWS\.map/.test(siteSrc) &&
-      (siteSrc.match(/inject-sites[a-z0-9.-]*\.webp/g) || []).length === 2);
+      (siteSrc.match(/inject-sites[a-z0-9.-]*\.webp/g) || []).length === 0);
     check('source: the picker says whose left and right it means',
       /your own right and left/.test(siteSrc));
 
