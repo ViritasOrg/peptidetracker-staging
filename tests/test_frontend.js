@@ -9052,6 +9052,29 @@ console.log('\n── Injection site (Today) ───────────�
         wrongSide.length === 0, wrongSide.join(' '));
     }
 
+    // ── Staging-only override (Henrik, 2026-10-14) ───────────────────────────
+    check('override: staging honours a pinned figure', G._injBodyOverrideFor(true, 'f35').key === 'f35' &&
+      G._injBodyOverrideFor(true, 'm10').key === 'm10');
+    check('override: prod ignores it entirely', G._injBodyOverrideFor(false, 'f35') === null);
+    check('override: "auto" or junk falls back to sex + body fat',
+      G._injBodyOverrideFor(true, 'auto') === null && G._injBodyOverrideFor(true, 'x9') === null &&
+      G._injBodyOverrideFor(true, '') === null);
+    check('override: the picker asks the override before sex and body fat',
+      /function _injBody\(\)\{\s*var ov=_injBodyOverride\(\); if\(ov\) return ov;/.test(siteSrc));
+    {
+      const _pushSave = G.pushPepSettingsToAgent; let pushed = null;
+      G.pushPepSettingsToAgent = (kv) => { pushed = kv; };
+      G.setInjBodyOverride('m35');
+      check('override: choosing a figure is saved to the backend, not only to this device',
+        pushed && pushed['inj-body-override'] === 'm35', JSON.stringify(pushed));
+      G.setInjBodyOverride('auto');
+      G.pushPepSettingsToAgent = _pushSave;
+    }
+    check('override: the Settings row is hidden by default and only shown on staging',
+      /id="s-injbody-row" style="display:none;/.test(html) &&
+      /if\(IS_STAGING\)\{const ir=document\.getElementById\('s-injbody-row'\)/.test(html));
+    check('override: the settings sync restores it on a new device',
+      /s\['inj-body-override'\]/.test(html));
     // ── Needle length: the backend's answer, printed as given ────────────────
     {
       const html = G._injNeedleHtml({muscles:{
