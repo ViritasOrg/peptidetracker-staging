@@ -19192,6 +19192,71 @@ console.log('\n── Screenshot-safe names (Today) ─────────�
     /_promoteRunId=null;_promoteMinAttempt=0;/.test(String(G.pushToProd)));
 }
 
+// ── The app is titled with the person using it ──────────────────────────────
+// Henrik 2026-10-16: "Add a Name field fir each account added in the whitelist ui. Use
+// this for app title instead of mine. So I see Henriks Training/Protocol but others see
+// their name IF I have added it in white list ui."
+// The name comes from the whitelist via GET /user/features, which login already calls.
+// No name means the PLAIN title — never anyone else's name, which is the whole point.
+// Same contract as the workout app (ownerTitle / ownerTitleHtml / applyOwnerName).
+console.log('\n── The app is titled with the person using it ───────────────');
+{
+  const src = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)), 'index.html'), 'utf8');
+  const noComments = src.replace(/\/\/[^\n]*/g, '');
+
+  check('no hardcoded owner name is left in the markup',
+    !/HENRIK\\?.S|Henrik.s Protocol/.test(noComments),
+    (noComments.match(/HENRIK\\?.S|Henrik.s Protocol/g) || []).join(', '));
+  check('the document title starts plain — and no longer carries a frozen version',
+    /<title>Protocol<\/title>/.test(src) && !/<title>[^<]*v\d/.test(src));
+  check('the sign-in logo and header start plain',
+    /class="signin-logo">PROTOCOL</.test(src) && /class="hdr-title">PROTOCOL</.test(src));
+  check('the onboarding welcome is built from the name, not a literal',
+    String(G._obHtml0 || '').includes("ownerTitleHtml(_ownerName,'PROTOCOL')"));
+
+  const HAVE = typeof G.ownerTitle === 'function' && typeof G.ownerTitleHtml === 'function';
+  check('ownerTitle / ownerTitleHtml exist', HAVE);
+  if (HAVE) {
+    check('a name gives a possessive title',
+      G.ownerTitle('Henrik', 'Protocol') === 'Henrik’s Protocol');
+    check('…in caps when the noun is in caps, so the logo reads right',
+      G.ownerTitle('Henrik', 'PROTOCOL') === 'HENRIK’S PROTOCOL');
+    check('…and a name already ending in s takes the bare apostrophe',
+      G.ownerTitle('Thomas', 'Protocol') === 'Thomas’ Protocol');
+    check('NO name gives the plain title, never somebody else’s',
+      G.ownerTitle('', 'PROTOCOL') === 'PROTOCOL' &&
+      G.ownerTitle(null, 'Protocol') === 'Protocol' &&
+      G.ownerTitle('   ', 'PROTOCOL') === 'PROTOCOL');
+    check('whitespace around a name does not reach the title',
+      G.ownerTitle('  Suvi  ', 'PROTOCOL') === 'SUVI’S PROTOCOL');
+    check('the two-line welcome breaks after the name',
+      G.ownerTitleHtml('Henrik', 'PROTOCOL') === 'HENRIK’S<br>PROTOCOL' &&
+      G.ownerTitleHtml('', 'PROTOCOL') === 'PROTOCOL');
+    check('a name is escaped before it is written as markup',
+      !/<img/.test(G.ownerTitleHtml('<img src=x onerror=1>', 'PROTOCOL')),
+      G.ownerTitleHtml('<img src=x onerror=1>', 'PROTOCOL'));
+  }
+
+  const sync = String(G.syncFeaturesFromAgent || '');
+  check('the name is read from /user/features, with no extra request',
+    sync.includes('/user/features') && sync.includes("applyOwnerName(d.name||'')"));
+  check('…and cached against the account it came from',
+    sync.includes("setData('pt-owner-name',{id:d.user_id||_tokenEmail(),name:d.name||''})"));
+  check('the cache is only trusted when the signed-in account matches',
+    String(G._cachedOwnerName || '').includes('_tokenEmail()') &&
+    String(G._cachedOwnerName || '').includes('c.id'));
+  check('signing out drops the cached title with the token',
+    String(G.logout || '').includes("localStorage.removeItem('pt-owner-name')") &&
+    String(G.logout || '').includes("applyOwnerName('')"));
+  check('applyOwnerName writes all three visible places',
+    (() => { const f = String(G.applyOwnerName || '');
+             return f.includes('document.title') && f.includes('.signin-logo') &&
+                    f.includes('.hdr-title'); })());
+  check('the two apps agree on the helper names, so they stay in step',
+    typeof G.applyOwnerName === 'function' && typeof G._cachedOwnerName === 'function' &&
+    typeof G._possessive === 'function');
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
