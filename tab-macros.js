@@ -19,6 +19,9 @@ function setMacrosPhase(p){
   if(typeof pushPepSettingsToAgent==='function') pushPepSettingsToAgent({'macros-phase':p});
   return _macrosPhase;
 }
+// The day's kcal and protein targets as last rendered, read by the food log (in index.html)
+// so what you have eaten is shown against the same numbers this tab shows.
+var _macrosTargets=null;
 var _macrosTrainKcal=0;   // measured training burn, kcal/day averaged over the last 14 days (from /training-energy)
 function loadMacros(){
   var bw=parseDec(localStorage.getItem('user_weight'))||0;
@@ -56,12 +59,6 @@ function syncMacrosTrainEnergy(cb){
 //     clinical default, explicitly age-dependent (−5 kcal per year of age).
 //   Neither → NO NUMBER. The caller is told what to fill in. Inventing a constant to
 //     cover missing profile data is exactly how 31 kcal/kg got here.
-var MACROS_PAL_BASE = 1.40;
-// FAO/WHO/UNU 2004 "sedentary or light activity lifestyle" is 1.40–1.69. The BOTTOM of
-// that band on purpose: measured training energy is added separately below, and the PAL
-// bands already contain some activity, so the lower bound double-counts least.
-var MACROS_MEALS_PER_DAY = 4;
-
 // The user's profile as the energy model needs it. Read once, in one place, so the
 // Macros tab and the protocol wizard cannot compute different targets.
 function _macrosProfile(){
@@ -74,38 +71,6 @@ function _macrosProfile(){
     sex:      ((localStorage.getItem('user_sex')||'male').toLowerCase()==='female')?'female':'male',
     bodyFatPct: bf
   };
-}
-
-// Basal metabolic rate. Returns null rather than guessing when the profile cannot
-// support either equation — see the note above.
-function macrosBmr(p){
-  if(!p||!(p.bw>0)) return null;
-  if(p.bodyFatPct>0 && p.bodyFatPct<70){
-    var ffm=p.bw*(1-p.bodyFatPct/100);
-    return {kcal:370+21.6*ffm, method:'katch', ffm:ffm};
-  }
-  if(p.heightCm>0 && p.age>0){
-    return {kcal:10*p.bw+6.25*p.heightCm-5*p.age+((p.sex==='female')?-161:5),
-            method:'mifflin', ffm:0};
-  }
-  return null;
-}
-
-// Age-aware protein FLOOR. Moore 2015: the per-meal relative dose that maximally
-// stimulates myofibrillar protein synthesis rises from 0.24 g/kg in young men (mean
-// ~22 y) to 0.40 g/kg in older men (mean ~71 y) — anabolic resistance. Linear between
-// the two measured points, flat outside them.
-//
-// ⚠️ A FLOOR, NEVER A MULTIPLIER. Scaling the DAILY target by that same 1.67× would
-// double-count: 2.2–2.5 g/kg spread over four meals is already 0.55–0.63 g/kg per meal,
-// well above even the older threshold at every age, so every meal is saturated before
-// any age adjustment. As a multiplier it would put a 45-year-old at 3.3 g/kg — above
-// every published upper bound including Helms' 3.1 g/kg of FAT-FREE mass. As a floor it
-// can only raise a target that was too low, which is what the evidence actually supports.
-function _macrosPerMealProtein(age){
-  if(!(age>0)) return 0.24;
-  var a=Math.max(22,Math.min(71,age));
-  return 0.24+(a-22)*(0.40-0.24)/(71-22);
 }
 
 // Whether measured training energy is added to the calorie target. Henrik, 2026-09-09:
@@ -124,14 +89,6 @@ function _macrosPerMealProtein(age){
 // works in for lean-mass preservation, so the midpoint is used; the surplus is small
 // on purpose ("chase the dry look, not the scale" — the app's own recomp guidance).
 var _MACROS_DEFICIT_MODES=['absolute','percent'];
-var MACROS_PCT_CUT    = 0.15;
-var MACROS_PCT_SURPLUS= 0.05;
-// Energy per kg of body fat, for turning a deficit into an expected rate. 7700 kcal/kg
-// is the standard PLANNING figure (Wishnofsky's 3500 kcal/lb). It is known to
-// overestimate long-term loss because maintenance falls as bodyweight does — so the
-// UI states it as an estimate at the current weight, never as a promise.
-var MACROS_KCAL_PER_KG_FAT = 7700;
-
 function _macrosDeficitMode(){
   try{
     var v=(typeof getData==='function')?getData('macros-deficit-mode',''):'';
@@ -145,32 +102,6 @@ function setMacrosDeficitMode(m){
   if(typeof loadMacros==='function') loadMacros();
   return m;
 }
-// The offset itself, in kcal/day, for a given maintenance. One function so the two
-// modes cannot drift apart and so the tests can hold them to the same contract.
-function macrosPhaseOffset(phase,tdee,mode){
-  if(phase==='reset') return 0;
-  if(mode==='percent'){
-    if(!(tdee>0)) return 0;
-    // Round the MAGNITUDE then apply the sign. Math.round(-412.5) is -412, not -413 —
-    // JS rounds a .5 toward +Infinity, so rounding the signed value makes a cut one
-    // kcal shallower than the same percentage of a surplus. Trivial, and exactly the
-    // kind of asymmetry that makes a number fail to reconcile with its own stated rule.
-    return phase==='cut' ? -Math.round(tdee*MACROS_PCT_CUT) : Math.round(tdee*MACROS_PCT_SURPLUS);
-  }
-  return phase==='cut' ? -300 : 100;
-}
-// A deficit is only meaningful as a rate. Reported for both modes so the choice can be
-// made on the thing the user actually cares about.
-function macrosRate(offsetKcal,bw){
-  if(!offsetKcal) return null;
-  var kgPerMonth=(offsetKcal/MACROS_KCAL_PER_KG_FAT)*30.44;
-  var pctBwPerWeek=(bw>0)?(Math.abs(kgPerMonth)/(30.44/7)/bw*100):0;
-  return {kgPerMonth:kgPerMonth, pctBwPerWeek:pctBwPerWeek,
-          // Helms 2014: 0.5–1% of bodyweight per week is the band that preserves lean
-          // mass in trained lean athletes. Faster is where lean tissue starts going.
-          tooFast: pctBwPerWeek>1.0};
-}
-
 function _macrosIncludeTraining(){
   try{ return localStorage.getItem('macros-include-training')!=='false'; }catch(e){ return true; }
 }
@@ -182,76 +113,50 @@ function setMacrosIncludeTraining(v){
   return on;
 }
 
-// Energy availability = (intake − exercise energy) ÷ fat-free mass. The thresholds are
-// the ones the LEA literature uses: >45 kcal/kg FFM supports gain, 30–45 is suboptimal
-// and at-risk, ≤30 is low energy availability. Needs a measured FFM, so it is reported
-// only when body fat % is on file — never estimated into existence.
-function macrosEnergyAvailability(kcal,trainKcal,ffm){
-  if(!(ffm>0)||!(kcal>0)) return null;
-  var ea=(kcal-Math.max(0,trainKcal||0))/ffm;
-  return {value:ea, tier: ea<=30?'low' : ea<45?'suboptimal' : 'adequate'};
-}
-
-function calcMacros(bw,phase,onAndrogens,opts){
-  opts=opts||{};
-  var mode=(_MACROS_DEFICIT_MODES.indexOf(opts.deficitMode)>=0)?opts.deficitMode:'absolute';
-  var prof={
-    bw: bw>0?bw:0,
-    heightCm: (opts.heightCm!=null)?opts.heightCm:0,
-    age:      (opts.age!=null)?opts.age:0,
-    sex:      opts.sex||'male',
-    bodyFatPct:(opts.bodyFatPct!=null)?opts.bodyFatPct:0
-  };
-  // Protein is phase-aware. In a caloric deficit, lean resistance-trained athletes
-  // need MORE protein to preserve muscle — 2.3–3.1 g/kg fat-free mass (Helms 2014),
-  // ~2.5 g/kg total bodyweight for a lean build — so a cut targets 2.5 g/kg; a
-  // maintenance/surplus phase stays at the 2.2 g/kg upper-athletic bound (Morton 2018).
-  // Androgens improve nitrogen retention, so being on-cycle does not raise the
-  // requirement further — the driver is the deficit, not the compounds. (Bhasin 1996
-  // built +6.1 kg FFM on 600 mg/wk with the diet standardised at 1.5 g/kg.)
-  var proteinPerKg=phase==='cut'?2.5:2.2;
-  // …then the age-aware floor, which binds only if the phase target were ever too low.
-  var perMeal=_macrosPerMealProtein(prof.age);
-  var floorPerKg=perMeal*MACROS_MEALS_PER_DAY;
-  var proteinFloorBound=floorPerKg>proteinPerKg;
-  if(proteinFloorBound) proteinPerKg=floorPerKg;
-  var protein=Math.round(bw*proteinPerKg);
-
-  var bmr=macrosBmr(prof);
-  var trainKcal=Math.max(0,Math.round(opts.trainKcal||0));
-  var includeTraining=(opts.includeTraining!=null)?!!opts.includeTraining:true;
-  var kcal=null, tdee=null;
-  if(bmr){
-    tdee=Math.round(bmr.kcal*MACROS_PAL_BASE+(includeTraining?trainKcal:0));
-    kcal=tdee+macrosPhaseOffset(phase,tdee,mode);
-  }
-  // On exogenous androgens the endogenous-T-protection reason for higher fat is moot
-  // (Whittaker 2021), so fat can run down to a ~0.5–0.6 g/kg essential-fat floor;
-  // otherwise keep ~0.9 g/kg (~25–30% kcal). See docs/enhanced-bodybuilding/08.
-  var fat=Math.round(bw*(onAndrogens?0.6:0.9));
-  var carbs=(kcal==null)?null:Math.max(0,Math.round((kcal-protein*4-fat*9)/4));
-  var ffm=bmr&&bmr.ffm>0?bmr.ffm:(prof.bodyFatPct>0?bw*(1-prof.bodyFatPct/100):0);
-  return {protein:protein, carbs:carbs, fat:fat, kcal:kcal, onAndrogens:!!onAndrogens,
-          bmr:bmr?Math.round(bmr.kcal):null, bmrMethod:bmr?bmr.method:null,
-          tdee:tdee, trainKcal:trainKcal, includeTraining:includeTraining,
-          proteinPerKg:proteinPerKg, proteinFloorBound:proteinFloorBound,
-          perMealProteinPerKg:perMeal, ffm:ffm,
-          ea:macrosEnergyAvailability(kcal,trainKcal,ffm),
-          deficitMode:mode, phaseOffset:(kcal==null?null:kcal-tdee),
-          rate:(kcal==null?null:macrosRate(kcal-tdee,bw)),
-          // What the user must supply before a calorie target can exist at all.
-          missing:bmr?[]:(prof.bw>0?['body fat %','or height and age']:['body weight'])};
-}
-// One call path for "compute macros for the current user", so the Macros tab and the
-// protocol wizard cannot drift apart on inputs the way they could when each read its
-// own subset of the profile.
-function macrosForUser(phase,onAndrogens){
+// ── THE MODEL LIVES IN THE BACKEND (2026-10-21) ─────────────────────────────
+// Henrik: move it so Peptide Tracker and Workout read ONE model ("1. Yes"). It was
+// calcMacros here; it is now GET /macro-targets in claude-agent-backend
+// (routers/macro_targets.py), a line-for-line port proven identical on 2160 inputs.
+// Every constant, citation and rule that used to sit above this line is there.
+// This file only gathers the inputs, asks, caches the answer and draws it.
+var _macrosServed={};     // query → served targets
+var _macrosWaiting={};    // query → callbacks waiting on that fetch
+var _macrosFailed={};     // query → true when the last fetch failed
+function _macrosQuery(phase,onAndrogens){
   var p=_macrosProfile();
-  return calcMacros(p.bw,phase,onAndrogens,{
-    heightCm:p.heightCm, age:p.age, sex:p.sex, bodyFatPct:p.bodyFatPct,
-    trainKcal:_macrosTrainKcal, includeTraining:_macrosIncludeTraining(),
-    deficitMode:_macrosDeficitMode()
-  });
+  return 'bw='+p.bw+'&phase='+encodeURIComponent(phase)+'&on_androgens='+(!!onAndrogens)
+    +'&height_cm='+p.heightCm+'&age='+p.age+'&sex='+p.sex+'&body_fat_pct='+p.bodyFatPct
+    +'&train_kcal='+Math.max(0,Math.round(_macrosTrainKcal||0))+'&include_training='+_macrosIncludeTraining()
+    +'&deficit_mode='+_macrosDeficitMode();
+}
+// The targets for the stored profile, or null while they are being fetched. onReady
+// runs once they arrive (or the fetch fails, so the caller can say so).
+function macrosForUser(phase,onAndrogens,onReady){
+  var q=_macrosQuery(phase,onAndrogens);
+  if(_macrosServed[q]) return _macrosServed[q];
+  // A failed fetch stays failed until the user asks again (Try again clears it): the
+  // re-render that reports the failure must not quietly start the next request.
+  if(_macrosFailed[q]) return null;
+  if(onReady)(_macrosWaiting[q]=_macrosWaiting[q]||[]).push(onReady);
+  if(_macrosWaiting[q]&&_macrosWaiting[q]._inflight) return null;
+  (_macrosWaiting[q]=_macrosWaiting[q]||[])._inflight=true;
+  fetch(AGENT_URL+'/macro-targets?'+q)
+    .then(function(r){ return r.ok?r.json():null; })
+    .catch(function(){ return null; })
+    .then(function(d){
+      var cbs=_macrosWaiting[q]||[]; delete _macrosWaiting[q];
+      if(d) _macrosServed[q]=d; else _macrosFailed[q]=true;
+      cbs.forEach(function(cb){ try{cb(d);}catch(e){} });
+    });
+  return null;
+}
+function macrosFetchFailed(phase,onAndrogens){ return !!_macrosFailed[_macrosQuery(phase,onAndrogens)]; }
+// What renderMacros and the wizard show while the targets are on their way, or when
+// the backend could not be reached. Never a locally invented number in their place.
+function _macrosPendingHtml(failed,retry){
+  return '<div style="padding:30px 20px;text-align:center;color:var(--muted2);font-size:13px;line-height:1.6">'
+    +(failed?'Could not load your targets. Check your connection.<div style="margin-top:10px"><button class="btn" onclick="_macrosFailed={};'+retry+'">Try again</button></div>'
+            :'Calculating your targets\u2026')+'</div>';
 }
 // A standalone card showing the estimated training burn from logged workouts. It is
 // presented separately and explicitly NOT added to the calorie target above.
@@ -284,11 +189,11 @@ function _macrosEnergyCard(m){
     ? 'BMR from <b>Katch-McArdle</b> (370 + 21.6 × fat-free mass) — the lean-mass equation, which outperforms weight-based ones at low body fat, and reads your age through your measured FFM rather than a population average.'
     : 'BMR from <b>Mifflin-St Jeor</b> (10W + 6.25H \u2212 5\u00d7age + 5) — the Academy of Nutrition and Dietetics clinical default, and directly age-adjusted at \u22125 kcal per year. Add a body-fat reading in the <b>Body</b> tab and this switches to the more accurate lean-mass equation.';
   var rows=[['BMR',m.bmr+' kcal'],
-            ['\u00d7 PAL '+MACROS_PAL_BASE.toFixed(2)+' (non-training)',Math.round(m.bmr*MACROS_PAL_BASE)+' kcal'],
+            ['\u00d7 PAL '+m.constants.pal.toFixed(2)+' (non-training)',Math.round(m.bmr*m.constants.pal)+' kcal'],
             ['Training (14-day avg)',(m.includeTraining?'+':'excl. ')+m.trainKcal+' kcal'],
             ['Maintenance',m.tdee+' kcal'],
             ['Phase ('+_macrosPhase+', '+(m.deficitMode==='percent'
-               ?((_macrosPhase==='cut'?'\u2212'+Math.round(MACROS_PCT_CUT*100):'+'+Math.round(MACROS_PCT_SURPLUS*100))+'%')
+               ?((_macrosPhase==='cut'?'\u2212'+Math.round(m.constants.pctCut*100):'+'+Math.round(m.constants.pctSurplus*100))+'%')
                :'fixed')+')',(m.phaseOffset>=0?'+':'')+m.phaseOffset+' kcal']];
   var h='<div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">ENERGY</div></div><span style="font-size:11px;color:var(--muted2)">'+(m.bmrMethod==='katch'?'Katch-McArdle':'Mifflin-St Jeor')+'</span></div><div class="card-body">';
   rows.forEach(function(r){ h+='<div class="info-row"><span class="info-label">'+r[0]+'</span><span class="info-val">'+r[1]+'</span></div>'; });
@@ -314,7 +219,7 @@ function _macrosEnergyCard(m){
   h+='</div>';
   h+='<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:7px">'
     +'<b>Fixed kcal</b> holds the RATE steady \u2014 a constant gap is a constant kg/month, which is what you aim at when the goal is \u201close 1 kg of fat a month\u201d. '
-    +'<b>% of maintenance</b> holds the deficit steady in relative terms ('+Math.round(MACROS_PCT_CUT*100)+'% cut, +'+Math.round(MACROS_PCT_SURPLUS*100)+'% surplus \u2014 the midpoint of the 10\u201320% band used for lean-mass preservation), so it re-scales with you and the rate drifts.</div>';
+    +'<b>% of maintenance</b> holds the deficit steady in relative terms ('+Math.round(m.constants.pctCut*100)+'% cut, +'+Math.round(m.constants.pctSurplus*100)+'% surplus \u2014 the midpoint of the 10\u201320% band used for lean-mass preservation), so it re-scales with you and the rate drifts.</div>';
   h+='</div>';
   h+='<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:8px">'+how+' PAL 1.40 is the bottom of FAO/WHO/UNU\u2019s sedentary/light-activity band \u2014 the bottom because measured training is added separately.</div>';
   if(m.ea){
@@ -329,7 +234,7 @@ function _macrosEnergyCard(m){
   return h;
 }
 // True when the user's active stack(s) include any injected androgen (TRT or Enhanced),
-// which lowers the dietary-fat floor (see calcMacros). Read-only over the active stacks.
+// which lowers the dietary-fat floor (see /macro-targets). Read-only over the active stacks.
 function _macrosOnAndrogens(){
   try{
     var idxs=(typeof _activeStackIndices!=='undefined'&&_activeStackIndices&&_activeStackIndices.length)?_activeStackIndices:[];
@@ -361,8 +266,11 @@ function saveMacrosTrainTime(val){localStorage.setItem('macros-train-time',val);
 function saveMacrosTrainDur(val){localStorage.setItem('macros-train-dur',String(val));pushPepSettingsToAgent({'macros-train-dur':val});loadMacros();}
 function renderMacros(bw,onAndrogens){
   var body=document.getElementById('macros-body');if(!body)return;
+  _macrosTargets=null;
   if(!bw){body.innerHTML='<div style="padding:40px 20px;text-align:center;color:var(--muted2)"><div style="font-size:32px;margin-bottom:12px">⚖️</div><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:8px">Set your body weight</div><div style="font-size:13px;line-height:1.5">Log your weight in the <b>Weights</b> tab so macros can be calculated for you.</div></div>';return;}
-  var m=macrosForUser(_macrosPhase,onAndrogens);
+  var m=macrosForUser(_macrosPhase,onAndrogens,function(){ if(_currentTab==='macros') renderMacros(bw,onAndrogens); });
+  if(!m){ body.innerHTML=_macrosPendingHtml(macrosFetchFailed(_macrosPhase,onAndrogens),'loadMacros()'); return; }
+  _macrosTargets={kcal:m.kcal,protein:m.protein};
   var phases=[{id:'reset',label:'Reset',color:'var(--accent4)'},{id:'cut',label:'Cut',color:'var(--accent2)'},{id:'recomp',label:'Recomp',color:'var(--accent3)'}];
   var trainTime=localStorage.getItem('macros-train-time')||'17:00';
   var trainDur=parseInt(localStorage.getItem('macros-train-dur'))||60;
@@ -417,4 +325,5 @@ function renderMacros(bw,onAndrogens){
   h+='</div></div>';
   h+='</div>';
   body.innerHTML=h;
+  if(typeof _flRender==='function')_flRender();
 }

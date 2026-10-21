@@ -3522,6 +3522,12 @@ function _flYmd(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,
 function _flDay(now){var d=now?new Date(now.getTime()):new Date();if(d.getHours()<4)d.setDate(d.getDate()-1);return _flYmd(d);}
 function _flNum(v){var n=Math.round((Number(v)||0)*10)/10;return n;}
 function _flTotals(rows){var t={kcal:0,protein:0,carbs:0,fat:0};(rows||[]).forEach(function(r){t.kcal+=Number(r.kcal)||0;t.protein+=Number(r.protein)||0;t.carbs+=Number(r.carbs)||0;t.fat+=Number(r.fat)||0;});return{kcal:Math.round(t.kcal),protein:Math.round(t.protein),carbs:Math.round(t.carbs),fat:Math.round(t.fat)};}
+// Today's intake against the Macros tab's own targets, where the app has them
+// (Peptide Tracker's tab-macros.js sets _macrosTargets; Workout has no targets).
+function _flTargetsHtml(t){var g=(typeof _macrosTargets!=='undefined')?_macrosTargets:null;if(!g)return'';var out=[];
+  var line=function(lbl,have,want,unit){var left=Math.round(want-have);return'<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--text);margin-top:8px"><span>'+lbl+' '+have+' of '+want+' '+unit+'</span><span style="color:'+(left>=0?'var(--muted)':'var(--accent2,#ff6b2b)')+'">'+(left>=0?left+' '+unit+' left':(-left)+' '+unit+' over')+'</span></div>'+
+    '<div style="height:6px;background:var(--surface2);border-radius:3px;margin-top:4px;overflow:hidden"><div style="height:100%;width:'+Math.min(100,Math.round(have/want*100))+'%;background:var(--accent)"></div></div>';};
+  if(g.kcal>0)out.push(line('Calories',t.kcal,Math.round(g.kcal),'kcal'));if(g.protein>0)out.push(line('Protein',t.protein,Math.round(g.protein),'g'));return out.join('');}
 function _flCard(inner){return'<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px">'+inner+'</div>';}
 function _flBtn(label,onclick,primary){return'<button onclick="'+onclick+'" style="background:'+(primary?'var(--accent)':'var(--surface2)')+';color:'+(primary?'#000':'var(--text)')+';border:1px solid '+(primary?'transparent':'var(--border)')+';border-radius:10px;padding:10px 14px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit">'+label+'</button>';}
 function _flGuideHtml(){
@@ -3540,7 +3546,7 @@ function _flGuideHtml(){
 function _flMainHtml(){
   var t=_flTotals(_flRows);
   var h=_flCard('<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Eaten today ('+_flDay()+')</div>'+
-    '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:15px;color:var(--text)"><b>'+t.kcal+' kcal</b><span>P '+t.protein+' g</span><span>C '+t.carbs+' g</span><span>F '+t.fat+' g</span></div>');
+    '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:15px;color:var(--text)"><b>'+t.kcal+' kcal</b><span>P '+t.protein+' g</span><span>C '+t.carbs+' g</span><span>F '+t.fat+' g</span></div>'+_flTargetsHtml(t));
   var txt=_flPending?_flPending.text:'';
   h+=_flCard('<textarea id="fl-text" rows="3" placeholder="What did you eat? e.g. 202 g steak, 307 g boiled potato, 15 g butter" style="width:100%;box-sizing:border-box;padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:16px;font-family:inherit">'+_flEsc(txt)+'</textarea>'+
     '<input id="fl-photo" type="file" accept="image/'+'*" style="display:none" onchange="flPhotoPicked(this)">'+
