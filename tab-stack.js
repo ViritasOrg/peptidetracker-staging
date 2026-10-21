@@ -5247,7 +5247,8 @@ function wizStepNutrition(body,footer){
   html+='<div style="display:flex;gap:6px;margin-bottom:12px">'+phases.map(function(p){var s=_macrosPhase===p.id;return'<button onclick="wizSetMacroPhase(\''+p.id+'\')" style="flex:1;background:'+(s?'var(--accent)':'var(--surface2)')+';color:'+(s?'#000':'var(--muted2)')+';border:1px solid '+(s?'var(--accent)':'var(--border)')+';border-radius:20px;padding:8px 4px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">'+p.label+'</button>';}).join('')+'</div>';
   // macrosForUser, not calcMacros: ONE source for the numbers, so this step and the
   // Macros tab cannot show different targets for the same protocol.
-  var m=(typeof macrosForUser==='function')?macrosForUser(_macrosPhase,onAndrogens):calcMacros(bw,_macrosPhase,onAndrogens);
+  var m=macrosForUser(_macrosPhase,onAndrogens,function(){ if(_wiz && _wizFlow()[_wiz.step]==='nutrition') wizRender(); });
+  if(!m){ body.innerHTML=html+_macrosPendingHtml(macrosFetchFailed(_macrosPhase,onAndrogens),'wizRender()'); footer.innerHTML='<button class="btn btn-primary" style="flex:1" onclick="wizNext()">Next →</button>'; return; }
   var _wdash='\u2014';
   var mi=[{l:'Calories',v:(m.kcal==null?_wdash:m.kcal),u:'kcal'},{l:'Protein',v:m.protein,u:'g'},{l:'Carbs',v:(m.carbs==null?_wdash:m.carbs),u:'g'},{l:'Fat',v:m.fat,u:'g'}];
   html+='<div style="display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:12px">'+mi.map(function(x,i){return'<div style="padding:14px 6px;text-align:center'+(i<3?';border-right:1px solid var(--border)':'')+'"><div style="font-family:var(--font-mono);font-size:22px;line-height:1;color:var(--text)">'+x.v+'</div><div style="font-size:9px;color:var(--muted2);text-transform:uppercase;margin-top:3px">'+x.u+'</div><div style="font-size:9px;color:var(--muted2)">'+x.l+'</div></div>';}).join('')+'</div>';
@@ -5257,7 +5258,7 @@ function wizStepNutrition(body,footer){
   if(m.kcal==null){
     html+='<div style="background:rgba(232,255,60,0.06);border-left:3px solid var(--accent);border-radius:8px;padding:11px 14px;font-size:11px;color:var(--muted2);line-height:1.6;margin-top:10px">No calorie target yet — it needs <b>'+m.missing.join(' ')+'</b>. Add a body-fat reading in the <b>Body</b> tab, or your height and age.</div>';
   } else {
-    html+='<div style="background:rgba(232,255,60,0.05);border-left:3px solid var(--accent);border-radius:8px;padding:11px 14px;font-size:11px;color:var(--muted2);line-height:1.6;margin-top:10px">Maintenance <b>'+m.tdee+' kcal</b> from '+(m.bmrMethod==='katch'?'Katch-McArdle':'Mifflin-St Jeor')+' \u00d7 PAL '+MACROS_PAL_BASE.toFixed(2)+(m.includeTraining&&m.trainKcal>0?(' + '+m.trainKcal+' kcal training'):'')+'.'
+    html+='<div style="background:rgba(232,255,60,0.05);border-left:3px solid var(--accent);border-radius:8px;padding:11px 14px;font-size:11px;color:var(--muted2);line-height:1.6;margin-top:10px">Maintenance <b>'+m.tdee+' kcal</b> from '+(m.bmrMethod==='katch'?'Katch-McArdle':'Mifflin-St Jeor')+' \u00d7 PAL '+m.constants.pal.toFixed(2)+(m.includeTraining&&m.trainKcal>0?(' + '+m.trainKcal+' kcal training'):'')+'.'
       +(m.ea?(' Energy availability <b>'+m.ea.value.toFixed(0)+' kcal/kg FFM</b>'+(m.ea.tier==='low'?' \u2014 <b>low</b>, below the threshold where lean mass and endocrine function start paying for it.':m.ea.tier==='suboptimal'?' \u2014 suboptimal band (30\u201345); fine for a short cut, not a long push.':' \u2014 adequate.')):'')
       +'</div>';
   }
