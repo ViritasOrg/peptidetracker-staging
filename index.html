@@ -41,6 +41,7 @@
     <div class="tab"        id="tab-btn-recon"    onclick="switchTab('recon',this)">Recon</div>
     <div class="tab"        id="tab-btn-schedule" onclick="switchTab('schedule',this)">Schedule</div>
     <div class="tab"        id="tab-btn-macros"   onclick="switchTab('macros',this)">Macros</div>
+    <div class="tab"        id="tab-btn-foodedit" onclick="switchTab('foodedit',this)">Food Edit</div>
     <div class="tab"        id="tab-btn-timeline" onclick="switchTab('timeline',this)">Timeline</div>
     <div class="tab"        id="tab-btn-body"     onclick="switchTab('body',this)">Body Comp</div>
     <div class="tab"        id="tab-btn-settings" onclick="switchTab('settings',this)">Settings</div>
@@ -71,8 +72,10 @@
     <div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent2)"></div><div class="card-title">WEEKLY PATTERN</div></div></div><div class="card-body" id="schedule-body"></div></div>
   </div>
   <div class="content hidden" id="tab-macros">
+    <div id="food-log-body"></div>
     <div id="macros-body"></div>
   </div>
+  <div class="content hidden" id="tab-foodedit"><div id="food-edit-body"></div></div>
   <div class="content hidden" id="tab-timeline"><div id="timeline-body" style="display:flex;flex-direction:column;gap:14px"></div></div>
   <div class="content hidden" id="tab-body">
     <div style="padding:16px 20px;border-bottom:1px solid var(--border)">
@@ -408,16 +411,16 @@ async function toggleAutoNext(){
 }
 let _stackViewTab='peptides';let _editInnerTab='peptides';
 let _reconStackIdx=0;let _reconStackPicked=false;let _reconState={};
-const TAB_LABELS=Object.assign({today:'Today',stacks:'Protocols',blood:'Levels',tcalc:'T-Calc',thist:'T-History',tdose:'Dose Finder',labs:'Labs',supplements:'Supplements',recon:'Recon',schedule:'Schedule',macros:'Macros',timeline:'Timeline',body:'Body Comp'},IS_STAGING?{storage:'Storage'}:{});
-const TAB_DEFAULTS=Object.assign({today:true,stacks:true,blood:true,tcalc:true,thist:true,tdose:true,labs:true,supplements:true,recon:true,schedule:false,macros:true,timeline:true,body:true},IS_STAGING?{storage:true}:{});
+const TAB_LABELS=Object.assign({today:'Today',stacks:'Protocols',blood:'Levels',tcalc:'T-Calc',thist:'T-History',tdose:'Dose Finder',labs:'Labs',supplements:'Supplements',recon:'Recon',schedule:'Schedule',macros:'Macros',foodedit:'Food Edit',timeline:'Timeline',body:'Body Comp'},IS_STAGING?{storage:'Storage'}:{});
+const TAB_DEFAULTS=Object.assign({today:true,stacks:true,blood:true,tcalc:true,thist:true,tdose:true,labs:true,supplements:true,recon:true,schedule:false,macros:true,foodedit:true,timeline:true,body:true},IS_STAGING?{storage:true}:{});
 // Two-tier navigation (usability study): 6 bottom "primary" tabs, each grouping
 // several of the existing destinations as a secondary sub-tab strip. Every legacy
 // tab id and switchTab(id,el) call is preserved — this is an additive nav layer.
-const PRIMARY_GROUPS={today:['today','macros','schedule'],plan:['stacks','supplements','recon'],timeline:['timeline'],levels:['blood','tcalc','thist','tdose'],labs:['labs','body'],more:['settings','storage']};
+const PRIMARY_GROUPS={today:['today','macros','foodedit','schedule'],plan:['stacks','supplements','recon'],timeline:['timeline'],levels:['blood','tcalc','thist','tdose'],labs:['labs','body'],more:['settings','storage']};
 const PRIMARY_LABELS={today:'Today',plan:'Plan',timeline:'Timeline',levels:'Levels',labs:'Labs',more:'More'};
 const PRIMARY_ORDER=['today','plan','timeline','levels','labs','more'];
 // Human surface names for the sub-tabs (T-Calc→Testosterone, Recon→Reconstitution…).
-const SUBTAB_LABELS={today:'Today',supplements:'Supplements',schedule:'Schedule',stacks:'Protocols',timeline:'Timeline',recon:'Reconstitution',blood:'Blood Levels',tcalc:'Testosterone',thist:'T-History',tdose:'Dose Finder',labs:'Bloodwork',body:'Body Comp',macros:'Macros',settings:'Settings',storage:'Storage'};
+const SUBTAB_LABELS={today:'Today',supplements:'Supplements',schedule:'Schedule',stacks:'Protocols',timeline:'Timeline',recon:'Reconstitution',blood:'Blood Levels',tcalc:'Testosterone',thist:'T-History',tdose:'Dose Finder',labs:'Bloodwork',body:'Body Comp',macros:'Macros',foodedit:'Food Edit',settings:'Settings',storage:'Storage'};
 function primaryOf(id){for(var _p in PRIMARY_GROUPS){if(PRIMARY_GROUPS[_p].indexOf(id)>=0)return _p;}return '';}
 let _tabVis={};let _currentTab='today';let _currentPrimary='today';let _lastSub={};
 const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';let _googleToken=localStorage.getItem('google_token')||'';let _sessionToken=localStorage.getItem('session_token')||'';function authHeaders(extra){const h={};if(APP_ID)h['X-App-Id']=APP_ID;const _t=_sessionToken||_googleToken;if(_t)h['Authorization']='Bearer '+_t;return extra?Object.assign({},h,extra):h;}
@@ -1112,7 +1115,7 @@ function lsDbgCopy(i,btn){var k=_lsDbgKeys[i];if(k==null)return;var v=localStora
 function lsDbgCopyAll(btn){var out={};for(var _ci=0;_ci<localStorage.length;_ci++){var _ck=localStorage.key(_ci);if(!_ck)continue;var _cv=localStorage.getItem(_ck)||'';try{out[_ck]=JSON.parse(_cv);}catch(e){out[_ck]=_cv;}}_lsCopyText(JSON.stringify(out,null,2),btn||document.getElementById('lsdbg-copy-all'));}
 function lsDbgClearAll(){if(!confirm('Clear all local cache? The app will reload and re-sync from the backend. You will stay signed in.'))return;var _t=window.localStorage.getItem('google_token');var _e=window.localStorage.getItem('google_email');localStorage.clear();if(_t)window.localStorage.setItem('google_token',_t);if(_e)window.localStorage.setItem('google_email',_e);window.location.reload();}
 function _setPrimaryActive(p){PRIMARY_ORDER.forEach(function(pp){var b=document.getElementById('navbtn-'+pp);if(b){if(pp===p)b.classList.add('active');else b.classList.remove('active');}});}
-function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id);var _pr=primaryOf(id);if(_pr){_currentPrimary=_pr;_lastSub[_pr]=id;try{localStorage.setItem('pep-last-sub-'+_pr,id);}catch(e){}_setPrimaryActive(_pr);_applySubtabVis(_pr);}document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);if(id==='settings')loadSettings();if(id==='storage')buildStoragePage();if(id==='macros')loadMacros();if(id==='timeline')buildTimeline();if(id==='recon')renderRecon();if(id==='supplements')buildSupplements();if(id==='schedule')buildSchedule();if(id==='stacks'){buildStackStore();openCyclesTab();}if(id==='blood')buildBloodLevels();if(id==='tcalc')buildTCalc();if(id==='thist')buildTHist();if(id==='tdose')buildTDose();if(id==='labs')buildLabs();if(id==='body'){var wi=document.getElementById('bc-weight-in');var hi=document.getElementById('bc-height-in');if(wi){var sw=localStorage.getItem('user_weight');var sh=localStorage.getItem('user_height');if(sw)wi.value=sw;if(sh)hi.value=sh;}setBioSex(localStorage.getItem('user_sex')||'male');var ai=document.getElementById('bc-age-in');if(ai){var sa=localStorage.getItem('user_age');if(sa)ai.value=sa;}}}
+function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id);var _pr=primaryOf(id);if(_pr){_currentPrimary=_pr;_lastSub[_pr]=id;try{localStorage.setItem('pep-last-sub-'+_pr,id);}catch(e){}_setPrimaryActive(_pr);_applySubtabVis(_pr);}document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);if(id==='settings')loadSettings();if(id==='storage')buildStoragePage();if(id==='macros'){buildFoodLog();loadMacros();}if(id==='foodedit')buildFoodEdit();if(id==='timeline')buildTimeline();if(id==='recon')renderRecon();if(id==='supplements')buildSupplements();if(id==='schedule')buildSchedule();if(id==='stacks'){buildStackStore();openCyclesTab();}if(id==='blood')buildBloodLevels();if(id==='tcalc')buildTCalc();if(id==='thist')buildTHist();if(id==='tdose')buildTDose();if(id==='labs')buildLabs();if(id==='body'){var wi=document.getElementById('bc-weight-in');var hi=document.getElementById('bc-height-in');if(wi){var sw=localStorage.getItem('user_weight');var sh=localStorage.getItem('user_height');if(sw)wi.value=sw;if(sh)hi.value=sh;}setBioSex(localStorage.getItem('user_sex')||'male');var ai=document.getElementById('bc-age-in');if(ai){var sa=localStorage.getItem('user_age');if(sa)ai.value=sa;}}}
 
 function logout(){_googleToken='';_sessionToken='';localStorage.removeItem('google_token');localStorage.removeItem('google_email');localStorage.removeItem('session_token');localStorage.removeItem('pt-owner-name');applyOwnerName('');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('signin-screen').classList.remove('hidden');}
 function _fmtTokExp(tok){try{var p=JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));if(!p.exp)return null;return{exp:new Date(p.exp*1000),leftMin:Math.round((p.exp*1000-Date.now())/60000)};}catch(e){return null;}}
@@ -3506,6 +3509,103 @@ function _igf1Recommendation(value,unit,age,refLo,refHi){
 function _dosePersonalization(pepId,profile){var mods=[];var ghAxis=['cjc-ipa','cjc-nodac','ipamorelin','sermorelin','tesamorelin','hgh'];var glp1=['retatrutide','tirzepatide','semaglutide'];if(ghAxis.indexOf(pepId)!==-1){if(profile.sex==='female')mods.push({type:'adj',text:'Women are ~50% more sensitive to GH peptides — start at the lower end of the range'});if(profile.age>=50)mods.push({type:'adj',text:'Age '+profile.age+': pituitary GH sensitivity increases with age — lower end of range is sufficient'});if(profile.age>0&&profile.age<30)mods.push({type:'ok',text:'Age '+profile.age+': standard doses well tolerated'});var _ig=(typeof _latestBwMarker==='function')?_latestBwMarker('IGF-1'):null;if(_ig){var _igr=_igf1Recommendation(_ig.value,_ig.unit,profile.age,_ig.ref_lo,_ig.ref_hi);if(_igr)mods.push({type:_igr.modType,text:_igr.text});}}if(glp1.indexOf(pepId)!==-1&&profile.weight_kg>0){if(profile.weight_kg>100)mods.push({type:'adj',text:'Weight '+profile.weight_kg+'kg: may need to reach a higher dose for full effect — ensure protein ≥'+Math.round(profile.weight_kg*2)+'g/day'});else if(profile.weight_kg<65)mods.push({type:'ok',text:'Weight '+profile.weight_kg+'kg: lighter frame — often responds well at lower maintenance doses'});}if(pepId==='hcg'&&profile.sex==='female')mods.push({type:'warn',text:'HCG is a male TRT support compound — not typically indicated for women in this context'});if(pepId==='nad'&&profile.weight_kg>0)mods.push({type:'info',text:'Weight-based target: ~'+Math.round(profile.weight_kg*1.5)+'mg SC (1.5 mg/kg) is within therapeutic range'});return mods;}
 function toggleTabVis(id){if(id==='settings')return;_tabVis[id]=!_tabVis[id];setData('proto-tab-vis',_tabVis);pushPepSettingsToAgent({'proto-tab-vis':_tabVis});if(!_tabVis[id]&&_currentTab===id){const b=document.getElementById('tab-btn-today');if(b)switchTab('today',b);}applyTabVis();buildTabsSettingsCard();}
 function buildTabsSettingsCard(){const card=document.getElementById('s-tabs-card');if(!card)return;const rows=Object.entries(TAB_LABELS).map(([id,label])=>{const on=!!_tabVis[id];return'<div style="padding:11px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"><span style="font-size:13px;color:var(--text)">'+label+'</span><button onclick="toggleTabVis(\''+id+'\')" style="background:'+(on?'var(--accent)':'var(--surface2)')+';color:'+(on?'#000':'var(--muted)')+';border:1px solid '+(on?'transparent':'var(--border)')+';border-radius:20px;padding:4px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;min-width:48px">'+(on?'ON':'OFF')+'</button></div>';}).join('');card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">'+sSecHdr('tabs','Tabs')+sSecBody('tabs')+rows+'<div style="padding:8px 16px 10px;font-size:11px;color:var(--muted2)">Settings is always visible</div></div></div>';}
+// ── Food log (Macros) ─────────────────────────────────────────────────────────
+// Henrik, 2026-10-21: type what you ate or take a photo, it is estimated and SAVED
+// straight away (no confirm step); corrections live on the separate Food Edit tab.
+// The same block is in Peptide Tracker and Workout, which share one log on the
+// backend (/food-log). Estimates run on the user's OWN Anthropic key, so a user
+// without one only sees how to add it. Nothing here is cached on the device.
+var _flKey=null,_flRows=[],_flBusy=false,_flErr='',_flPending=null,_flEditRows=[],_flEditDate='';
+function _flEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function _flYmd(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+// The eating day: a meal logged before 04:00 still belongs to the day before.
+function _flDay(now){var d=now?new Date(now.getTime()):new Date();if(d.getHours()<4)d.setDate(d.getDate()-1);return _flYmd(d);}
+function _flNum(v){var n=Math.round((Number(v)||0)*10)/10;return n;}
+function _flTotals(rows){var t={kcal:0,protein:0,carbs:0,fat:0};(rows||[]).forEach(function(r){t.kcal+=Number(r.kcal)||0;t.protein+=Number(r.protein)||0;t.carbs+=Number(r.carbs)||0;t.fat+=Number(r.fat)||0;});return{kcal:Math.round(t.kcal),protein:Math.round(t.protein),carbs:Math.round(t.carbs),fat:Math.round(t.fat)};}
+function _flCard(inner){return'<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px">'+inner+'</div>';}
+function _flBtn(label,onclick,primary){return'<button onclick="'+onclick+'" style="background:'+(primary?'var(--accent)':'var(--surface2)')+';color:'+(primary?'#000':'var(--text)')+';border:1px solid '+(primary?'transparent':'var(--border)')+';border-radius:10px;padding:10px 14px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit">'+label+'</button>';}
+function _flGuideHtml(){
+  return _flCard('<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px">Turn on food logging</div>'+
+    '<div style="font-size:13px;color:var(--text);line-height:1.55">Food logging estimates calories and macros with Claude, paid by your own Anthropic account (a few hundredths of a cent per entry). To turn it on:'+
+    '<ol style="margin:8px 0 8px 18px;padding:0">'+
+    '<li>Open <a href="https://console.anthropic.com" target="_blank" rel="noopener" style="color:var(--accent)">https://console.anthropic.com</a> in Chrome and sign in or create an account.</li>'+
+    '<li>Under <b>Billing</b>, add a payment method and a small amount of credit.</li>'+
+    '<li>Under <b>API keys</b>, tap <b>Create key</b> and copy it. It starts with <code>sk-ant-</code>.</li>'+
+    '<li>Paste it below and tap <b>Save key</b>.</li></ol>'+
+    'Your key is stored encrypted on the server and is only ever shown again as its last 4 characters.</div>'+
+    '<input id="fl-key-in" type="password" autocomplete="off" placeholder="sk-ant-…" style="width:100%;box-sizing:border-box;margin:10px 0;padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:16px">'+
+    _flBtn('Save key','flSaveKey()',true)+
+    (_flErr?'<div style="margin-top:10px;font-size:13px;color:var(--danger,#ff3b30)">'+_flEsc(_flErr)+'</div>':''));
+}
+function _flMainHtml(){
+  var t=_flTotals(_flRows);
+  var h=_flCard('<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Eaten today ('+_flDay()+')</div>'+
+    '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:15px;color:var(--text)"><b>'+t.kcal+' kcal</b><span>P '+t.protein+' g</span><span>C '+t.carbs+' g</span><span>F '+t.fat+' g</span></div>');
+  var txt=_flPending?_flPending.text:'';
+  h+=_flCard('<textarea id="fl-text" rows="3" placeholder="What did you eat? e.g. 202 g steak, 307 g boiled potato, 15 g butter" style="width:100%;box-sizing:border-box;padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:16px;font-family:inherit">'+_flEsc(txt)+'</textarea>'+
+    '<input id="fl-photo" type="file" accept="image/'+'*" style="display:none" onchange="flPhotoPicked(this)">'+
+    '<div style="display:flex;gap:8px;margin-top:10px">'+
+    (_flBusy?'<div style="font-size:14px;color:var(--muted);padding:10px 0">Estimating…</div>':
+      _flBtn('Log','flSubmit()',true)+_flBtn('📷 Photo','document.getElementById(\'fl-photo\').click()',false))+
+    '</div>'+
+    '<div style="font-size:11px;color:var(--muted);margin-top:8px">A photo can be the food itself or its nutrition label. Entries are saved as soon as they are estimated; fix them on the Food Edit tab.</div>'+
+    (_flErr?'<div style="margin-top:10px;font-size:13px;color:var(--danger,#ff3b30)">'+_flEsc(_flErr)+' Nothing was saved.</div>'+(_flPending?'<div style="margin-top:8px">'+_flBtn('Try again','flRetry()',true)+'</div>':''):''));
+  if(_flRows.length){
+    h+=_flCard(_flRows.map(function(r){return'<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;color:var(--text)"><span>'+_flEsc(r.food)+(r.amount?' <span style="color:var(--muted)">'+_flEsc(r.amount)+'</span>':'')+'</span><span style="white-space:nowrap">'+Math.round(r.kcal||0)+' kcal</span></div>';}).join(''));
+  }
+  h+='<div style="font-size:12px;color:var(--muted);margin-bottom:14px">Anthropic key ending …'+_flEsc(_flKey&&_flKey.last4||'')+' · <span onclick="flRemoveKey()" style="text-decoration:underline;cursor:pointer">Remove</span></div>';
+  return h;
+}
+function _flRender(){var el=document.getElementById('food-log-body');if(!el)return;el.innerHTML=(_flKey&&_flKey.set)?_flMainHtml():(_flKey?_flGuideHtml():_flCard('<div style="font-size:13px;color:var(--muted)">The food log could not be loaded. Check your connection and open this tab again.</div>'));}
+function _flDetail(r,j){return(j&&j.detail&&typeof j.detail==='string')?j.detail:('The server answered '+r.status+'.');}
+async function _flLoadRows(date){try{var r=await fetch(AGENT_URL+'/food-log?date='+date,{headers:authHeaders()});if(!r.ok)return null;return await r.json();}catch(e){return null;}}
+async function buildFoodLog(){
+  try{var r=await fetch(AGENT_URL+'/food-log/key',{headers:authHeaders()});if(r.ok)_flKey=await r.json();}catch(e){}
+  if(_flKey&&_flKey.set){var rows=await _flLoadRows(_flDay());if(rows)_flRows=rows;}
+  _flRender();
+}
+async function flSaveKey(){var el=document.getElementById('fl-key-in');var k=el?String(el.value||'').trim():'';if(!k)return;_flErr='';
+  try{var r=await fetch(AGENT_URL+'/food-log/key',{method:'PUT',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({api_key:k})});var j=await r.json().catch(function(){return{};});
+    if(!r.ok){_flErr=_flDetail(r,j);_flRender();return;}_flKey=j;}catch(e){_flErr='Could not reach the server. Check your connection and try again.';_flRender();return;}
+  buildFoodLog();}
+async function flRemoveKey(){if(!confirmGlobalDelete('your Anthropic API key (food logging stops until you add one again)'))return;
+  try{var r=await fetch(AGENT_URL+'/food-log/key',{method:'DELETE',headers:authHeaders()});if(r.ok)_flKey=await r.json();}catch(e){}_flRender();}
+// Photos are shrunk to at most 1024 px on the long side before upload: the
+// estimate does not need more, and it keeps both the upload and the token cost small.
+function _flShrink(file){return new Promise(function(res,rej){var fr=new FileReader();fr.onerror=function(){rej(new Error('read'));};fr.onload=function(){var img=new Image();img.onerror=function(){rej(new Error('image'));};img.onload=function(){var s=Math.min(1,1024/Math.max(img.width,img.height));var c=document.createElement('canvas');c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);c.getContext('2d').drawImage(img,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',0.8).split(',')[1]);};img.src=fr.result;};fr.readAsDataURL(file);});}
+async function flPhotoPicked(input){var f=input&&input.files&&input.files[0];if(!f)return;var t=document.getElementById('fl-text');var text=t?String(t.value||''):'';input.value='';
+  try{var b64=await _flShrink(f);}catch(e){_flErr='That photo could not be read. Try another one.';_flPending={text:text,image_b64:''};_flRender();return;}
+  _flSend({text:text,image_b64:b64});}
+function flSubmit(){var t=document.getElementById('fl-text');var text=t?String(t.value||'').trim():'';if(!text)return;_flSend({text:text,image_b64:''});}
+function flRetry(){if(_flPending)_flSend(_flPending);}
+async function _flSend(p){if(_flBusy)return;_flBusy=true;_flErr='';_flPending=p;_flRender();
+  var now=new Date();var body={date:_flDay(now),time:String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0'),text:p.text||''};
+  if(p.image_b64){body.image_b64=p.image_b64;body.media_type='image/jpeg';}
+  try{var r=await fetch(AGENT_URL+'/food-log/estimate',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(body)});var j=await r.json().catch(function(){return{};});
+    if(!r.ok){_flErr=_flDetail(r,j);}else{_flPending=null;var rows=await _flLoadRows(body.date);_flRows=rows||_flRows.concat(j.rows||[]);}}
+  catch(e){_flErr='Could not reach the server. Check your connection.';}
+  _flBusy=false;_flRender();}
+// ── Food Edit tab ──
+function _flEditHtml(rows,date){
+  var inp=function(id,f,v,w,num){return'<input id="fle-'+f+'-'+id+'" value="'+_flEsc(v)+'"'+(num?' inputmode="decimal"':'')+' style="width:'+w+';box-sizing:border-box;padding:6px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:16px">';};
+  var h=_flCard('<div style="display:flex;align-items:center;gap:10px"><span style="font-size:13px;color:var(--muted)">Day</span><input id="fle-date" type="date" value="'+_flEsc(date)+'" onchange="buildFoodEdit(this.value)" style="padding:6px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:16px"></div>');
+  if(!rows.length)return h+_flCard('<div style="font-size:13px;color:var(--muted)">Nothing logged on this day. Food is logged on the Macros tab.</div>');
+  var t=_flTotals(rows);
+  h+='<div style="font-size:13px;color:var(--text);margin:0 0 10px 2px"><b>'+t.kcal+' kcal</b> · P '+t.protein+' · C '+t.carbs+' · F '+t.fat+'</div>';
+  rows.forEach(function(r){var id=_flEsc(r.id);
+    h+=_flCard(inp(id,'food',r.food,'100%')+
+      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px;font-size:11px;color:var(--muted)"><label>kcal'+inp(id,'kcal',r.kcal,'100%',1)+'</label><label>Protein'+inp(id,'protein',r.protein,'100%',1)+'</label><label>Carbs'+inp(id,'carbs',r.carbs,'100%',1)+'</label><label>Fat'+inp(id,'fat',r.fat,'100%',1)+'</label></div>'+
+      '<div style="display:flex;gap:8px;margin-top:10px">'+_flBtn('Save',"flEditSave('"+id+"')",true)+_flBtn('Delete',"flEditDelete('"+id+"')",false)+'</div>');});
+  return h;}
+async function buildFoodEdit(date){_flEditDate=date||_flEditDate||_flDay();var rows=await _flLoadRows(_flEditDate);_flEditRows=rows||[];var el=document.getElementById('food-edit-body');if(el)el.innerHTML=rows?_flEditHtml(_flEditRows,_flEditDate):_flCard('<div style="font-size:13px;color:var(--muted)">Could not load the food log. Check your connection.</div>');}
+async function flEditSave(id){var g=function(f){var e=document.getElementById('fle-'+f+'-'+id);return e?e.value:'';};
+  var body={food:String(g('food')).trim().slice(0,120),kcal:_flNum(g('kcal')),protein:_flNum(g('protein')),carbs:_flNum(g('carbs')),fat:_flNum(g('fat'))};
+  try{var r=await fetch(AGENT_URL+'/food-log/'+encodeURIComponent(id),{method:'PUT',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(body)});if(!r.ok){alert('Not saved: the server answered '+r.status+'.');return;}}catch(e){alert('Not saved: could not reach the server.');return;}
+  buildFoodEdit(_flEditDate);}
+async function flEditDelete(id){if(!confirmGlobalDelete('this food entry'))return;
+  try{var r=await fetch(AGENT_URL+'/food-log/'+encodeURIComponent(id),{method:'DELETE',headers:authHeaders()});if(!r.ok){alert('Not deleted: the server answered '+r.status+'.');return;}}catch(e){alert('Not deleted: could not reach the server.');return;}
+  buildFoodEdit(_flEditDate);}
+// ── end food log ──
 </script>
 <script src="inj-writer.js?v=1.846"></script>
 <script src="tab-cycles.js?v=1.846"></script>
