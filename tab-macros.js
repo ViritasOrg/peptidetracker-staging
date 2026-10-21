@@ -19,6 +19,9 @@ function setMacrosPhase(p){
   if(typeof pushPepSettingsToAgent==='function') pushPepSettingsToAgent({'macros-phase':p});
   return _macrosPhase;
 }
+// The day's kcal and protein targets as last rendered, read by the food log (in index.html)
+// so what you have eaten is shown against the same numbers this tab shows.
+var _macrosTargets=null;
 var _macrosTrainKcal=0;   // measured training burn, kcal/day averaged over the last 14 days (from /training-energy)
 function loadMacros(){
   var bw=parseDec(localStorage.getItem('user_weight'))||0;
@@ -361,8 +364,10 @@ function saveMacrosTrainTime(val){localStorage.setItem('macros-train-time',val);
 function saveMacrosTrainDur(val){localStorage.setItem('macros-train-dur',String(val));pushPepSettingsToAgent({'macros-train-dur':val});loadMacros();}
 function renderMacros(bw,onAndrogens){
   var body=document.getElementById('macros-body');if(!body)return;
+  _macrosTargets=null;
   if(!bw){body.innerHTML='<div style="padding:40px 20px;text-align:center;color:var(--muted2)"><div style="font-size:32px;margin-bottom:12px">⚖️</div><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:8px">Set your body weight</div><div style="font-size:13px;line-height:1.5">Log your weight in the <b>Weights</b> tab so macros can be calculated for you.</div></div>';return;}
   var m=macrosForUser(_macrosPhase,onAndrogens);
+  _macrosTargets={kcal:m.kcal,protein:m.protein};
   var phases=[{id:'reset',label:'Reset',color:'var(--accent4)'},{id:'cut',label:'Cut',color:'var(--accent2)'},{id:'recomp',label:'Recomp',color:'var(--accent3)'}];
   var trainTime=localStorage.getItem('macros-train-time')||'17:00';
   var trainDur=parseInt(localStorage.getItem('macros-train-dur'))||60;
@@ -417,4 +422,5 @@ function renderMacros(bw,onAndrogens){
   h+='</div></div>';
   h+='</div>';
   body.innerHTML=h;
+  if(typeof _flRender==='function')_flRender();
 }
