@@ -5798,6 +5798,37 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
         !/for f in \.\.\/staging\/tab-\*\.js/.test(y));
       check('  …failing loudly when a listed module is absent',
         /index\.html loads \$f but staging has no such file/.test(y));
+
+      // An image deleted on staging must be deleted on prod too (2026-10-22). The copy
+      // loop only ever added, so inject-sites-v2.webp / inject-sites-back.webp, retired
+      // on staging on 2026-10-14, stayed on prod and failed prod CI on PRs #440/#441 at
+      // the test asserting they are gone. Run the step itself against a throwaway
+      // staging/ and prod/ pair rather than grepping for it.
+      const _rmA = y.indexOf('# >>> stale-asset removal'), _rmB = y.indexOf('# <<< stale-asset removal');
+      check('the promotion removes images staging deleted', _rmA > 0 && _rmB > _rmA);
+      if (_rmA > 0 && _rmB > _rmA) {
+        const cp = require('child_process'), os = require('os');
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'promote-'));
+        const stg = path.join(tmp, 'staging'), prd = path.join(tmp, 'prod');
+        fs.mkdirSync(stg); fs.mkdirSync(prd);
+        ['keep.webp', 'icon.png'].forEach(f => fs.writeFileSync(path.join(stg, f), 'x'));
+        ['keep.webp', 'icon.png', 'old.webp', 'gone.jpg', 'index.html'].forEach(f => fs.writeFileSync(path.join(prd, f), 'x'));
+        fs.mkdirSync(path.join(prd, 'css')); fs.writeFileSync(path.join(prd, 'css', 'bg.png'), 'x');
+        const step = y.slice(_rmA, _rmB).split('\n').map(l => l.replace(/^ {10}/, '')).join('\n');
+        let out = '';
+        try {
+          cp.execSync('git init -q && git -c user.email=t@t -c user.name=t add -A && git -c user.email=t@t -c user.name=t commit -qm init', {cwd: prd});
+          out = cp.execSync('bash -e', {cwd: prd, input: step}).toString();
+        } catch (e) { out = 'ERROR ' + e.message; }
+        const has = f => fs.existsSync(path.join(prd, f));
+        check('  …running it deletes exactly the images staging no longer has',
+          !has('old.webp') && !has('gone.jpg') && has('keep.webp') && has('icon.png'), out);
+        check('  …and leaves everything else alone: pages, sub-folders',
+          has('index.html') && has('css/bg.png'), out);
+        check('  …staged as a deletion, so the promotion commit carries it',
+          /D  gone\.jpg/.test(cp.execSync('git status --porcelain', {cwd: prd}).toString()));
+        fs.rmSync(tmp, {recursive: true, force: true});
+      }
       check('  …and refusing to promote a prod tree that cannot load',
         /prod would be missing modules index\.html loads/.test(y));
 

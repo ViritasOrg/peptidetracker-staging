@@ -76,6 +76,26 @@ jobs:
             done
           done
 
+          # >>> stale-asset removal
+          # ...and REMOVE the root-level images staging no longer has. The loop above only
+          # ever adds, so an image deleted on staging stayed on prod forever. That failed
+          # prod CI on PRs #440/#441 (2026-10-22): inject-sites-v2.webp and
+          # inject-sites-back.webp were retired on staging on 2026-10-14 (#1356), and the
+          # promoted test asserting they are gone ran against a prod tree that still had
+          # them. Same extensions as the copy, root level only, so the asset set on prod is
+          # exactly staging's after every promotion.
+          for ext in png jpg jpeg svg webp gif ico; do
+            for f in ./*."$ext"; do
+              [ -f "$f" ] || continue
+              b=$(basename "$f")
+              if [ ! -f "../staging/$b" ]; then
+                echo "Removing $b (deleted on staging)"
+                git rm -q -- "$b"
+              fi
+            done
+          done
+          # <<< stale-asset removal
+
           # Reset VERSION and ?v= cache-bust strings to prod's current version so
           # const VERSION, version.json, and tab script src tags all stay in sync
           # (staging has its own independent version counter)
