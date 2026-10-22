@@ -17390,10 +17390,10 @@ console.log('\n── Compound-aware macros ────────────
   // from the JavaScript it replaced). What stays here is the display of served targets.
   check('the macro model is no longer computed in this app',
     typeof G.calcMacros==='undefined' && !/370\s*\+\s*21\.6\s*\*/.test(_macSrc) && !/\bbw\s*\*\s*31\b/.test(_macSrc) && !/kcalBase/.test(_macSrc));
-  var _SV={pal:1.4,pctCut:0.15,pctSurplus:0.05,kcalPerKgFat:7700,mealsPerDay:4};
-  var _dmA={"protein":225,"carbs":205,"fat":81,"kcal":2450,"onAndrogens":false,"bmr":1964,"bmrMethod":"katch","tdee":2750,"trainKcal":0,"includeTraining":true,"proteinPerKg":2.5,"proteinFloorBound":false,"perMealProteinPerKg":0.24,"ffm":73.8,"ea":{"value":33.2,"tier":"suboptimal"},"deficitMode":"absolute","phaseOffset":-300,"rate":{"kgPerMonth":-1.186,"pctBwPerWeek":0.303,"tooFast":false},"missing":[],"constants":_SV};
-  var _dmP={"protein":225,"carbs":177,"fat":81,"kcal":2337,"onAndrogens":false,"bmr":1964,"bmrMethod":"katch","tdee":2750,"trainKcal":0,"includeTraining":true,"proteinPerKg":2.5,"proteinFloorBound":false,"perMealProteinPerKg":0.24,"ffm":73.8,"ea":{"value":31.7,"tier":"suboptimal"},"deficitMode":"percent","phaseOffset":-413,"rate":{"kgPerMonth":-1.633,"pctBwPerWeek":0.417,"tooFast":false},"missing":[],"constants":_SV};
-  var _dmM={"protein":225,"carbs":150,"fat":81,"kcal":2227,"onAndrogens":false,"bmr":1805,"bmrMethod":"mifflin","tdee":2527,"trainKcal":0,"includeTraining":true,"proteinPerKg":2.5,"proteinFloorBound":false,"perMealProteinPerKg":0.3151,"ffm":0,"ea":null,"deficitMode":"absolute","phaseOffset":-300,"rate":{"kgPerMonth":-1.186,"pctBwPerWeek":0.303,"tooFast":false},"missing":[],"constants":_SV};
+  var _SV={pal:1.4,cutPctBwPerWeek:0.7,kcalPerKgFat:7700,mealsPerDay:4};
+  var _dmA={"protein":225,"carbs":205,"fat":81,"kcal":2094,"onAndrogens":false,"bmr":1964,"bmrMethod":"katch","tdee":2750,"trainKcal":0,"includeTraining":true,"proteinPerKg":2.5,"proteinFloorBound":false,"perMealProteinPerKg":0.24,"ffm":73.8,"ea":{"value":28.4,"tier":"low"},"phaseOffset":-656,"rate":{"kgPerMonth":-1.186,"pctBwPerWeek":0.303,"tooFast":false},"missing":[],"constants":_SV};
+  var _dmP={"protein":225,"carbs":177,"fat":81,"kcal":2337,"onAndrogens":false,"bmr":1964,"bmrMethod":"katch","tdee":2750,"trainKcal":0,"includeTraining":true,"proteinPerKg":2.5,"proteinFloorBound":false,"perMealProteinPerKg":0.24,"ffm":73.8,"ea":{"value":31.7,"tier":"suboptimal"},"phaseOffset":-413,"rate":{"kgPerMonth":-1.633,"pctBwPerWeek":0.417,"tooFast":false},"missing":[],"constants":_SV};
+  var _dmM={"protein":225,"carbs":150,"fat":81,"kcal":2227,"onAndrogens":false,"bmr":1805,"bmrMethod":"mifflin","tdee":2527,"trainKcal":0,"includeTraining":true,"proteinPerKg":2.5,"proteinFloorBound":false,"perMealProteinPerKg":0.3151,"ffm":0,"ea":null,"phaseOffset":-300,"rate":{"kgPerMonth":-1.186,"pctBwPerWeek":0.303,"tooFast":false},"missing":[],"constants":_SV};
   var _dmNone={"protein":198,"carbs":null,"fat":81,"kcal":null,"bmr":null,"missing":["body fat %","or height and age"],"constants":_SV};
   if(typeof G._macrosFatNote==='function'){
     check('_macrosFatNote cut mentions the raised protein + Helms', /2\.5 g\/kg/.test(G._macrosFatNote(false,'cut')) && /Helms 2014/.test(G._macrosFatNote(false,'cut')));
@@ -17403,15 +17403,25 @@ console.log('\n── Compound-aware macros ────────────
       /g\/kg<\/b> to maximally stimulate/.test(_fn) && /Moore 2015/.test(_fn));
   }
   if(typeof G._macrosEnergyCard==='function'){
-    var _ecP=G._macrosEnergyCard(_dmP), _ecA=G._macrosEnergyCard(_dmA);
-    check('the energy card offers both modes and marks the active one',
-      /setMacrosDeficitMode\('absolute'\)/.test(_ecA) && /setMacrosDeficitMode\('percent'\)/.test(_ecA));
+    var _phA=G._macrosPhase; G._macrosPhase='cut';
+    var _ecA=G._macrosEnergyCard(_dmA);
+    G._macrosPhase=_phA;
+    // 2026-10-22, Henrik: "Both apps always use the % based on actual research" — no picker.
+    check('the energy card offers no Fixed / % of maintenance choice any more',
+      !/setMacrosDeficitMode/.test(_ecA) && !/% of maintenance/.test(_ecA) && !/Fixed kcal/.test(_ecA) && typeof G.setMacrosDeficitMode==='undefined');
     check('  …shows the expected kg/month next to the target',
       /Expected rate/.test(_ecA) && /kg\/month/.test(_ecA));
-    check('  …and labels the offset as fixed or as a percentage',
-      /fixed/.test(_ecA) && /15%/.test(_ecP));
+    check('  …and on a cut names the research rate it is sized to, with its sources',
+      /lose 0\.7% of bodyweight\/wk/.test(_ecA) && /Helms 2014/.test(_ecA) && /Garthe 2011/.test(_ecA) && /-656 kcal/.test(_ecA));
+    var _phPrev=G._macrosPhase; G._macrosPhase='recomp';
+    var _ecR=G._macrosEnergyCard(Object.assign({},_dmA,{phaseOffset:0,kcal:2750,rate:null}));
+    G._macrosPhase=_phPrev;
+    check('  …and on recomp says it is maintenance, citing Helms 2023',
+      /<b>maintenance<\/b>/.test(_ecR) && /Helms 2023/.test(_ecR) && !/0\.7% of bodyweight/.test(_ecR));
+    check('the recomp guidance no longer promises a surplus',
+      !/Slight surplus/.test(_macSrc) && /Maintenance calories with compound support/.test(_macSrc));
     check('  …prints the PAL the backend used, not a copy of its own',
-      /PAL 1\.40/.test(_ecA) && /2750 kcal/.test(_ecA) && /2450 kcal/.test(_ecA));
+      /PAL 1\.40/.test(_ecA) && /2750 kcal/.test(_ecA) && /2094 kcal/.test(_ecA));
     check('  …and without a profile says what is missing instead of a number',
       /body fat %/.test(G._macrosEnergyCard(_dmNone)) && /Nothing is guessed/.test(G._macrosEnergyCard(_dmNone)));
   }
@@ -20877,7 +20887,7 @@ console.log('\n── Macros: the tab and the wizard read one model ────
   const _mtSrc=require('fs').readFileSync(require('path').join(_mtDir,'tab-macros.js'),'utf8');
   const _ls={user_weight:'90',user_height:'180',user_age:'45',user_sex:'male'};
   const _calls=[]; let _fail=false; const _els={};
-  const _served={kcal:2627,protein:225,carbs:200,fat:54,tdee:2927,bmr:1805,bmrMethod:'mifflin',trainKcal:400,includeTraining:true,deficitMode:'absolute',phaseOffset:-300,rate:{kgPerMonth:-1.186,pctBwPerWeek:0.3,tooFast:false},ea:null,missing:[],perMealProteinPerKg:0.31,proteinFloorBound:false,constants:{pal:1.4,pctCut:0.15,pctSurplus:0.05}};
+  const _served={kcal:2627,protein:225,carbs:200,fat:54,tdee:2927,bmr:1805,bmrMethod:'mifflin',trainKcal:400,includeTraining:true,phaseOffset:-300,rate:{kgPerMonth:-1.186,pctBwPerWeek:0.3,tooFast:false},ea:null,missing:[],perMealProteinPerKg:0.31,proteinFloorBound:false,constants:{pal:1.4,cutPctBwPerWeek:0.7}};
   const M=vm.createContext({console,Promise,JSON,Math,String,Number,parseInt,parseFloat,isFinite,encodeURIComponent,
     AGENT_URL:'https://agent',authHeaders:()=>({}),_currentTab:'macros',
     localStorage:{getItem:k=>(k in _ls?_ls[k]:null),setItem:(k,v)=>{_ls[k]=String(v);},removeItem:k=>{delete _ls[k];}},
@@ -20894,7 +20904,7 @@ console.log('\n── Macros: the tab and the wizard read one model ────
     check('macros: the targets are fetched, never computed locally', _first===null && _calls.length===1 && /\/macro-targets\?/.test(_calls[0]));
     const q=_calls[0];
     check('  …from the stored profile and the training burn',
-      /bw=90/.test(q)&&/height_cm=180/.test(q)&&/age=45/.test(q)&&/sex=male/.test(q)&&/phase=cut/.test(q)&&/on_androgens=true/.test(q)&&/train_kcal=400/.test(q)&&/include_training=true/.test(q)&&/deficit_mode=absolute/.test(q));
+      /bw=90/.test(q)&&/height_cm=180/.test(q)&&/age=45/.test(q)&&/sex=male/.test(q)&&/phase=cut/.test(q)&&/on_androgens=true/.test(q)&&/train_kcal=400/.test(q)&&/include_training=true/.test(q)&&!/deficit_mode/.test(q));
     for(let _i=0;_i<50;_i++) await Promise.resolve();
     check('  …and once served, the same inputs read from the cache without a second request',
       M.macrosForUser('cut',true)&&M.macrosForUser('cut',true).kcal===2627&&_calls.length===1);

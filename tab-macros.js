@@ -77,31 +77,10 @@ function _macrosProfile(){
 // "Yes but make it visible so user can choose to ignore" — so it is ON by default and
 // carries a visible toggle. It used to be excluded silently, which made the real deficit
 // on a training day 300 + the burn rather than the 300 the code intended.
-// ── HOW THE PHASE OFFSET IS EXPRESSED ────────────────────────────────────────
-// Henrik, 2026-09-09: "Give user a choice between % or standard numbers. If you want
-// to loose 1kg fat per month the absolute number is probably more correct and
-// consistent." Exactly right, and it is why ABSOLUTE is the default: a fixed kcal/day
-// gap is a fixed rate of fat loss, which is the thing being aimed at. A percentage
-// re-scales with maintenance, so it holds the deficit constant in RELATIVE terms and
-// lets the rate drift as bodyweight falls.
-//
-// Percentage figures: a 10–20% deficit is the band the physique-athlete literature
-// works in for lean-mass preservation, so the midpoint is used; the surplus is small
-// on purpose ("chase the dry look, not the scale" — the app's own recomp guidance).
-var _MACROS_DEFICIT_MODES=['absolute','percent'];
-function _macrosDeficitMode(){
-  try{
-    var v=(typeof getData==='function')?getData('macros-deficit-mode',''):'';
-    return (_MACROS_DEFICIT_MODES.indexOf(v)>=0)?v:'absolute';
-  }catch(e){ return 'absolute'; }
-}
-function setMacrosDeficitMode(m){
-  if(_MACROS_DEFICIT_MODES.indexOf(m)<0) return _macrosDeficitMode();
-  if(typeof setData==='function') setData('macros-deficit-mode',m);
-  if(typeof pushPepSettingsToAgent==='function') pushPepSettingsToAgent({'macros-deficit-mode':m});
-  if(typeof loadMacros==='function') loadMacros();
-  return m;
-}
+// ── THE PHASE OFFSET IS NOT A CHOICE (2026-10-22) ───────────────────────────
+// Henrik: "Both apps always use the % based on actual research". The backend sizes it:
+// a cut loses 0.7% of bodyweight a week (Helms 2014, Garthe 2011), recomp sits at
+// maintenance (Helms 2023). The Fixed kcal / % of maintenance picker is gone.
 function _macrosIncludeTraining(){
   try{ return localStorage.getItem('macros-include-training')!=='false'; }catch(e){ return true; }
 }
@@ -126,8 +105,7 @@ function _macrosQuery(phase,onAndrogens){
   var p=_macrosProfile();
   return 'bw='+p.bw+'&phase='+encodeURIComponent(phase)+'&on_androgens='+(!!onAndrogens)
     +'&height_cm='+p.heightCm+'&age='+p.age+'&sex='+p.sex+'&body_fat_pct='+p.bodyFatPct
-    +'&train_kcal='+Math.max(0,Math.round(_macrosTrainKcal||0))+'&include_training='+_macrosIncludeTraining()
-    +'&deficit_mode='+_macrosDeficitMode();
+    +'&train_kcal='+Math.max(0,Math.round(_macrosTrainKcal||0))+'&include_training='+_macrosIncludeTraining();
 }
 // The targets for the stored profile, or null while they are being fetched. onReady
 // runs once they arrive (or the fetch fails, so the caller can say so).
@@ -192,9 +170,7 @@ function _macrosEnergyCard(m){
             ['\u00d7 PAL '+m.constants.pal.toFixed(2)+' (non-training)',Math.round(m.bmr*m.constants.pal)+' kcal'],
             ['Training (14-day avg)',(m.includeTraining?'+':'excl. ')+m.trainKcal+' kcal'],
             ['Maintenance',m.tdee+' kcal'],
-            ['Phase ('+_macrosPhase+', '+(m.deficitMode==='percent'
-               ?((_macrosPhase==='cut'?'\u2212'+Math.round(m.constants.pctCut*100):'+'+Math.round(m.constants.pctSurplus*100))+'%')
-               :'fixed')+')',(m.phaseOffset>=0?'+':'')+m.phaseOffset+' kcal']];
+            ['Phase ('+_macrosPhase+(_macrosPhase==='cut'?', lose '+m.constants.cutPctBwPerWeek+'% of bodyweight/wk':'')+')',(m.phaseOffset>=0?'+':'')+m.phaseOffset+' kcal']];
   var h='<div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">ENERGY</div></div><span style="font-size:11px;color:var(--muted2)">'+(m.bmrMethod==='katch'?'Katch-McArdle':'Mifflin-St Jeor')+'</span></div><div class="card-body">';
   rows.forEach(function(r){ h+='<div class="info-row"><span class="info-label">'+r[0]+'</span><span class="info-val">'+r[1]+'</span></div>'; });
   h+='<div class="info-row" style="font-weight:800"><span class="info-label" style="color:var(--text)">Target</span><span class="info-val" style="color:var(--accent)">'+m.kcal+' kcal</span></div>';
@@ -208,19 +184,11 @@ function _macrosEnergyCard(m){
     h+='<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:4px">At 7700 kcal per kg of fat, estimated at your current weight \u2014 maintenance falls as you do, so the real rate tapers.'
       +(m.rate.tooFast?' <b>Above 1%/week</b>, which is where lean tissue starts going with the fat (Helms 2014 puts the preserving band at 0.5\u20131%/wk).':'')+'</div>';
   }
-  // The mode choice itself. Absolute is the default and the reason is on screen.
-  h+='<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">';
-  h+='<div style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:7px">Phase offset</div>';
-  h+='<div style="display:flex;gap:6px">';
-  [{id:'absolute',label:'Fixed kcal'},{id:'percent',label:'% of maintenance'}].forEach(function(o){
-    var sel=m.deficitMode===o.id;
-    h+='<button onclick="setMacrosDeficitMode(\''+o.id+'\')" style="flex:1;background:'+(sel?'var(--accent)':'var(--surface2)')+';color:'+(sel?'#000':'var(--muted2)')+';border:1px solid '+(sel?'var(--accent)':'var(--border)')+';border-radius:20px;padding:7px 4px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">'+o.label+'</button>';
-  });
-  h+='</div>';
-  h+='<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:7px">'
-    +'<b>Fixed kcal</b> holds the RATE steady \u2014 a constant gap is a constant kg/month, which is what you aim at when the goal is \u201close 1 kg of fat a month\u201d. '
-    +'<b>% of maintenance</b> holds the deficit steady in relative terms ('+Math.round(m.constants.pctCut*100)+'% cut, +'+Math.round(m.constants.pctSurplus*100)+'% surplus \u2014 the midpoint of the 10\u201320% band used for lean-mass preservation), so it re-scales with you and the rate drifts.</div>';
-  h+='</div>';
+  if(_macrosPhase==='cut'||_macrosPhase==='recomp')
+    h+='<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:7px">'
+      +(_macrosPhase==='cut'
+        ?'The cut is sized to lose <b>'+m.constants.cutPctBwPerWeek+'% of bodyweight a week</b>: Helms 2014 puts the muscle-preserving band at 0.5\u20131%/wk, and in Garthe 2011 athletes losing 0.7%/wk gained lean mass while those losing 1.4%/wk did not.'
+        :'Recomp eats at <b>maintenance</b>: in Helms 2023, trained lifters on a 5% surplus gained no more muscle than at maintenance, only more fat.')+'</div>';
   h+='<div style="font-size:11px;color:var(--muted2);line-height:1.6;margin-top:8px">'+how+' PAL 1.40 is the bottom of FAO/WHO/UNU\u2019s sedentary/light-activity band \u2014 the bottom because measured training is added separately.</div>';
   if(m.ea){
     var col=m.ea.tier==='low'?'var(--danger,#ff3c3c)':m.ea.tier==='suboptimal'?'var(--accent4)':'var(--accent3)';
@@ -279,7 +247,7 @@ function renderMacros(bw,onAndrogens){
   h+='<div style="display:flex;gap:6px">';
   phases.forEach(function(p){var sel=_macrosPhase===p.id;h+='<button onclick="switchMacrosPhase(\''+p.id+'\')" style="flex:1;background:'+(sel?p.color:'var(--surface2)')+';color:'+(sel?'#000':'var(--muted2)')+';border:1px solid '+(sel?p.color:'var(--border)')+';border-radius:20px;padding:8px 4px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">'+p.label+'</button>';});
   h+='</div></div>';
-  var ctx=_macrosPhase==='reset'?'Start at or slightly below maintenance for 1-3 weeks. Let metabolism stabilise — energy, digestion, sleep all improve before cutting. Do not rush into a deficit.':_macrosPhase==='cut'?'Controlled deficit after metabolic reset. Increase NEAT (steps to 12-15k) and add 20-30 min cardio post-workout. Maintain protein; adjust carbs and fat around training.':'Slight surplus with compound support for nutrient partitioning. Assess weekly — most gains happen at lower intake than expected on cycle. Do NOT chase size; chase the dry vascular look.';
+  var ctx=_macrosPhase==='reset'?'Start at or slightly below maintenance for 1-3 weeks. Let metabolism stabilise — energy, digestion, sleep all improve before cutting. Do not rush into a deficit.':_macrosPhase==='cut'?'Controlled deficit after metabolic reset. Increase NEAT (steps to 12-15k) and add 20-30 min cardio post-workout. Maintain protein; adjust carbs and fat around training.':'Maintenance calories with compound support for nutrient partitioning. Assess weekly — most gains happen at lower intake than expected on cycle. Do NOT chase size; chase the dry vascular look.';
   h+='<div style="margin:0 20px;background:rgba(60,255,160,0.07);border-radius:10px;padding:12px 14px;border-left:3px solid var(--accent3);font-size:12px;color:var(--muted2);line-height:1.6">'+ctx+'</div>';
   h+='<div class="card">';
   h+='<div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">DAILY TARGETS</div></div><span style="font-size:11px;color:var(--muted2)">'+bw+' kg</span></div>';
