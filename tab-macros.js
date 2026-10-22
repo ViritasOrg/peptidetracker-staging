@@ -270,7 +270,7 @@ function renderMacros(bw,onAndrogens){
   if(!bw){body.innerHTML='<div style="padding:40px 20px;text-align:center;color:var(--muted2)"><div style="font-size:32px;margin-bottom:12px">⚖️</div><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:8px">Set your body weight</div><div style="font-size:13px;line-height:1.5">Log your weight in the <b>Weights</b> tab so macros can be calculated for you.</div></div>';return;}
   var m=macrosForUser(_macrosPhase,onAndrogens,function(){ if(_currentTab==='macros') renderMacros(bw,onAndrogens); });
   if(!m){ body.innerHTML=_macrosPendingHtml(macrosFetchFailed(_macrosPhase,onAndrogens),'loadMacros()'); return; }
-  _macrosTargets={kcal:m.kcal,protein:m.protein};
+  _macrosTargets={kcal:m.kcal,protein:m.protein,carbs:m.carbs,fat:m.fat};
   var phases=[{id:'reset',label:'Reset',color:'var(--accent4)'},{id:'cut',label:'Cut',color:'var(--accent2)'},{id:'recomp',label:'Recomp',color:'var(--accent3)'}];
   var trainTime=localStorage.getItem('macros-train-time')||'17:00';
   var trainDur=parseInt(localStorage.getItem('macros-train-dur'))||60;
