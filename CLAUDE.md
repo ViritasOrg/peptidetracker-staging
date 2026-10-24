@@ -501,6 +501,45 @@ they overwrite data that was correct when it was written.
   is this bug.
 - Regression tests assert `buildTHist` contains no capture/compute/model call. Keep them.
 
+## The Setup Wizard's animated tour and the "What's new" card (rule 2026-10-24)
+Built for Workout first (Henrik: *"does it highlight new features as AI macro tracking or the
+stick man info cards?"*, then *"I want a animated movie running as onboarding showing the main
+features incl macro tracking"*, *"ask the onboarding questions first so a male user gets a
+Hypertrophy in the gym movie and a female a female aesthetics at home movie"*, *"in settings/More
+add a button on top to re run the intro for users who want to see it again"*), then *"yes"* to the
+same here. Both go stale unless every feature PR maintains them.
+
+- **A feature a user would not find on their own gets a row in `WHATS_NEW` in the same PR.** A new
+  tab, a new button on an existing screen, a new way to enter data (food by photo), a new wizard
+  step. Not a bug fix, not a reworded label, not a change inside a feature the user already uses.
+- **Key the row to the version the PR ships AS**: the bump it will get after merge, which is
+  `version.json` on `main` plus one. The runtime filter hides a row until the build reaches its
+  version, so the row and the bump arrive together. A test fails on a row more than one bump ahead.
+- **Newest first**, one title and one or two sentences in plain words, saying where the user taps.
+- **The card shows what the account has not dismissed.** `pep-whatsnew-seen` is per account
+  (localStorage + `/user-settings`); "Got it" marks the current `VERSION`. An account that is
+  onboarded or has dose history and has no seen version gets every row; `obFinish` marks a NEW
+  account as seen (the tour just showed it everything) and leaves an existing account's card alone.
+  Never reset or clear the seen version to "make sure they see it".
+- **The wizard's `tour` step is an animated movie, not a list.** `TOUR_SCENES` plays protocol →
+  today → levels → macros → tabs, each a CSS-animated mock of the phone screen built by
+  `_tourSceneHtml` (simulated taps, a dose ticked, the plasma curve drawing, bars filling) with one
+  caption. No video file: markup in `index.html`, styles in `css/main.css`, so it plays offline.
+  Tap the stage to pause; a dot jumps; the last scene stays and shows the six-tab list.
+- **The movie follows the wizard's answers.** `_tourProfile()` reads `_obData.goals` (step 3) and
+  `_obData.sex` (step 4): the protocol scene starts the plan `_obRankedTemplates()` ranks first for
+  the ticked goal; with no goal ticked, female → fat loss, male → hormone health.
+- **NO COMPOUND DATA IN THE TOUR.** Plan names come from the backend-served templates at runtime,
+  with a neutral "Your suggested plan" when none has loaded; doses are "Dose 1 · 09:00". A test
+  fails on a compound, peptide or dose unit written into the scenes. The Levels scene is in pmol/L.
+- **"Watch the intro again" sits at the top of Settings.** `openTour()` opens the overlay on the
+  tour step with the saved profile's sex and goals and `_obTourOnly` set: no Back, no dots, Done or
+  Skip just close it. Nothing is saved and no starting point is routed.
+- **`TOUR_TABS` names every button in the bottom bar**, in order; a test reads the bar from the HTML.
+  Its descriptions name the features behind each tab: when a tab gains one, update its line.
+- **Cross-app parity:** Workout has the same card and tour (`wkt-whatsnew-seen`, `TOUR_SCENES`,
+  `TOUR_TABS`, `openTour`). A change to the mechanism is made in both apps in the same session.
+
 ## ⚠️ localStorage IS A CACHE — NEVER THE SOURCE OF TRUTH ⚠️
 localStorage is a read cache for performance only. It is NEVER the source of truth.
 
