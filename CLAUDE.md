@@ -540,6 +540,24 @@ same here. Both go stale unless every feature PR maintains them.
 - **Cross-app parity:** Workout has the same card and tour (`wkt-whatsnew-seen`, `TOUR_SCENES`,
   `TOUR_TABS`, `openTour`). A change to the mechanism is made in both apps in the same session.
 
+## Macro targets are per day; Food Edit sets them for the past (rule 2026-10-24)
+Henrik: *"I imported my old logs but the targets has changed since I been both in recomp and
+cut as well as earlier included my training burn … the targets must be saved for each day so
+real stats can be generated later."*
+
+- `_flRecordGoal` records TODAY's targets (`PUT /food-log/goals`, one row per day) whenever the
+  Macros page shows them, and `/food-log/stats` measures each day against the latest row
+  recorded on or before it; days before the first row use the first row. That was already so.
+- **Food Edit shows "Targets from this day"** (`_flGoalsCardHtml`, `_flGoalFor`): the goals in
+  force on the chosen day and their origin (set on this day / inherited from a date / first on
+  record), editable; **Save** writes a row on that date, which holds until the next recorded
+  change; **Remove this change** deletes the row recorded on that date
+  (`DELETE /food-log/goals/{date}`, behind `confirmGlobalDelete`). That is how an imported
+  log's periods get their targets: one row at each change point, never one per day.
+- Never recompute a past day against today's targets, and never backfill rows automatically:
+  the user says when the targets changed.
+- The food-log block is spelled identically in Workout and Peptide Tracker; change both.
+
 ## ⚠️ localStorage IS A CACHE — NEVER THE SOURCE OF TRUTH ⚠️
 localStorage is a read cache for performance only. It is NEVER the source of truth.
 
