@@ -19173,6 +19173,148 @@ console.log('\n── The app is titled with the person using it ─────
     typeof G._possessive === 'function');
 }
 
+// ── Onboarding tour + "What's new" card (2026-10-24) ─────────────────────────────
+// Built for Workout first ("I want a animated movie running as onboarding showing the main
+// features incl macro tracking" / "ask the onboarding questions first" / "in settings/More add a
+// button on top to re run the intro"), then Henrik said "yes" to the same here.
+console.log('\n── Onboarding tour + What\'s new ────────────────────────────');
+{
+  const S = G.TOUR_SCENES;
+  check('tour: five scenes, protocol → today → levels → macros → tabs',
+    S.map(s => s.id).join(',') === 'protocol,today,levels,macros,tabs');
+  check('  …each animated scene plays for at least 5 s and the last one stays',
+    S.slice(0, -1).every(s => s.ms >= 5000 && s.title && s.cap) && S[S.length - 1].ms === 0);
+  check('  …the tour step comes after the goals and stats questions and before the starting point',
+    G._OB_ORDER.indexOf('tour') > G._OB_ORDER.indexOf('goals') && G._OB_ORDER.indexOf('tour') > G._OB_ORDER.indexOf('stats') && G._OB_ORDER.indexOf('tour') < G._OB_ORDER.indexOf('start'));
+  check('  …obRender starts the tour on its step and stops it elsewhere', /if\(_OB_ORDER\[_obStep\]==='tour'\)_tourShow\(0\);else _tourStop\(\);/.test(String(G.obRender)));
+  check('  …finishing the wizard stops the timer', /^function obFinish\(\)\{\s*_tourStop\(\);/m.test(rawScript));
+  check('  …the welcome step promises the tour', /animated tour/.test(G._obHtml0()));
+  // The six bottom-bar tabs are the closing scene; the list is read from the HTML so it cannot go stale.
+  const navBar = [...html.matchAll(/id="navbtn-([a-z]+)"[^>]*><span class="navic">[^<]*<\/span>([^<]+)</g)].map(m => m[2].trim());
+  const tabNames = G.TOUR_TABS.map(t => t[1]);
+  check('TOUR_TABS names every button in the bottom bar, in order', navBar.length === 6 && navBar.join(',') === tabNames.join(','), navBar.join(',') + ' vs ' + tabNames.join(','));
+  check('  …and tells the user about the food log and the injection-site pictures',
+    G.TOUR_TABS.some(t => /photo/.test(t[2])) && G.TOUR_TABS.some(t => /injection site/.test(t[2])));
+
+  const saveOb = G._obData, saveTpl = G._protocolTemplates;
+  const scenes = h => [...h.matchAll(/data-tour-scene="([a-z]+)"/g)].map(m => m[1]);
+  // The protocol scene follows the goal ticked on step 3 and names the plan the backend's templates rank first.
+  G._protocolTemplates = [
+    { id: 'a', name: 'Recovery Plan A', tagline: 'Joints first', goals: ['recovery'], peptides: [{}, {}] },
+    { id: 'b', name: 'Hormone Plan B', tagline: 'Steady', goals: ['hormone'], trt: { compounds: [{}] } },
+    { id: 'c', name: 'Cut Plan C', tagline: 'Lean', goals: ['fatloss'], peptides: [{}] }];
+  G._obData = Object.assign({}, saveOb, { sex: 'male', goals: ['recovery'] });
+  let h = G._obHtmlTour();
+  check('male with the recovery goal: the scene starts the recovery plan the templates rank first',
+    scenes(h).join(',') === 'protocol,today,levels,macros,tabs' && /Goal<b>Recovery &amp; healing</.test(h) && /Recovery Plan A/.test(h) && /Joints first/.test(h) && /Start this protocol/.test(h) && !/Hormone Plan B/.test(h));
+  check('  …and counts its compounds', /<span>Compounds<\/span><b>2</.test(h));
+  G._obData = Object.assign({}, saveOb, { sex: 'female', goals: [] });
+  h = G._obHtmlTour();
+  check('female with no goal ticked: the fat-loss plan', /Goal<b>Fat loss</.test(h) && /Cut Plan C/.test(h) && !/Recovery Plan A/.test(h));
+  G._obData = Object.assign({}, saveOb, { sex: 'male', goals: [] });
+  h = G._obHtmlTour();
+  check('male with no goal ticked: the hormone plan', /Goal<b>Hormone health \/ TRT</.test(h) && /Hormone Plan B/.test(h));
+  G._protocolTemplates = [];
+  h = G._obHtmlTour();
+  check('no templates loaded yet: a neutral label, never a compound name written into this repo',
+    /Your suggested plan/.test(h) && /Vetted plan for your goal/.test(h) && /<span>Compounds<\/span><b>—</.test(h));
+  check('the scenes carry no compound, peptide or dose data of their own',
+    !/(mg|µg|IU)\b/.test(h.replace(/pmol\/L/g, '')) && !/(BPC|TB-?500|semaglutide|tirzepatide|testosterone|nebido|HGH|CJC|ipamorelin)/i.test(h));
+  check('today scene: three rows ticked, the ring fills, adherence shown',
+    (h.match(/tour-chk/g) || []).length === 3 && /tourRing/.test(h) && /Adherence this week/.test(h) && /Dose 1/.test(h));
+  check('levels scene: the curve draws in pmol/L with bloodwork on top', /Free T/.test(h) && /pmol\/L/.test(h) && /tourDraw/.test(h) && /bloodwork/.test(h) && !/mg\/day/.test(h));
+  check('macros scene: typing what you ate, Photo, Log, then the bars fill',
+    /What did you eat\?/.test(h) && /202 g steak/.test(h) && /Photo/.test(h) && /tourFill/.test(h) && /kcal/.test(h));
+  check('the closing scene and the list under it name every tab', tabNames.every(n => h.includes('<b>' + n + '</b>')) && /6 tabs along the bottom/.test(h));
+  G._protocolTemplates = saveTpl;
+
+  // The scheduler flips one scene on, moves the dot and shows the tab list only on the last scene.
+  const _els = {}; const trk = id => { const cls = new Set(); _els[id] = { _classes: cls, style: {}, classList: { add: c => cls.add(c), remove: c => cls.delete(c), contains: c => cls.has(c) }, set textContent(v) { this._t = v; }, get textContent() { return this._t || ''; } }; return _els[id]; };
+  const _gebi = G.document.getElementById; G.document.getElementById = id => _els[id] || _gebi(id);
+  const st = trk('tour-stage'), s0 = trk('tour-s0'), s2 = trk('tour-s2'), s4 = trk('tour-s4'), d2 = trk('tour-d2'), tl = trk('tour-tablist'), cap = trk('tour-cap');
+  G._tourShow(2);
+  check('_tourShow(2) shows scene 2 only and marks its dot', s2._classes.has('on') && !s0._classes.has('on') && !s4._classes.has('on') && d2._classes.has('active') && !tl._classes.has('on') && cap.textContent === S[2].cap);
+  G._tourShow(4);
+  check('  …the last scene shows the tab list under the stage', s4._classes.has('on') && !s2._classes.has('on') && tl._classes.has('on') && !d2._classes.has('active'));
+  G._tourShow(1);
+  check('  …and an earlier scene hides it again', !tl._classes.has('on'));
+  G._tourToggle();
+  check('tap pauses the animations', st._classes.has('paused') && G._tour.paused === true);
+  G._tourToggle();
+  check('  …a second tap resumes', !st._classes.has('paused') && G._tour.paused === false);
+  G._tourShow(4); G._tourToggle();
+  check('  …the last scene has nothing to pause', !st._classes.has('paused'));
+  G._tourStop();
+
+  // "Watch the intro again" at the top of Settings: tour only, nothing saved.
+  check('Settings opens with a "Watch the intro again" button, before the first section',
+    /id="tab-settings">\s*<button id="tour-replay-btn" onclick="openTour\(\)"[^>]*>[^<]*<span[^>]*>▶<\/span>Watch the intro again<\/button>/.test(html));
+  const ov = trk('onboarding-overlay'); ov.classList.add('hidden');
+  const dots = trk('ob-dots'), backB = trk('ob-back'), nextB = trk('ob-next'), skipB = trk('ob-skip-btn'), body = trk('ob-body');
+  Object.defineProperty(body, 'innerHTML', { set() {}, get() { return ''; } }); Object.defineProperty(dots, 'innerHTML', { set() {}, get() { return ''; } });
+  const ls = G.localStorage;
+  const _savedProfile = ls.getItem('pep-profile'), _savedSeen = ls.getItem('pep-whatsnew-seen');
+  ls.setItem('pep-profile', JSON.stringify({ onboarded: true, sex: 'female', goals: ['muscle'] })); ls.removeItem('pep-whatsnew-seen');
+  G._obData = Object.assign({}, saveOb, { sex: null, goals: [] });
+  const pushes = []; const _sp = G.pushPepSettingsToAgent; G.pushPepSettingsToAgent = kv => { pushes.push(kv); };
+  G.openTour();
+  check('openTour opens the overlay straight on the tour with the saved sex and goals',
+    !ov._classes.has('hidden') && G._OB_ORDER[G._obStep] === 'tour' && G._obData.sex === 'female' && G._obData.goals.join() === 'muscle' && G._obTourOnly === true);
+  check('  …no Back, no dots, and the button says Done', backB.style.display === 'none' && dots.style.visibility === 'hidden' && nextB.textContent === 'Done');
+  G.obNext();
+  check('  …Done closes it without saving anything', ov._classes.has('hidden') && G._obTourOnly === false && pushes.length === 0);
+  G.openTour(); G.obSkip();
+  check('  …Skip closes it the same way', ov._classes.has('hidden') && pushes.length === 0);
+  G.openOnboarding();
+  check('a real re-run of the wizard clears tour-only mode and starts at the welcome step', G._obTourOnly === false && G._obStep === 0 && dots.style.visibility === '');
+  ov.classList.add('hidden');
+
+  // What's new: rows, filter, dismissal, wiring.
+  const WN = G.WHATS_NEW;
+  check('WHATS_NEW: every row has a version, a title and a text', Array.isArray(WN) && WN.length >= 3 && WN.every(e => /^\d+\.\d+$/.test(e.v) && e.title && e.text));
+  check('  …sorted newest first', WN.every((e, i) => i === 0 || G._verNum(WN[i - 1].v) > G._verNum(e.v)));
+  check('  …none further ahead than the next bump', WN.every(e => G._verNum(e.v) <= G._verNum(G.VERSION) + 1));
+  check('  …it names the food log, the injection pictures and the tour',
+    WN.some(e => /Macros/.test(e.title) && /photo/.test(e.text)) && WN.some(e => /Injection-site/.test(e.title)) && WN.some(e => /tour/i.test(e.title) && /top of Settings/.test(e.text)));
+  const reached = WN.filter(e => G._verNum(e.v) <= G._verNum(G.VERSION));
+  check('version compare is numeric, not lexical', G._verNum('1.100') > G._verNum('1.99'));
+  // Nothing seen, no profile, no history: a brand-new account gets no card.
+  ls.removeItem('pep-profile'); ls.removeItem('pep-whatsnew-seen');
+  const histKeys = Object.keys(ls._s).filter(k => k.startsWith('proto-chk-')); const histSaved = {}; histKeys.forEach(k => { histSaved[k] = ls._s[k]; delete ls._s[k]; });
+  check('a brand-new account gets no card', G._whatsNewEntries().length === 0 && G._whatsNewHtml([]) === '');
+  ls.setItem('pep-profile', JSON.stringify({ onboarded: true }));
+  check('an onboarded account that never saw the card gets every row the build has reached', G._whatsNewEntries().length === reached.length);
+  ls.removeItem('pep-profile'); ls.setItem('proto-chk-2026-01-01', '1');
+  check('  …so does an account with dose history but no profile', G._whatsNewEntries().length === reached.length);
+  ls.removeItem('proto-chk-2026-01-01'); ls.setItem('pep-profile', JSON.stringify({ onboarded: true }));
+  h = G._whatsNewHtml(G._whatsNewEntries());
+  check('  …the card is titled WHAT\'S NEW with a Got it button and lists them', /WHAT'S NEW/.test(h) && /dismissWhatsNew\(\)/.test(h) && reached.every(e => h.includes(e.title)));
+  check('  …text is escaped', G._whatsNewHtml([{ v: '1.1', title: 'a<b', text: 'c&d' }]).includes('a&lt;b'));
+  ls.setItem('pep-whatsnew-seen', JSON.stringify(G.VERSION));
+  check('seen at the current version: nothing to show', G._whatsNewEntries().length === 0);
+  ls.removeItem('pep-whatsnew-seen'); pushes.length = 0;
+  const wn = trk('whats-new'); Object.defineProperty(wn, 'innerHTML', { set(v) { this._h = v; }, get() { return this._h || ''; } });
+  G.dismissWhatsNew();
+  check('Got it stores the current version as seen and pushes it to /user-settings', JSON.parse(ls.getItem('pep-whatsnew-seen')) === G.VERSION && pushes.length === 1 && pushes[0]['pep-whatsnew-seen'] === G.VERSION && wn.innerHTML === '');
+  check('Today builds the card right after the rings', /^function buildToday\(\)\{if\(typeof buildTodayRings==='function'\)buildTodayRings\(\);if\(typeof buildWhatsNewCard==='function'\)buildWhatsNewCard\(\);/m.test(fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)), 'tab-today.js'), 'utf8')));
+  check('the seen version comes back from the backend after a cache wipe',
+    String(G.syncPepSettingsFromAgent).includes("setData('pep-whatsnew-seen',String(s['pep-whatsnew-seen']))") && String(G.syncPepSettingsFromAgent).includes('buildWhatsNewCard()'));
+  check('the Today page has the slot the card renders into', /id="tab-today">\s*<div id="whats-new"><\/div>/.test(html));
+  // obFinish marks a NEW account as seen; an existing account re-running the wizard keeps its card.
+  ls.removeItem('pep-profile'); ls.removeItem('pep-whatsnew-seen'); pushes.length = 0;
+  G._obData = Object.assign({}, saveOb, { sex: 'male', goals: [], experience: '', startChoice: 'explore' });
+  G.obFinish();
+  check('finishing the wizard on a new account marks the current version as seen', JSON.parse(ls.getItem('pep-whatsnew-seen')) === G.VERSION && pushes.some(kv => kv['pep-whatsnew-seen'] === G.VERSION));
+  ls.setItem('pep-profile', JSON.stringify({ onboarded: true })); ls.removeItem('pep-whatsnew-seen'); pushes.length = 0;
+  G.obFinish();
+  check('re-running the wizard on an onboarded account does NOT mark the card seen', ls.getItem('pep-whatsnew-seen') === null && !pushes.some(kv => 'pep-whatsnew-seen' in kv));
+  // Restore.
+  G.pushPepSettingsToAgent = _sp; G.document.getElementById = _gebi; G._obData = saveOb;
+  if (_savedProfile === null) ls.removeItem('pep-profile'); else ls.setItem('pep-profile', _savedProfile);
+  if (_savedSeen === null) ls.removeItem('pep-whatsnew-seen'); else ls.setItem('pep-whatsnew-seen', _savedSeen);
+  Object.keys(histSaved).forEach(k => { ls._s[k] = histSaved[k]; });
+}
+
 console.log(`  ${passed} passed  ${failed} failed  ${passed+failed} total`);
 // Do NOT process.exit() here. ~137 checks live inside a `G.wizSave().then(...)`
 // block near the top of this file; that callback is a microtask and only runs after
