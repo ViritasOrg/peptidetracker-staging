@@ -1,5 +1,13 @@
 # Peptide Tracker Staging — Claude Instructions
 
+## Verify before you speak (Henrik's standing rule)
+
+- Before telling Henrik a cause, a fix, or a step to take, check the facts yourself first: read the config, logs, code, settings or live state. Never present a guess as the answer.
+- Never send him to repeat something he may already have done; check whether it is already done first.
+- If something can't be verified, say exactly what is unverified, instead of giving an instruction built on an assumption.
+- If you notice you'd have to write "let me find the actual cause instead of guessing", you already broke this rule: the checking belongs before the first answer, not after he pushes back.
+
+
 ## 🚦 THE WORKFLOW — STAGE, THEN PING. NEVER PROD. 🚦
 **Henrik, 2026-09-08, verbatim: "you must move code to Stage, and once ready for
 test ping me, but never ever push to prod!!"**
