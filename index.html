@@ -246,6 +246,9 @@
 </div>
 <script>
 const VERSION='1.881';
+// BUILD_NO counts staging builds and is never rewritten by Push to Prod (which resets VERSION to
+// prod's own counter). The What's new card is keyed to it, so its rows show in both apps (2026-11-01).
+const BUILD_NO='1.881';
 const IS_STAGING=(window.location.pathname||'').startsWith('/peptidetracker-staging');
 // Backend data namespace, sent as X-App-Id on every call. Staging gets its own so
 // testing here cannot write over production data — before 2026-08-01 both sent no
@@ -3267,7 +3270,7 @@ function _verNum(v){var p=String(v||'0').split('.');return (parseInt(p[0])||0)*1
 function _whatsNewEntries(){
   var seen=getData('pep-whatsnew-seen',null);
   if(seen===null){var _p=getData('pep-profile',null);var _hist=Object.keys(localStorage).some(function(k){return k.startsWith('proto-chk-');});if(!((_p&&_p.onboarded)||_hist))return [];seen='0';}
-  var cur=_verNum(VERSION);
+  var cur=_verNum(BUILD_NO);
   return WHATS_NEW.filter(function(e){var n=_verNum(e.v);return n>_verNum(seen)&&n<=cur;});
 }
 function _whatsNewHtml(entries){
@@ -3279,7 +3282,7 @@ function _whatsNewHtml(entries){
   return h+'</div>';
 }
 function buildWhatsNewCard(){var el=document.getElementById('whats-new');if(!el)return;el.innerHTML=_whatsNewHtml(_whatsNewEntries());}
-function dismissWhatsNew(){setData('pep-whatsnew-seen',VERSION);pushPepSettingsToAgent({'pep-whatsnew-seen':VERSION});buildWhatsNewCard();}
+function dismissWhatsNew(){setData('pep-whatsnew-seen',BUILD_NO);pushPepSettingsToAgent({'pep-whatsnew-seen':BUILD_NO});buildWhatsNewCard();}
 // Rank the backend starter templates by the goals picked in the flow (same matching
 // rule as openTemplatePicker) — goal matches first, so the top cards are tailored.
 function _obRankedTemplates(){
@@ -3335,7 +3338,7 @@ function obFinish(){
   kv['pep-profile']=profile;
   // A NEW account has just been shown every feature by the tour, so nothing is new. An existing
   // account re-running the wizard keeps its What's new card.
-  if(!_wasOnboarded&&getData('pep-whatsnew-seen',null)===null){setData('pep-whatsnew-seen',VERSION);kv['pep-whatsnew-seen']=VERSION;}
+  if(!_wasOnboarded&&getData('pep-whatsnew-seen',null)===null){setData('pep-whatsnew-seen',BUILD_NO);kv['pep-whatsnew-seen']=BUILD_NO;}
   if(Object.keys(kv).length)pushPepSettingsToAgent(kv);
   buildWhatsNewCard();
   document.getElementById('onboarding-overlay').classList.add('hidden');

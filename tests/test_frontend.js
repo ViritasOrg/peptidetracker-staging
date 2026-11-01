@@ -22,6 +22,7 @@ const patchedScript = rawScript
 .replace('const THEMES=',           'var THEMES=')
   .replace('const STACK_RULES=',      'var STACK_RULES=')
   .replace('const WEEKLY_DEFAULT=',   'var WEEKLY_DEFAULT=')
+  .replace("const BUILD_NO='",       "var BUILD_NO='")
   .replace("const VERSION='",         "var VERSION='")
   .replace('const APP_ID=',          'var APP_ID=')
   .replace('const AGENT_URL=',        'var AGENT_URL=')
@@ -19273,10 +19274,10 @@ console.log('\n── Onboarding tour + What\'s new ─────────�
   const WN = G.WHATS_NEW;
   check('WHATS_NEW: every row has a version, a title and a text', Array.isArray(WN) && WN.length >= 3 && WN.every(e => /^\d+\.\d+$/.test(e.v) && e.title && e.text));
   check('  …sorted newest first', WN.every((e, i) => i === 0 || G._verNum(WN[i - 1].v) > G._verNum(e.v)));
-  check('  …none further ahead than the next bump', WN.every(e => G._verNum(e.v) <= G._verNum(G.VERSION) + 1));
+  check('  …none further ahead than the next bump', WN.every(e => G._verNum(e.v) <= G._verNum(G.BUILD_NO) + 1));
   check('  …it names the food log, the injection pictures and the tour',
     WN.some(e => /Macros/.test(e.title) && /photo/.test(e.text)) && WN.some(e => /Injection-site/.test(e.title)) && WN.some(e => /tour/i.test(e.title) && /top of Settings/.test(e.text)));
-  const reached = WN.filter(e => G._verNum(e.v) <= G._verNum(G.VERSION));
+  const reached = WN.filter(e => G._verNum(e.v) <= G._verNum(G.BUILD_NO));
   check('version compare is numeric, not lexical', G._verNum('1.100') > G._verNum('1.99'));
   // Nothing seen, no profile, no history: a brand-new account gets no card.
   ls.removeItem('pep-profile'); ls.removeItem('pep-whatsnew-seen');
@@ -19284,18 +19285,24 @@ console.log('\n── Onboarding tour + What\'s new ─────────�
   check('a brand-new account gets no card', G._whatsNewEntries().length === 0 && G._whatsNewHtml([]) === '');
   ls.setItem('pep-profile', JSON.stringify({ onboarded: true }));
   check('an onboarded account that never saw the card gets every row the build has reached', G._whatsNewEntries().length === reached.length);
+  // Push to Prod resets VERSION to prod's own counter (1.243 against staging's 1.326, 2026-11-01): the rows
+  // are keyed to BUILD_NO, so the promoted copy shows the same rows and its tests pass.
+  { const _pv = G.VERSION; G.VERSION = '1.0';
+    check('a promoted copy (VERSION reset to prod\'s counter) still shows every reached row', G._whatsNewEntries().length === reached.length);
+    G.VERSION = _pv; }
+  check('Version Bump keeps BUILD_NO in step with VERSION', /const BUILD_NO='\[0-9\.\]\*'\/const BUILD_NO='\$\{NEW\}'/.test(require('fs').readFileSync(require('path').join(__dirname, '../.github/workflows/version-bump.yml'), 'utf8')));
   ls.removeItem('pep-profile'); ls.setItem('proto-chk-2026-01-01', '1');
   check('  …so does an account with dose history but no profile', G._whatsNewEntries().length === reached.length);
   ls.removeItem('proto-chk-2026-01-01'); ls.setItem('pep-profile', JSON.stringify({ onboarded: true }));
   h = G._whatsNewHtml(G._whatsNewEntries());
   check('  …the card is titled WHAT\'S NEW with a Got it button and lists them', /WHAT'S NEW/.test(h) && /dismissWhatsNew\(\)/.test(h) && reached.every(e => h.includes(e.title)));
   check('  …text is escaped', G._whatsNewHtml([{ v: '1.1', title: 'a<b', text: 'c&d' }]).includes('a&lt;b'));
-  ls.setItem('pep-whatsnew-seen', JSON.stringify(G.VERSION));
+  ls.setItem('pep-whatsnew-seen', JSON.stringify(G.BUILD_NO));
   check('seen at the current version: nothing to show', G._whatsNewEntries().length === 0);
   ls.removeItem('pep-whatsnew-seen'); pushes.length = 0;
   const wn = trk('whats-new'); Object.defineProperty(wn, 'innerHTML', { set(v) { this._h = v; }, get() { return this._h || ''; } });
   G.dismissWhatsNew();
-  check('Got it stores the current version as seen and pushes it to /user-settings', JSON.parse(ls.getItem('pep-whatsnew-seen')) === G.VERSION && pushes.length === 1 && pushes[0]['pep-whatsnew-seen'] === G.VERSION && wn.innerHTML === '');
+  check('Got it stores the current version as seen and pushes it to /user-settings', JSON.parse(ls.getItem('pep-whatsnew-seen')) === G.BUILD_NO && pushes.length === 1 && pushes[0]['pep-whatsnew-seen'] === G.BUILD_NO && wn.innerHTML === '');
   check('Today builds the card right after the rings', /^function buildToday\(\)\{if\(typeof buildTodayRings==='function'\)buildTodayRings\(\);if\(typeof buildWhatsNewCard==='function'\)buildWhatsNewCard\(\);/m.test(fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)), 'tab-today.js'), 'utf8')));
   check('the seen version comes back from the backend after a cache wipe',
     String(G.syncPepSettingsFromAgent).includes("setData('pep-whatsnew-seen',String(s['pep-whatsnew-seen']))") && String(G.syncPepSettingsFromAgent).includes('buildWhatsNewCard()'));
@@ -19304,7 +19311,7 @@ console.log('\n── Onboarding tour + What\'s new ─────────�
   ls.removeItem('pep-profile'); ls.removeItem('pep-whatsnew-seen'); pushes.length = 0;
   G._obData = Object.assign({}, saveOb, { sex: 'male', goals: [], experience: '', startChoice: 'explore' });
   G.obFinish();
-  check('finishing the wizard on a new account marks the current version as seen', JSON.parse(ls.getItem('pep-whatsnew-seen')) === G.VERSION && pushes.some(kv => kv['pep-whatsnew-seen'] === G.VERSION));
+  check('finishing the wizard on a new account marks the current version as seen', JSON.parse(ls.getItem('pep-whatsnew-seen')) === G.BUILD_NO && pushes.some(kv => kv['pep-whatsnew-seen'] === G.BUILD_NO));
   ls.setItem('pep-profile', JSON.stringify({ onboarded: true })); ls.removeItem('pep-whatsnew-seen'); pushes.length = 0;
   G.obFinish();
   check('re-running the wizard on an onboarded account does NOT mark the card seen', ls.getItem('pep-whatsnew-seen') === null && !pushes.some(kv => 'pep-whatsnew-seen' in kv));
