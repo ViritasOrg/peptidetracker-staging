@@ -32,6 +32,7 @@
   <div class="tabs">
     <div class="tab active" id="tab-btn-today"    onclick="switchTab('today',this)">Today</div>
     <div class="tab"        id="tab-btn-stacks"   onclick="switchTab('stacks',this)">Protocols</div>
+    <div class="tab"        id="tab-btn-meds"     onclick="switchTab('meds',this)">Medication</div>
     <div class="tab"        id="tab-btn-blood"    onclick="switchTab('blood',this)">Levels</div>
     <div class="tab"        id="tab-btn-tcalc"   onclick="switchTab('tcalc',this)">T-Calc</div>
     <div class="tab"        id="tab-btn-thist"   onclick="switchTab('thist',this)">T-History</div>
@@ -52,10 +53,13 @@
     <div id="today-alerts" style="display:flex;flex-direction:column;gap:8px;"></div>
     <div id="today-rings"></div>
     <div class="card">
-      <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title" id="today-title">TODAY'S DOSES</div></div><span class="card-badge badge-today" id="today-badge">0 / 0</span></div>
+      <div class="card-header" onclick="toggleTodaySec('doses')" style="cursor:pointer"><div class="card-title-wrap"><span id="today-chev-doses" style="color:var(--muted2);font-size:12px;width:12px;display:inline-block">▾</span><div class="card-dot" style="background:var(--accent)"></div><div class="card-title" id="today-title">TODAY'S DOSES</div></div><span class="card-badge badge-today" id="today-badge">0 / 0</span></div>
+      <div id="today-sec-doses">
       <div id="today-cycle-info" style="font-size:11px;color:var(--muted2);padding:0 16px 10px;line-height:1.5;"></div>
       <div class="checklist" id="today-checklist"><div class="empty"><div class="empty-icon">💉</div>Nothing scheduled</div></div>
+      </div>
     </div>
+    <div id="today-meds"></div>
     <div id="today-supplements"></div>
     <div id="today-log-draw" style="margin-bottom:8px"></div>
     <button class="reset-btn" onclick="openPastInjection()" style="margin-bottom:8px">+ Log a past injection</button>
@@ -73,6 +77,7 @@
     <div class="card"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent2)"></div><div class="card-title">WEEKLY PATTERN</div></div></div><div class="card-body" id="schedule-body"></div></div>
   </div>
   <div class="content hidden" id="tab-macros">
+    <div id="water-log-body"></div>
     <div id="food-log-body"></div>
     <div id="macros-body"></div>
   </div>
@@ -205,6 +210,7 @@
       </div>
     </div>
   </div>
+  <div class="content hidden" id="tab-meds"><div id="meds-body"></div></div>
   <div class="content hidden" id="tab-supplements"><div id="supplements-body"></div></div>
   <div class="content hidden" id="tab-recon"><div id="recon-body"></div></div>
   <div class="content hidden" id="tab-storage"></div>
@@ -415,16 +421,16 @@ async function toggleAutoNext(){
 }
 let _stackViewTab='peptides';let _editInnerTab='peptides';
 let _reconStackIdx=0;let _reconStackPicked=false;let _reconState={};
-const TAB_LABELS=Object.assign({today:'Today',stacks:'Protocols',blood:'Levels',tcalc:'T-Calc',thist:'T-History',tdose:'Dose Finder',labs:'Labs',supplements:'Supplements',recon:'Recon',schedule:'Schedule',macros:'Macros',foodedit:'Food Edit',timeline:'Timeline',body:'Body Comp'},IS_STAGING?{storage:'Storage'}:{});
-const TAB_DEFAULTS=Object.assign({today:true,stacks:true,blood:true,tcalc:true,thist:true,tdose:true,labs:true,supplements:true,recon:true,schedule:false,macros:true,foodedit:true,timeline:true,body:true},IS_STAGING?{storage:true}:{});
+const TAB_LABELS=Object.assign({today:'Today',stacks:'Protocols',blood:'Levels',tcalc:'T-Calc',thist:'T-History',tdose:'Dose Finder',labs:'Labs',meds:'Medication',supplements:'Supplements',recon:'Recon',schedule:'Schedule',macros:'Macros',foodedit:'Food Edit',timeline:'Timeline',body:'Body Comp'},IS_STAGING?{storage:'Storage'}:{});
+const TAB_DEFAULTS=Object.assign({today:true,stacks:true,blood:true,tcalc:true,thist:true,tdose:true,labs:true,meds:true,supplements:true,recon:true,schedule:false,macros:true,foodedit:true,timeline:true,body:true},IS_STAGING?{storage:true}:{});
 // Two-tier navigation (usability study): 6 bottom "primary" tabs, each grouping
 // several of the existing destinations as a secondary sub-tab strip. Every legacy
 // tab id and switchTab(id,el) call is preserved — this is an additive nav layer.
-const PRIMARY_GROUPS={today:['today','macros','foodedit','schedule'],plan:['stacks','supplements','recon'],timeline:['timeline'],levels:['blood','tcalc','thist','tdose'],labs:['labs','body'],more:['settings','storage']};
+const PRIMARY_GROUPS={today:['today','macros','foodedit','schedule'],plan:['stacks','meds','supplements','recon'],timeline:['timeline'],levels:['blood','tcalc','thist','tdose'],labs:['labs','body'],more:['settings','storage']};
 const PRIMARY_LABELS={today:'Today',plan:'Plan',timeline:'Timeline',levels:'Levels',labs:'Labs',more:'More'};
 const PRIMARY_ORDER=['today','plan','timeline','levels','labs','more'];
 // Human surface names for the sub-tabs (T-Calc→Testosterone, Recon→Reconstitution…).
-const SUBTAB_LABELS={today:'Today',supplements:'Supplements',schedule:'Schedule',stacks:'Protocols',timeline:'Timeline',recon:'Reconstitution',blood:'Blood Levels',tcalc:'Testosterone',thist:'T-History',tdose:'Dose Finder',labs:'Bloodwork',body:'Body Comp',macros:'Macros',foodedit:'Food Edit',settings:'Settings',storage:'Storage'};
+const SUBTAB_LABELS={today:'Today',meds:'Medication',supplements:'Supplements',schedule:'Schedule',stacks:'Protocols',timeline:'Timeline',recon:'Reconstitution',blood:'Blood Levels',tcalc:'Testosterone',thist:'T-History',tdose:'Dose Finder',labs:'Bloodwork',body:'Body Comp',macros:'Macros',foodedit:'Food Edit',settings:'Settings',storage:'Storage'};
 function primaryOf(id){for(var _p in PRIMARY_GROUPS){if(PRIMARY_GROUPS[_p].indexOf(id)>=0)return _p;}return '';}
 let _tabVis={};let _currentTab='today';let _currentPrimary='today';let _lastSub={};
 const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';let _googleToken=localStorage.getItem('google_token')||'';let _sessionToken=localStorage.getItem('session_token')||'';function authHeaders(extra){const h={};if(APP_ID)h['X-App-Id']=APP_ID;const _t=_sessionToken||_googleToken;if(_t)h['Authorization']='Bearer '+_t;return extra?Object.assign({},h,extra):h;}
@@ -1119,7 +1125,7 @@ function lsDbgCopy(i,btn){var k=_lsDbgKeys[i];if(k==null)return;var v=localStora
 function lsDbgCopyAll(btn){var out={};for(var _ci=0;_ci<localStorage.length;_ci++){var _ck=localStorage.key(_ci);if(!_ck)continue;var _cv=localStorage.getItem(_ck)||'';try{out[_ck]=JSON.parse(_cv);}catch(e){out[_ck]=_cv;}}_lsCopyText(JSON.stringify(out,null,2),btn||document.getElementById('lsdbg-copy-all'));}
 function lsDbgClearAll(){if(!confirm('Clear all local cache? The app will reload and re-sync from the backend. You will stay signed in.'))return;var _t=window.localStorage.getItem('google_token');var _e=window.localStorage.getItem('google_email');localStorage.clear();if(_t)window.localStorage.setItem('google_token',_t);if(_e)window.localStorage.setItem('google_email',_e);window.location.reload();}
 function _setPrimaryActive(p){PRIMARY_ORDER.forEach(function(pp){var b=document.getElementById('navbtn-'+pp);if(b){if(pp===p)b.classList.add('active');else b.classList.remove('active');}});}
-function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id);var _pr=primaryOf(id);if(_pr){_currentPrimary=_pr;_lastSub[_pr]=id;try{localStorage.setItem('pep-last-sub-'+_pr,id);}catch(e){}_setPrimaryActive(_pr);_applySubtabVis(_pr);}document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);if(id==='settings'){loadSettings();buildFlKeyCard();}if(id==='storage')buildStoragePage();if(id==='macros'){buildFoodLog();loadMacros();}if(id==='foodedit')buildFoodEdit();if(id==='timeline')buildTimeline();if(id==='recon')renderRecon();if(id==='supplements')buildSupplements();if(id==='schedule')buildSchedule();if(id==='stacks'){buildStackStore();openCyclesTab();}if(id==='blood')buildBloodLevels();if(id==='tcalc')buildTCalc();if(id==='thist')buildTHist();if(id==='tdose')buildTDose();if(id==='labs')buildLabs();if(id==='body'){var wi=document.getElementById('bc-weight-in');var hi=document.getElementById('bc-height-in');if(wi){var sw=localStorage.getItem('user_weight');var sh=localStorage.getItem('user_height');if(sw)wi.value=sw;if(sh)hi.value=sh;}setBioSex(localStorage.getItem('user_sex')||'male');var ai=document.getElementById('bc-age-in');if(ai){var sa=localStorage.getItem('user_age');if(sa)ai.value=sa;}}}
+function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id);var _pr=primaryOf(id);if(_pr){_currentPrimary=_pr;_lastSub[_pr]=id;try{localStorage.setItem('pep-last-sub-'+_pr,id);}catch(e){}_setPrimaryActive(_pr);_applySubtabVis(_pr);}document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);if(id==='settings'){loadSettings();buildFlKeyCard();}if(id==='storage')buildStoragePage();if(id==='macros'){buildWaterLog();buildFoodLog();loadMacros();}if(id==='foodedit')buildFoodEdit();if(id==='timeline')buildTimeline();if(id==='recon')renderRecon();if(id==='meds')buildMeds();if(id==='supplements')buildSupplements();if(id==='schedule')buildSchedule();if(id==='stacks'){buildStackStore();openCyclesTab();}if(id==='blood')buildBloodLevels();if(id==='tcalc')buildTCalc();if(id==='thist')buildTHist();if(id==='tdose')buildTDose();if(id==='labs')buildLabs();if(id==='body'){var wi=document.getElementById('bc-weight-in');var hi=document.getElementById('bc-height-in');if(wi){var sw=localStorage.getItem('user_weight');var sh=localStorage.getItem('user_height');if(sw)wi.value=sw;if(sh)hi.value=sh;}setBioSex(localStorage.getItem('user_sex')||'male');var ai=document.getElementById('bc-age-in');if(ai){var sa=localStorage.getItem('user_age');if(sa)ai.value=sa;}}}
 
 function logout(){_googleToken='';_sessionToken='';localStorage.removeItem('google_token');localStorage.removeItem('google_email');localStorage.removeItem('session_token');localStorage.removeItem('pt-owner-name');applyOwnerName('');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('signin-screen').classList.remove('hidden');}
 function _fmtTokExp(tok){try{var p=JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));if(!p.exp)return null;return{exp:new Date(p.exp*1000),leftMin:Math.round((p.exp*1000-Date.now())/60000)};}catch(e){return null;}}
@@ -3154,8 +3160,8 @@ var TOUR_SCENES=[
 ];
 // One entry per button in the bottom bar. A test reads the bar and fails when one is missing here.
 var TOUR_TABS=[
-  ['◉','Today','Your daily checklist: doses due, supplements, adherence. Tick a dose and pick the injection site on a body like yours.'],
-  ['▤','Plan','Your protocols, supplements and reconstitution math.'],
+  ['◉','Today','Your daily checklist: doses due, medication, supplements, adherence. Tick a dose and pick the injection site on a body like yours.'],
+  ['▤','Plan','Your protocols, medication, supplements and reconstitution math. Add a medicine by photographing its package.'],
   ['▦','Timeline','Every cycle, dose and supplement drawn across time.'],
   ['∿','Levels','Predicted plasma levels from your protocol, with your bloodwork on top.'],
   ['⬡','Labs','Bloodwork results and body composition.'],
@@ -3249,6 +3255,7 @@ function _tourToggle(){var st=document.getElementById('tour-stage');if(!st||TOUR
 // seen version on an account that is onboarded or has history means the card never existed for it
 // yet: it gets the whole list. Key a row to the version its PR ships AS (main's version.json + 1).
 var WHATS_NEW=[
+  {v:'1.875',title:'Medication and water',text:'Plan → Medication: take a photo of a medicine package to fill in its name and strength, pick how many tablets a day, and tick it on Today. Macros now logs water, with a daily target worked out from your body weight. Today\'s sections fold: tap a heading.'},
   {v:'1.863',title:'Macro targets per day',text:'Food Edit shows the targets in force on any day and lets you set them from that day onward, so the history card measures each day against the right goals. Use it to fill in the periods of an imported log.'},
   {v:'1.862',title:'Animated tour',text:'The Setup Wizard now ends with a short animated tour: starting a protocol, ticking doses, your levels and tracking macros. Watch it again from the button at the top of Settings.'},
   {v:'1.847',title:'Macros: AI food logging',text:'More → Macros. Type what you ate, or take a photo of the food or its label, and the calories and macros are estimated and saved against your targets. Food Edit fixes an entry.'},
@@ -3404,7 +3411,7 @@ function buildAppearanceCard(){
 }
 function buildRefsCard(){var card=document.getElementById('s-refs-card');if(!card)return;var n=Object.keys(_CITATIONS||{}).length;card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'+sSecHdr('refs','Research & References')+sSecBody('refs')+'<div style="padding:14px 16px;"><div style="font-size:12px;color:var(--muted2);margin-bottom:12px;line-height:1.55">Every dose tier in this app carries an evidence grade and the sources behind it. '+(n?(n+' references loaded.'):'References load with the compound catalogue.')+'</div>'+'<div style="display:flex;gap:8px;flex-wrap:wrap">'+'<button onclick="openAllReferences()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">All references</button>'+'<button onclick="openGradeLegend()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Evidence grades</button>'+'</div></div></div></div>';}
 function buildCacheCard(){var card=document.getElementById('s-cache-card');if(!card)return;card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'+sSecHdr('cache','Local Cache')+sSecBody('cache')+'<div style="padding:14px 16px;"><div style="font-size:12px;color:var(--muted2);margin-bottom:12px;">All data is stored on the server. Clear the local cache to force a full re-sync.</div><button onclick="wipeLocalCache()" style="background:var(--danger,#ff3c3c);color:#fff;border:none;border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Wipe local cache</button></div></div></div>';}
-function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();(function(){if(localStorage.getItem('pep-dose-dedup-v1'))return;function _ndi(id){var _m=id.match(/^(.+)_(\d{4}-\d{1,2}-\d{1,2})$/);if(!_m)return id;var _p=_m[2].split('-');return _m[1]+'_'+_p[0]+'-'+('0'+_p[1]).slice(-2)+'-'+('0'+_p[2]).slice(-2);}var _ks=[];for(var _i=0;_i<localStorage.length;_i++){var _k=localStorage.key(_i);if(_k&&_k.startsWith('proto-chk-'))_ks.push(_k);}_ks.forEach(function(k){var _d;try{_d=JSON.parse(localStorage.getItem(k)||'[]');}catch(e){return;}if(!Array.isArray(_d))return;var _seen=new Set();var _dd=[];_d.forEach(function(id){var _n=_ndi(id);if(!_seen.has(_n)){_seen.add(_n);_dd.push(_n);}});if(_dd.length!==_d.length)localStorage.setItem(k,JSON.stringify(_dd));});localStorage.setItem('pep-dose-dedup-v1','1');})();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('signin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();syncFeaturesFromAgent();syncProtocolTemplates();syncSafetyNotes();syncCompoundNicknames();syncEnhancedCompoundsFromAgent();if(typeof _wizUserIsFemale==='function'&&_wizUserIsFemale()&&typeof syncFemaleAdviceFromAgent==='function')syncFemaleAdviceFromAgent();if(typeof syncCitations==='function')syncCitations();if(typeof syncEscalationFromAgent==='function')syncEscalationFromAgent();if(typeof syncCycleTemplatesFromAgent==='function')syncCycleTemplatesFromAgent();if(typeof syncCycleBloodworkRecsFromAgent==='function')syncCycleBloodworkRecsFromAgent();syncSupplementsFromAgent();syncSupplementLogFromAgent();if(typeof syncLabMarkersFromAgent==='function')syncLabMarkersFromAgent();if(typeof _blSyncPK==='function')_blSyncPK();if(typeof _tcFetchBwEntries==='function'&&typeof _tcBwEntries!=='undefined'&&_tcBwEntries===null&&!_tcBwLoading){_tcBwLoading=true;_tcFetchBwEntries();}checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();(function(){var _mpk='pep-mp-'+MILESTONES.length;if(!localStorage.getItem(_mpk))pushMilestonesToBackend().then(function(){localStorage.setItem(_mpk,'1');}).catch(function(){});})();applySubtabLabels();initTabVis();(function(){PRIMARY_ORDER.forEach(function(p){var s=localStorage.getItem('pep-last-sub-'+p);if(s)_lastSub[p]=s;});var _lt=localStorage.getItem('pep-last-tab');var startTab=(_lt&&_tabVis[_lt]!==false&&document.getElementById('tab-btn-'+_lt))?_lt:'today';var startPrimary=primaryOf(startTab)||'today';_lastSub[startPrimary]=startTab;switchPrimary(startPrimary);})();_initSwipeNav();}
+function init(){document.getElementById('hdr-day').textContent=NOW.getDate()+' '+NOW.toLocaleString('en-GB',{month:'short'});document.getElementById('hdr-weekday').textContent=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][TODAY_DOW];checkAgentStatus();checkSyncStatus();checkAppVersion();(function(){if(localStorage.getItem('pep-dose-dedup-v1'))return;function _ndi(id){var _m=id.match(/^(.+)_(\d{4}-\d{1,2}-\d{1,2})$/);if(!_m)return id;var _p=_m[2].split('-');return _m[1]+'_'+_p[0]+'-'+('0'+_p[1]).slice(-2)+'-'+('0'+_p[2]).slice(-2);}var _ks=[];for(var _i=0;_i<localStorage.length;_i++){var _k=localStorage.key(_i);if(_k&&_k.startsWith('proto-chk-'))_ks.push(_k);}_ks.forEach(function(k){var _d;try{_d=JSON.parse(localStorage.getItem(k)||'[]');}catch(e){return;}if(!Array.isArray(_d))return;var _seen=new Set();var _dd=[];_d.forEach(function(id){var _n=_ndi(id);if(!_seen.has(_n)){_seen.add(_n);_dd.push(_n);}});if(_dd.length!==_d.length)localStorage.setItem(k,JSON.stringify(_dd));});localStorage.setItem('pep-dose-dedup-v1','1');})();buildWeekStrip();buildToday();buildSchedule();buildTimeline();initBodyComp();document.getElementById('header-version').textContent='v'+VERSION;const _pv=document.getElementById('signin-version');if(_pv)_pv.textContent='v'+VERSION;setTimeout(function(){buildWeekStrip();buildToday();},100);checkAgentStatus();checkAppVersion();syncPeptideLogFromAgent();syncPepSettingsFromAgent();syncFeaturesFromAgent();syncProtocolTemplates();syncSafetyNotes();syncCompoundNicknames();syncEnhancedCompoundsFromAgent();if(typeof _wizUserIsFemale==='function'&&_wizUserIsFemale()&&typeof syncFemaleAdviceFromAgent==='function')syncFemaleAdviceFromAgent();if(typeof syncCitations==='function')syncCitations();if(typeof syncEscalationFromAgent==='function')syncEscalationFromAgent();if(typeof syncCycleTemplatesFromAgent==='function')syncCycleTemplatesFromAgent();if(typeof syncCycleBloodworkRecsFromAgent==='function')syncCycleBloodworkRecsFromAgent();syncSupplementsFromAgent();syncSupplementLogFromAgent();if(typeof syncMedsFromAgent==='function'){syncMedsFromAgent();syncMedLogFromAgent();}if(typeof syncLabMarkersFromAgent==='function')syncLabMarkersFromAgent();if(typeof _blSyncPK==='function')_blSyncPK();if(typeof _tcFetchBwEntries==='function'&&typeof _tcBwEntries!=='undefined'&&_tcBwEntries===null&&!_tcBwLoading){_tcBwLoading=true;_tcFetchBwEntries();}checkSyncStatus();setTimeout(function(){if(_syncPending){_syncPending=false;buildToday();}},7000);loadUserStacks();loadUserWeight();(function(){var _mpk='pep-mp-'+MILESTONES.length;if(!localStorage.getItem(_mpk))pushMilestonesToBackend().then(function(){localStorage.setItem(_mpk,'1');}).catch(function(){});})();applySubtabLabels();initTabVis();(function(){PRIMARY_ORDER.forEach(function(p){var s=localStorage.getItem('pep-last-sub-'+p);if(s)_lastSub[p]=s;});var _lt=localStorage.getItem('pep-last-tab');var startTab=(_lt&&_tabVis[_lt]!==false&&document.getElementById('tab-btn-'+_lt))?_lt:'today';var startPrimary=primaryOf(startTab)||'today';_lastSub[startPrimary]=startTab;switchPrimary(startPrimary);})();_initSwipeNav();}
 function initTabVis(){const saved=getData('proto-tab-vis',{});_tabVis=Object.assign({},TAB_DEFAULTS,saved);applyTabVis();}
 async function pushPepSettingsToAgent(kv){try{const r=await fetch(AGENT_URL+'/user-settings',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({settings:kv})});if(!r.ok)_logHttp('pushPepSettings',r.status,'/user-settings');}catch(e){_logErr('pushPepSettings',e);}}
 // Seed the staging environment with a copy of this account's production data.
@@ -3933,6 +3940,69 @@ async function flEditDelete(id){if(!confirmGlobalDelete('this food entry'))retur
   try{var r=await fetch(AGENT_URL+'/food-log/'+encodeURIComponent(id),{method:'DELETE',headers:authHeaders()});if(!r.ok){alert('Not deleted: the server answered '+r.status+'.');return;}}catch(e){alert('Not deleted: could not reach the server.');return;}
   buildFoodEdit(_flEditDate);}
 // ── end food log ──
+// ── Water (Macros) ────────────────────────────────────────────────────────────
+// Henrik, 2026-11-01: "add water intake to macros tracking". The same block is in Peptide
+// Tracker and Workout, which share one log on the backend (/water-log). The daily target is
+// served by the backend (/water-log/target, Yamada 2022 eq. 1 from the user's weight, sex and
+// age; research in claude-agent-backend docs/enhanced-bodybuilding/22-water-intake.md) unless
+// the user has typed their own (user setting "water-goal-ml"). Nothing here lives only on the device.
+var _wlRows=[],_wlTarget=null,_wlOwn=0,_wlBusy=false,_wlErr='';
+var WL_STEPS=[250,500];
+function _wlProfile(){
+  if(typeof _userProfile==='function'){var p=_userProfile();return{weight:p.weight_kg||0,sex:p.sex||'male',age:p.age||0};}
+  var w=(typeof getData==='function'?getData('wkt-profile',{}):{})||{};
+  return{weight:parseFloat(w.weight)||0,sex:w.gender==='female'?'female':'male',age:parseInt(w.age)||0};
+}
+function _wlTotal(rows){return(rows||[]).reduce(function(a,r){return a+(Number(r.ml)||0);},0);}
+function _wlL(ml){return(Math.round(ml/100)/10).toFixed(1)+' L';}
+function _wlGoal(){return _wlOwn>0?_wlOwn:(_wlTarget&&_wlTarget.ml)||0;}
+function _wlHtml(){
+  var tot=_wlTotal(_wlRows),goal=_wlGoal();
+  var pct=goal>0?Math.min(100,Math.round(tot/goal*100)):0;
+  var basis=_wlOwn>0?'your own target':(_wlTarget?'from your body weight, sex and age (Yamada 2022)':'add your weight in your profile to get a target');
+  var h='<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><span style="font-size:12px;color:var(--muted)">Water today</span>'+
+    '<span style="font-size:15px;color:var(--text)"><b>'+_wlL(tot)+'</b>'+(goal?' / '+_wlL(goal):'')+'</span></div>';
+  if(goal)h+='<div style="height:8px;border-radius:4px;background:var(--surface2);margin:8px 0 4px;overflow:hidden"><div style="height:100%;width:'+pct+'%;background:#4fb3ff"></div></div>';
+  h+='<div style="font-size:11px;color:var(--muted);margin-bottom:10px">'+(goal?'Target '+_wlL(goal)+', ':'')+basis+' · <span onclick="wlSetOwn()" style="text-decoration:underline;cursor:pointer">'+(_wlOwn>0?'Change':'Set my own')+'</span></div>';
+  h+='<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+    (_wlBusy?'<div style="font-size:14px;color:var(--muted);padding:10px 0">Saving…</div>':
+      WL_STEPS.map(function(ml){return _flBtn('+ '+ml+' ml','wlAdd('+ml+')',ml===WL_STEPS[0]);}).join('')+
+      (_wlRows.length?_flBtn('Undo last','wlUndo()',false):''))+'</div>';
+  if(_wlErr)h+='<div style="margin-top:8px;font-size:13px;color:var(--danger,#ff3b30)">'+_flEsc(_wlErr)+'</div>';
+  return _flCard(h);
+}
+function _wlRender(){var el=document.getElementById('water-log-body');if(el)el.innerHTML=_wlHtml();}
+// The latest WEIGHED weight wins over the profile's weight, which is only typed once
+// (2026-11-01: the profile still said 85.2 kg while the weight log said 88.0).
+function _wlDateNum(d){var p=String(d||'').split('-');return p.length===3?(+p[0])*10000+(+p[1])*100+(+p[2]):0;}
+function _wlLatestWeight(rows){var best=null;(rows||[]).forEach(function(r){var w=parseFloat(r&&(r.weight!=null?r.weight:r.kg));if(!(w>=25))return;if(!best||_wlDateNum(r.date)>_wlDateNum(best.date))best={date:r.date,weight:w};});return best;}
+async function _wlLoadTarget(){var p=_wlProfile();_wlTarget=null;
+  try{var rw=await fetch(AGENT_URL+'/weights',{headers:authHeaders()});if(rw.ok){var lw=_wlLatestWeight(await rw.json());if(lw)p.weight=lw.weight;}}catch(e){}
+  if(!(p.weight>=25))return;
+  var q='weight_kg='+encodeURIComponent(p.weight)+'&sex='+encodeURIComponent(p.sex)+(p.age?'&age='+encodeURIComponent(p.age):'')+'&athlete=true';
+  try{var r=await fetch(AGENT_URL+'/water-log/target?'+q,{headers:authHeaders()});if(r.ok)_wlTarget=await r.json();}catch(e){}}
+async function _wlLoadOwn(){_wlOwn=parseInt(localStorage.getItem('water-goal-ml')||'0')||0;
+  try{var r=await fetch(AGENT_URL+'/user-settings',{headers:authHeaders()});if(r.ok){var s=await r.json();var v=parseInt((s||{})['water-goal-ml'])||0;_wlOwn=v;if(v)localStorage.setItem('water-goal-ml',String(v));else localStorage.removeItem('water-goal-ml');}}catch(e){}}
+async function buildWaterLog(){_wlErr='';_wlRender();
+  try{var r=await fetch(AGENT_URL+'/water-log?date='+_flDay(),{headers:authHeaders()});if(r.ok)_wlRows=await r.json();else _wlErr='Water could not be loaded: the server answered '+r.status+'.';}catch(e){_wlErr='Water could not be loaded: no connection.';}
+  await Promise.all([_wlLoadTarget(),_wlLoadOwn()]);_wlRender();}
+async function wlAdd(ml){if(_wlBusy)return;_wlBusy=true;_wlErr='';_wlRender();
+  var n=new Date(),t=String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');
+  try{var r=await fetch(AGENT_URL+'/water-log',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date:_flDay(),ml:ml,time:t})});
+    if(r.ok){var j=await r.json();if(j&&j.row)_wlRows.push(j.row);}else _wlErr='Not saved: the server answered '+r.status+'.';}catch(e){_wlErr='Not saved: could not reach the server.';}
+  _wlBusy=false;_wlRender();}
+async function wlUndo(){var last=_wlRows.slice().sort(function(a,b){return(a.created_at||0)-(b.created_at||0);}).pop();if(!last)return;
+  if(typeof confirmGlobalDelete==='function'&&!confirmGlobalDelete('the last water entry ('+last.ml+' ml)'))return;
+  try{var r=await fetch(AGENT_URL+'/water-log/'+encodeURIComponent(last.id),{method:'DELETE',headers:authHeaders()});
+    if(r.ok||r.status===404)_wlRows=_wlRows.filter(function(x){return x.id!==last.id;});else _wlErr='Not deleted: the server answered '+r.status+'.';}catch(e){_wlErr='Not deleted: could not reach the server.';}
+  _wlRender();}
+function _wlParseLitres(s){s=String(s==null?'':s).trim().replace(',','.');if(s==='')return 0;var v=parseFloat(s);if(!(v>0))return -1;var ml=v<=10?v*1000:v;ml=Math.round(ml/50)*50;return(ml>=500&&ml<=10000)?ml:-1;}
+async function wlSetOwn(){var cur=_wlOwn>0?(_wlOwn/1000).toFixed(2):'';
+  var s=prompt('Your daily water target in litres (e.g. 3.5). Leave empty to use the target from your body weight.',cur);if(s===null)return;
+  var ml=_wlParseLitres(s);if(ml<0){alert('Type litres between 0.5 and 10, e.g. 3.5');return;}
+  try{var r=await fetch(AGENT_URL+'/user-settings',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({settings:{'water-goal-ml':ml||null}})});
+    if(!r.ok){alert('Not saved: the server answered '+r.status+'.');return;}}catch(e){alert('Not saved: could not reach the server.');return;}
+  _wlOwn=ml;if(ml)localStorage.setItem('water-goal-ml',String(ml));else localStorage.removeItem('water-goal-ml');_wlRender();}
 </script>
 <script src="inj-writer.js?v=1.874"></script>
 <script src="tab-cycles.js?v=1.874"></script>
@@ -3950,6 +4020,7 @@ async function flEditDelete(id){if(!confirmGlobalDelete('this food entry'))retur
 <script src="tab-thist.js?v=1.874"></script>
 <script src="tab-tdose.js?v=1.874"></script>
 <script src="tab-supplements.js?v=1.874"></script>
+<script src="tab-meds.js?v=1.874"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}if(IS_STAGING){const ir=document.getElementById('s-injbody-row');if(ir)ir.style.display='';const isel=document.getElementById('s-injbody-sel');if(isel){try{isel.value=localStorage.getItem('inj-body-override')||'auto';}catch(e){}}}
