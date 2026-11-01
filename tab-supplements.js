@@ -304,7 +304,7 @@ function _supplementsForDay(date){
   return (_supplements||[]).filter(function(s){ return _suppActiveOn(s, date); });
 }
 
-// ── Today / week-carousel section (shown under injections) ───────────────────
+// ── Today / week-carousel section (shown under injections and medication) ────
 // Each active supplement is expanded into its dose slots (AM, PM, or both) and
 // rendered as a checkbox row, checkable like an injection. Checked state is
 // per supplement + day + slot and persisted to the backend.
@@ -335,9 +335,8 @@ function renderTodaySupplements(date){
   }).join('');
   wrap.innerHTML =
     '<div class="card">' +
-    '<div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent3,#7bd88f)"></div>' +
-    '<div class="card-title">SUPPLEMENTS</div></div><span class="card-badge ' + (done===rows.length?'badge-done':'badge-today') + '">' + done + ' / ' + rows.length + '</span></div>' +
-    '<div class="checklist">' + html + '</div></div>';
+    todaySecHeader('supps', 'SUPPLEMENTS', 'var(--accent3,#7bd88f)', done, rows.length) +
+    todaySecBody('supps', '<div class="checklist">' + html + '</div>') + '</div>';
 }
 
 // ── Supplements tab ──────────────────────────────────────────────────────────

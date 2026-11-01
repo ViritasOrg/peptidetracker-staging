@@ -88,7 +88,7 @@ const sandbox = vm.createContext({
 vm.runInContext(patchedScript, sandbox);
 // Load tab files so their functions/vars are available in the same sandbox
 const tabFiles = ['inj-writer.js','inj-site.js','tab-cycles.js','tab-macros.js','tab-stack.js','tab-today.js',
-                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-tdose.js','tab-labs.js','tab-supplements.js'];
+                  'tab-schedule.js','tab-timeline.js','tab-body.js','tab-recon.js','tab-blood.js','tab-tcalc.js','tab-thist.js','tab-tdose.js','tab-labs.js','tab-supplements.js','tab-meds.js'];
 const dir = path.dirname(path.resolve(htmlPath));
 tabFiles.forEach(f => {
   const tabPath = path.join(dir, f);
@@ -15413,7 +15413,7 @@ if (typeof G._blBuildLines === 'function') {
     check('timeline nav: it is its own primary group',
       /PRIMARY_GROUPS=\{[^;]*timeline:\['timeline'\]/.test(rawScript));
     check('timeline nav: and no longer a sub-tab of Plan',
-      /plan:\['stacks','supplements','recon'\]/.test(rawScript));
+      /plan:\['stacks','meds','supplements','recon'\]/.test(rawScript));
     check('timeline nav: it sits immediately after Plan',
       /PRIMARY_ORDER=\['today','plan','timeline','levels','labs','more'\]/.test(rawScript));
     check('timeline nav: the bottom-nav button is placed after Plan',
@@ -22254,4 +22254,94 @@ console.log('\n── Food log ────────────────�
   G.flToggleList();
   check('  …and a second closes it', G._flListOpen === false && !/Oats/.test(G._flMainHtml()));
   G._macrosTargets = _saveT; G._flRows = [];
+}
+
+// ── Water on the Macros page (2026-11-01) ───────────────────────────────────
+// Same block in both apps; drinks go to /water-log, the target comes from /water-log/target.
+console.log('\n── Water ───────────────────────────────────────────────────');
+{
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  const _wb = _src.slice(_src.indexOf('// ── Water (Macros)'), _src.indexOf('async function wlSetOwn'));
+  check('water: block present and outside the food-log block',
+    _wb.length > 1000 && _src.indexOf('// ── Water (Macros)') > _src.indexOf('// ── end food log ──'));
+  check('water: a water card sits above the food log on the Macros page',
+    /<div id="water-log-body"><\/div>\s*<div id="food-log-body">/.test(_src));
+  check('water: opening Macros builds it', /buildWaterLog\(\);buildFoodLog\(\)/.test(_src));
+  check('water: litres parse, empty means "use the research target"',
+    G._wlParseLitres('3.5') === 3500 && G._wlParseLitres('3,5') === 3500 && G._wlParseLitres('3500') === 3500 &&
+    G._wlParseLitres('') === 0 && G._wlParseLitres('0.1') === -1 && G._wlParseLitres('abc') === -1 && G._wlParseLitres('20') === -1);
+  G._wlRows = [{id: 'a', ml: 500, created_at: 1}, {id: 'b', ml: 250, created_at: 2}];
+  G._wlTarget = {ml: 3100}; G._wlOwn = 0; G._wlBusy = false; G._wlErr = '';
+  let _h = G._wlHtml();
+  check('water: shows the day\'s total against the target', /0\.8 L<\/b> \/ 3\.1 L/.test(_h) && /width:24%/.test(_h));
+  check('  …says where the target comes from', /Yamada 2022/.test(_h) && /Set my own/.test(_h));
+  check('  …with one-tap amounts and an undo', /wlAdd\(250\)/.test(_h) && /wlAdd\(500\)/.test(_h) && /wlUndo\(\)/.test(_h));
+  G._wlOwn = 3500;
+  _h = G._wlHtml();
+  check('  …and an own target replaces the research one', /\/ 3\.5 L/.test(_h) && /your own target/.test(_h) && !/Yamada/.test(_h));
+  G._wlOwn = 0; G._wlTarget = null; G._wlRows = [];
+  _h = G._wlHtml();
+  check('  …without a weight it asks for one instead of inventing a target', /add your weight/.test(_h) && !/Undo last/.test(_h));
+  check('water: undo is a global delete and says so', /confirmGlobalDelete\(/.test(_wb));
+  check('water: the own target is written to the backend with the device copy',
+    /\/user-settings',\{method:'POST'/.test(_src.slice(_src.indexOf('async function wlSetOwn'), _src.indexOf('async function wlSetOwn') + 1200)));
+}
+
+// ── Medication tab and the folding Today sections (2026-11-01) ───────────────
+console.log('\n── Medication ──────────────────────────────────────────────');
+{
+  const _html = fs.readFileSync(htmlPath, 'utf8');
+  const _ib = (id) => _html.indexOf('id="' + id + '"');
+  check('meds: a Medication tab between Protocols (injections) and Supplements',
+    _ib('tab-btn-stacks') < _ib('tab-btn-meds') && _ib('tab-btn-meds') < _ib('tab-btn-supplements') &&
+    JSON.stringify(G.PRIMARY_GROUPS.plan.slice(0, 3)) === JSON.stringify(['stacks', 'meds', 'supplements']));
+  check('meds: Today shows medication as the middle section',
+    _ib('today-checklist') < _ib('today-meds') && _ib('today-meds') < _ib('today-supplements'));
+  check('meds: tab-meds.js is loaded after tab-supplements.js',
+    _html.indexOf('tab-supplements.js?v=') < _html.indexOf('tab-meds.js?v='));
+  check('meds: tablets per day read as people say them',
+    G._medFmtTablets(0.25) === '¼ tablet' && G._medFmtTablets(0.5) === '½ tablet' && G._medFmtTablets(1) === '1 tablet' &&
+    G._medFmtTablets(1.5) === '1½ tablets' && G._medFmtTablets(3) === '3 tablets' && G._medFmtTablets(2, 'capsule') === '2 capsules');
+  check('meds: the per-day choices are quarters and whole numbers, ¼ to 10',
+    G.MED_TABLETS[0] === 0.25 && G.MED_TABLETS.indexOf(0.5) >= 0 && G.MED_TABLETS.indexOf(1) >= 0 &&
+    G.MED_TABLETS.every(n => Math.abs(n * 4 - Math.round(n * 4)) < 1e-9) && G.MED_TABLETS[G.MED_TABLETS.length - 1] === 10);
+  // the package photo only fills the form, and only with what it read
+  const _f = {'med-name': {value: ''}, 'med-strength': {value: 'typed'}, 'med-form': {value: 'tablet'}};
+  const _gid = G.document.getElementById;
+  G.document.getElementById = id => _f[id] || null;
+  G._medApplyRead({name: 'Lisinopril (lisinopril)', strength: '', form: 'film-coated tablet'});
+  check('meds: a read package fills the name and keeps a strength it could not see',
+    _f['med-name'].value === 'Lisinopril (lisinopril)' && _f['med-strength'].value === 'typed' && _f['med-form'].value === 'film-coated tablet');
+  // Today section renders the ticks and starts folded
+  const _w = {innerHTML: ''};
+  G.document.getElementById = id => id === 'today-meds' ? _w : null;
+  const _d = new Date(2026, 10, 1);
+  G._meds = [{id: 'm1', name: 'Lisinopril', strength: '10 mg', tablets_per_day: 0.5, start_date: '2026-10-01'},
+             {id: 'm2', name: 'Later', tablets_per_day: 1, start_date: '2026-12-01'}];
+  G._medLog = {'m1|2026-11-01': true};
+  G.renderTodayMeds(_d);
+  check('meds: Today lists what is due that day with strength and amount',
+    /Lisinopril/.test(_w.innerHTML) && /10 mg · ½ tablet/.test(_w.innerHTML) && !/Later/.test(_w.innerHTML));
+  check('  …ticked from the log, counted in the badge', /checked-item/.test(_w.innerHTML) && /1 \/ 1/.test(_w.innerHTML));
+  check('  …and folded by default', /id="today-sec-meds" style="display:none"/.test(_w.innerHTML) && /toggleTodaySec\('meds'\)/.test(_w.innerHTML));
+  G._meds = [];
+  G.renderTodayMeds(_d);
+  check('  …nothing at all when there is no medication', _w.innerHTML === '');
+  G.document.getElementById = _gid;
+  // folding: injections open, the rest folded; a tap flips one
+  check('today: injections expanded, medication and supplements folded by default',
+    G._todayOpen.doses === true && G._todayOpen.meds === false && G._todayOpen.supps === false);
+  check('today: the doses card folds from its heading',
+    /onclick="toggleTodaySec\('doses'\)"/.test(_html) && _ib('today-sec-doses') < _ib('today-checklist'));
+  const _b = {style: {display: 'none'}}, _c = {textContent: '▸'};
+  G.document.getElementById = id => id === 'today-sec-meds' ? _b : (id === 'today-chev-meds' ? _c : null);
+  G.toggleTodaySec('meds');
+  check('today: a tap opens a folded section', G._todayOpen.meds === true && _b.style.display === '' && _c.textContent === '▾');
+  G.toggleTodaySec('meds');
+  check('  …and a second tap folds it again', G._todayOpen.meds === false && _b.style.display === 'none');
+  G.document.getElementById = _gid;
+  check('today: supplements use the same folding header', /todaySecHeader\('supps'/.test(fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)), 'tab-supplements.js'), 'utf8')));
+  const _mj = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)), 'tab-meds.js'), 'utf8');
+  check('meds: a delete says it is global', /confirmGlobalDelete\('this medication'\)/.test(_mj));
+  check('meds: no compound data or prices in the tab', !/price|usd|€/i.test(_mj));
 }
