@@ -22348,3 +22348,27 @@ console.log('\n── Medication ───────────────�
   check('meds: a delete says it is global', /confirmGlobalDelete\('this medication'\)/.test(_mj));
   check('meds: no compound data or prices in the tab', !/price|usd|€/i.test(_mj));
 }
+
+// ── The profile weight follows the newest weigh-in (2026-11-01) ──────────────
+// loadUserWeight/saveUserWeight called /weight, which the backend never had: every call 404'd and
+// user_weight stayed at the onboarding value (85.2 kg) while the weight log said 88.0.
+{
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  check('profile weight: nothing calls the /weight route the backend does not have',
+    !/AGENT_URL\+'\/weight'[,)]/.test(_src));
+  const _f = G.fetch, _ls = G.localStorage, _pp = G.pushPepSettingsToAgent, _store = {user_weight: '85.2'}, _pushed = [];
+  G.localStorage = {getItem: k => (k in _store ? _store[k] : null), setItem: (k, v) => { _store[k] = String(v); }, removeItem: k => { delete _store[k]; }};
+  G.pushPepSettingsToAgent = kv => { _pushed.push(kv); };
+  let _url = '';
+  G.fetch = async url => { _url = url; return {ok: true, json: async () => [{date: '2026-6-12', weight: 89.8}, {date: '2026-10-25', weight: 88.0}]}; };
+  const _p = G.loadUserWeight();
+  G.fetch = _f;   // restored at once: other async checks share this sandbox
+  (async () => {
+    await _p;
+    G.localStorage = _ls; G.pushPepSettingsToAgent = _pp;
+    check('profile weight: loading reads the weight log', /\/weights$/.test(_url));
+    check('  …and takes the newest weigh-in', G._userWeight === 88 && _store.user_weight === '88');
+    check('  …and writes it to the backend profile too', _pushed.length === 1 && _pushed[0].user_weight === 88);
+    if (failed > 0) process.exitCode = 1;
+  })().catch(e => { check('profile weight: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
+}

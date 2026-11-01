@@ -2942,29 +2942,31 @@ function _renderCartModal(){
 // ── Create or edit stack ─────────────────────────────────────────────────────
 // ── Weight tracking ────────────────────────────────────────────────────────
 let _userWeight=null;
+// THE PROFILE WEIGHT IS THE NEWEST WEIGH-IN (2026-11-01). This read and wrote /weight, which the
+// backend has never had, so every call was a 404 and the profile weight stayed at what onboarding
+// typed (85.2 kg) while the weight log said 88.0. Macros, the injection-site picture, Body Comp and
+// the vitamin D card all read user_weight, so they all used the stale number.
 async function loadUserWeight(){
   try{
-    var r=await fetch(AGENT_URL+'/weight',{headers:authHeaders()});
+    var r=await fetch(AGENT_URL+'/weights',{headers:authHeaders()});
     if(r.ok){
-      var data=await r.json();
-      _userWeight=data.weight;
-      if(_userWeight)localStorage.setItem('user_weight',_userWeight);
+      var lw=_wlLatestWeight(await r.json());
+      if(lw){
+        _userWeight=lw.weight;
+        if(String(localStorage.getItem('user_weight'))!==String(lw.weight)){
+          localStorage.setItem('user_weight',String(lw.weight));
+          pushPepSettingsToAgent({user_weight:lw.weight});
+        }
+        return;
+      }
     }
-  }catch(e){
-    _userWeight=localStorage.getItem('user_weight')||null;
-  }
+  }catch(e){}
+  _userWeight=localStorage.getItem('user_weight')||null;
 }
 async function saveUserWeight(weight){
   _userWeight=weight;
   localStorage.setItem('user_weight',weight);
-  try{
-    const _ruw=await fetch(AGENT_URL+'/weight',{
-      method:'POST',
-      headers:authHeaders({'Content-Type':'application/json'}),
-      body:JSON.stringify({weight:weight,unit:'kg'})
-    });
-    if(!_ruw.ok)_logHttp('saveUserWeight',_ruw.status,'/weight');
-  }catch(e){_logErr('saveUserWeight',e);}
+  pushPepSettingsToAgent({user_weight:weight});
 }
 async function pushWeightToAgent(date,weightVal){try{const r=await fetch(AGENT_URL+'/weights',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({date:date,weight:weightVal})});if(!r.ok)_logHttp('pushWeight',r.status,'/weights');}catch(e){_logErr('pushWeight',e);}}
 async function deleteWeightFromAgent(date){try{const r=await fetch(AGENT_URL+'/weights/'+date,{method:'DELETE',headers:authHeaders()});if(!r.ok)_logHttp('deleteWeight',r.status,'/weights/'+date);}catch(e){_logErr('deleteWeight',e);}}
