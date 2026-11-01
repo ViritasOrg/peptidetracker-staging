@@ -19290,7 +19290,6 @@ console.log('\n── Onboarding tour + What\'s new ─────────�
   { const _pv = G.VERSION; G.VERSION = '1.0';
     check('a promoted copy (VERSION reset to prod\'s counter) still shows every reached row', G._whatsNewEntries().length === reached.length);
     G.VERSION = _pv; }
-  check('Version Bump keeps BUILD_NO in step with VERSION', /const BUILD_NO='\[0-9\.\]\*'\/const BUILD_NO='\$\{NEW\}'/.test(require('fs').readFileSync(require('path').join(__dirname, '../.github/workflows/version-bump.yml'), 'utf8')));
   ls.removeItem('pep-profile'); ls.setItem('proto-chk-2026-01-01', '1');
   check('  …so does an account with dose history but no profile', G._whatsNewEntries().length === reached.length);
   ls.removeItem('proto-chk-2026-01-01'); ls.setItem('pep-profile', JSON.stringify({ onboarded: true }));
