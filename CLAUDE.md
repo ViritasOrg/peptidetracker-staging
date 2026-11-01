@@ -1136,12 +1136,17 @@ promotion and do not touch it.
 must never be auto-merged. The workflow has always auto-merged; the note was
 out of date.)*
 
-**PROMOTE_TOKEN secret (resolved 2026-07-17):** the promotion workflow needs a
-`PROMOTE_TOKEN` repository secret (a PAT with write access to `peptidetracker`)
-under Settings → Secrets and variables → Actions. This was previously missing
-(and briefly stale, causing `Bad credentials` on the prod checkout step);
-Henrik has since added/refreshed it and promotion now runs green. Claude has no
-tool to create/edit repo secrets, so if it breaks again Henrik must update it.
+**PEPTIDE_WORKOUT_PROD_TOKEN secret (renamed 2026-11-01, was `PROMOTE_TOKEN`):** the promotion
+workflow checks out, pushes to, opens and merges the PR on the prod repo with this repository
+secret: a fine-grained GitHub PAT for `ViritasOrg/peptidetracker` and `ViritasOrg/workout` with
+Contents, Pull requests and Workflows read and write, and Checks and Commit statuses read. The same
+token is set in both staging repos (Settings → Secrets and variables → Actions); its value lives in
+Bitwarden, item `PEPTIDE_WORKOUT_PROD_TOKEN`, folder `rekey`. Henrik, 2026-11-01: "POMOTE_TOKEN is too
+generic a name, I want a better one especially since it is for prod repos". The old token answered
+`Bad credentials` on every run from 2026-10-24 to 2026-11-01, so Push to Prod failed at its first step
+and the app's Deploy status never moved; an earlier version of this note said it "runs green".
+Claude has no tool to create or edit repo secrets: when the run says `Bad credentials`, the token is
+replaced by Henrik.
 
 ## ⚠️ NEVER HARDCODE PERSONAL USER DATA — GDPR / DATA ISOLATION ⚠️
 Personal data belonging to a specific real user must **NEVER** be hardcoded anywhere in the codebase.
