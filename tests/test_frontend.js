@@ -22372,3 +22372,31 @@ console.log('\n── Medication ───────────────�
     if (failed > 0) process.exitCode = 1;
   })().catch(e => { check('profile weight: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
 }
+
+// ── The Today rings count medication (2026-11-01: "the rings dont include meds tracking") ──
+{
+  const _sv = {c: G._injectionsCache, s: G._supplements, m: G._meds, l: G._medLog, p: G._syncPending, r: G._injCacheReady, g: G.document.getElementById};
+  const _rd = new Date(2026, 10, 1);
+  G._injectionsCache = {}; G._injectionsCache[G.dateKey(_rd)] = [{id: 'a', compound_id: 'a', time_of_day: 'AM', active: true, logged: true},
+                                                              {id: 'b', compound_id: 'b', time_of_day: 'AM', active: true, logged: false}];
+  G._supplements = [];
+  G._meds = [{id: 'm1', name: 'A', tablets_per_day: 1, start_date: '2026-10-01'}, {id: 'm2', name: 'B', tablets_per_day: 0.5, start_date: '2026-10-01'}];
+  G._medLog = {'m1|2026-11-01': true};
+  const st = G._ringStats(_rd);
+  check('rings: medication is counted, one tick per medication a day', st.mTot === 2 && st.mDone === 1, JSON.stringify(st));
+  const _el = {innerHTML: ''};
+  G._syncPending = false; G._injCacheReady = true;
+  G.document.getElementById = id => id === 'today-rings' ? _el : null;
+  const _NOW = G.NOW; G.NOW = _rd;
+  G.buildTodayRings();
+  const h = _el.innerHTML;
+  check('rings: a Medication ring and legend row, between Doses and Supplements',
+    /Medication/.test(h) && (h.match(/<circle /g) || []).length === 8 && h.indexOf('Doses') < h.indexOf('Medication'));
+  check('  …and the total % includes it (2 of 4 ticked = 50%)', />50%</.test(h));
+  G._meds = [];
+  G.buildTodayRings();
+  check('  …with no medication the card keeps its three rings', !/Medication/.test(_el.innerHTML) && (_el.innerHTML.match(/<circle /g) || []).length === 6);
+  check('rings: ticking a medication refreshes them', /toggleMedDose[\s\S]*?buildTodayRings\(\)/.test(fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)), 'tab-meds.js'), 'utf8')));
+  G.NOW = _NOW;
+  G._injectionsCache = _sv.c; G._supplements = _sv.s; G._meds = _sv.m; G._medLog = _sv.l; G._syncPending = _sv.p; G._injCacheReady = _sv.r; G.document.getElementById = _sv.g;
+}
