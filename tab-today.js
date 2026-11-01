@@ -578,9 +578,15 @@ function _ringStats(refDate){
     var dstr=_suppDateKey(now);
     _supplementsForDay(now).forEach(function(s){_suppSlots(s.timing).forEach(function(slot){sTot++;if(_suppIsTaken(s.supp_id,dstr,slot))sDone++;});});
   }
+  // Medication (2026-11-01: "the rings dont include meds tracking"): one tick per medication a day.
+  var mTot=0,mDone=0;
+  if(typeof _medsForDay==='function'&&typeof _medDateKey==='function'){
+    var mstr=_medDateKey(now);
+    _medsForDay(now).forEach(function(m){mTot++;if(_medLog[_medLogKey(m.id,mstr)])mDone++;});
+  }
   var wTot=0,wDone=0;
   for(var i=0;i<7;i++){var day=new Date(now);day.setDate(day.getDate()-i);var wd=_dedupInjectionSlots((_injectionsCache[dateKey(day)]||[]).filter(function(e){return e.active;}));wTot+=wd.length;wDone+=wd.filter(function(e){return e.logged;}).length;}
-  return{dDone:dDone,dTot:dTot,sDone:sDone,sTot:sTot,wDone:wDone,wTot:wTot};
+  return{dDone:dDone,dTot:dTot,mDone:mDone,mTot:mTot,sDone:sDone,sTot:sTot,wDone:wDone,wTot:wTot};
 }
 // Consecutive fully-logged days. A day with scheduled doses counts when ALL are
 // logged and breaks the streak otherwise; an incomplete today is skipped (the day
@@ -604,25 +610,33 @@ function _calcDoseStreak(refDate){
   }
   return streak;
 }
-function _ringCircle(r,frac,color){
-  var c=2*Math.PI*r;var off=c*(1-Math.max(0,Math.min(1,frac)));
-  return '<circle cx="60" cy="60" r="'+r+'" fill="none" style="stroke:var(--surface2)" stroke-width="9"/>'+
-         '<circle cx="60" cy="60" r="'+r+'" fill="none" style="stroke:'+color+'" stroke-width="9" stroke-linecap="round" stroke-dasharray="'+c.toFixed(1)+'" stroke-dashoffset="'+off.toFixed(1)+'"/>';
+function _ringCircle(r,frac,color,w){
+  w=w||9;var c=2*Math.PI*r;var off=c*(1-Math.max(0,Math.min(1,frac)));
+  return '<circle cx="60" cy="60" r="'+r+'" fill="none" style="stroke:var(--surface2)" stroke-width="'+w+'"/>'+
+         '<circle cx="60" cy="60" r="'+r+'" fill="none" style="stroke:'+color+'" stroke-width="'+w+'" stroke-linecap="round" stroke-dasharray="'+c.toFixed(1)+'" stroke-dashoffset="'+off.toFixed(1)+'"/>';
 }
 function buildTodayRings(){
   var el=document.getElementById('today-rings');if(!el)return;
   if(_syncPending||!_injCacheReady){el.innerHTML='';return;}
   var st=_ringStats();
-  if(st.dTot+st.sTot===0){el.innerHTML='';return;}
-  var pct=Math.round(100*(st.dDone+st.sDone)/(st.dTot+st.sTot));
+  if(st.dTot+st.mTot+st.sTot===0){el.innerHTML='';return;}
+  var pct=Math.round(100*(st.dDone+st.mDone+st.sDone)/(st.dTot+st.mTot+st.sTot));
   var streak=_calcDoseStreak();
-  var svg='<svg width="120" height="120" viewBox="0 0 120 120" style="flex-shrink:0"><g transform="rotate(-90 60 60)">'+
-    _ringCircle(50,st.dTot?st.dDone/st.dTot:0,'var(--accent)')+
-    _ringCircle(38,st.sTot?st.sDone/st.sTot:0,'var(--teal)')+
-    _ringCircle(26,st.wTot?st.wDone/st.wTot:0,'var(--accent4)')+
-    '</g><text x="60" y="66" text-anchor="middle" style="fill:var(--text);font-family:var(--font-mono);font-size:17px">'+pct+'%</text></svg>';
+  // With medication there are four rings, so they are a little thinner and closer; without it the
+  // card is exactly as before.
+  var rings=st.mTot
+    ? _ringCircle(52,st.dTot?st.dDone/st.dTot:0,'var(--accent)',8)+
+      _ringCircle(42,st.mDone/st.mTot,'var(--accent2)',8)+
+      _ringCircle(32,st.sTot?st.sDone/st.sTot:0,'var(--teal)',8)+
+      _ringCircle(22,st.wTot?st.wDone/st.wTot:0,'var(--accent4)',8)
+    : _ringCircle(50,st.dTot?st.dDone/st.dTot:0,'var(--accent)')+
+      _ringCircle(38,st.sTot?st.sDone/st.sTot:0,'var(--teal)')+
+      _ringCircle(26,st.wTot?st.wDone/st.wTot:0,'var(--accent4)');
+  var svg='<svg width="120" height="120" viewBox="0 0 120 120" style="flex-shrink:0"><g transform="rotate(-90 60 60)">'+rings+
+    '</g><text x="60" y="'+(st.mTot?65:66)+'" text-anchor="middle" style="fill:var(--text);font-family:var(--font-mono);font-size:'+(st.mTot?14:17)+'px">'+pct+'%</text></svg>';
   function row(color,label,val){return '<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted2);margin-bottom:6px"><span style="width:7px;height:7px;border-radius:50%;background:'+color+';flex-shrink:0"></span>'+label+' <span style="font-family:var(--font-mono);color:var(--text)">'+val+'</span></div>';}
   var leg=row('var(--accent)','Doses',st.dDone+'/'+st.dTot);
+  if(st.mTot)leg+=row('var(--accent2)','Medication',st.mDone+'/'+st.mTot);
   if(st.sTot)leg+=row('var(--teal)','Supplements',st.sDone+'/'+st.sTot);
   if(st.wTot)leg+=row('var(--accent4)','7-day',Math.round(100*st.wDone/st.wTot)+'%');
   var chip=streak>=2?'<div style="margin-top:10px"><span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:3px 10px;border-radius:20px;color:var(--accent);border:1px solid rgba(232,255,60,0.4);background:rgba(232,255,60,0.08)">\u26a1 '+streak+'-day streak</span></div>':'';

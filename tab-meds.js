@@ -79,6 +79,7 @@ async function toggleMedDose(medId, dstr){
   if(was) delete _medLog[key]; else _medLog[key] = true;
   _medSaveLogCache();
   renderTodayMeds(_medViewDate||NOW);
+  if(typeof buildTodayRings==='function') buildTodayRings();
   var ok = false;
   try{
     var r = await fetch(AGENT_URL + '/medications/log', {method:'POST', headers: authHeaders({'Content-Type':'application/json'}),
@@ -90,6 +91,7 @@ async function toggleMedDose(medId, dstr){
     if(was) _medLog[key] = true; else delete _medLog[key];
     _medSaveLogCache();
     renderTodayMeds(_medViewDate||NOW);
+    if(typeof buildTodayRings==='function') buildTodayRings();
   }
 }
 
@@ -112,7 +114,7 @@ function renderTodayMeds(date){
       '<div class="check-detail">' + _medEsc(detail) + '</div></div></div>';
   }).join('');
   wrap.innerHTML = '<div class="card">' +
-    todaySecHeader('meds', 'MEDICATION', '#b48cff', done, active.length) +
+    todaySecHeader('meds', 'MEDICATION', 'var(--accent2)', done, active.length) +
     todaySecBody('meds', '<div class="checklist">' + rows + '</div>') + '</div>';
 }
 
@@ -130,7 +132,7 @@ function buildMeds(){
     ? '<div class="empty" style="padding:40px 20px"><div class="empty-icon">💊</div>No medication yet.<br>Tap “+ Add” and take a photo of the package.</div>'
     : list.map(function(m){
         return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px">' +
-          '<div style="width:9px;height:9px;border-radius:50%;background:#b48cff;flex-shrink:0"></div>' +
+          '<div style="width:9px;height:9px;border-radius:50%;background:var(--accent2);flex-shrink:0"></div>' +
           '<div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:600;color:var(--text)">' + _medEsc(m.name) + '</div>' +
           '<div style="font-size:12px;color:var(--muted2);margin-top:3px">' + _medEsc([m.strength, _medFmtTablets(m.tablets_per_day, m.form) + ' a day'].filter(Boolean).join(' · ')) + '</div></div>' +
           '<button onclick="_medOpenSheet(\'' + _medEsc(m.id) + '\')" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">Edit</button>' +
