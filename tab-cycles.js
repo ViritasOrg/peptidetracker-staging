@@ -203,6 +203,24 @@ async function syncCycleBloodworkRecsFromAgent(){try{var r=await fetch(AGENT_URL
 var _COMPOUND_CATALOG=[];
 var _COMPOUND_ALIASES={};
 
+// THE CATALOGUE IS TRIED UNTIL IT ARRIVES (Henrik, 2026-11-02: "Peptide tracker took minutes to
+// load today, and it doesn't ask for injection site for the mast injection???"). He opened the app
+// at 07:19 UTC, the minute a backend deploy started. The one catalogue fetch at start failed, so
+// Masteron had no vial concentration: no ml on its row and no injection-site prompt, until the app
+// was restarted. Start tries it again every 15 s, up to 8 times, and redraws Today once it lands,
+// since the rows are drawn before it arrives either way.
+async function syncCatalogUntilLoaded(tries,waitMs,sync,redraw){
+  tries=tries||8;if(waitMs===undefined)waitMs=15000;
+  sync=sync||syncEnhancedCompoundsFromAgent;
+  redraw=redraw||function(){if(typeof buildToday==='function'&&(typeof _viewDate==='undefined'||!_viewDate))buildToday();};
+  for(var i=0;i<tries;i++){
+    var r=await sync();
+    if(r&&r.ok){try{redraw();}catch(e){}return r;}
+    if(i<tries-1&&waitMs>0)await new Promise(function(res){setTimeout(res,waitMs);});
+  }
+  return{ok:false};
+}
+
 async function syncEnhancedCompoundsFromAgent(){
   var ctrl=new AbortController();var tid=setTimeout(function(){ctrl.abort();},10000);
   try{

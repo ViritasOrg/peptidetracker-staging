@@ -20392,6 +20392,28 @@ console.log('\n── Half-life on compound cards ──────────
   G5.ENHANCEMENT_COMPOUNDS = _cSave.cat; G5._editBuf = _cSave.buf; G5._userTier = _cSave.tier;
 }
 
+// ── The catalogue is tried until it arrives (Henrik, 2026-11-02) ───────────────
+// A start during a backend deploy failed the one catalogue fetch, so Masteron had no
+// concentration and Today asked for no injection site.
+console.log('\n── Catalogue retried until it arrives ─────────────────────');
+{
+  const G7 = sandbox;
+  (async () => {
+    // Its own sync and redraw: swapping the shared fetch or buildToday would race the
+    // other async blocks of this suite.
+    let calls = 0, built = 0;
+    const sync = async () => (++calls < 3) ? {ok:false, status:503} : {ok:true};
+    const r = await G7.syncCatalogUntilLoaded(5, 0, sync, () => { built++; });
+    check('catalogue: a failed start is tried again until it loads', r.ok === true && calls === 3);
+    check('catalogue: Today is redrawn once it lands', built === 1);
+    const none = await G7.syncCatalogUntilLoaded(2, 0, async () => ({ok:false}), () => { built++; });
+    check('catalogue: gives up after its tries without throwing, and draws nothing', none.ok === false && built === 1);
+    check('catalogue: by default it retries the real catalogue sync',
+      /sync=sync\|\|syncEnhancedCompoundsFromAgent/.test(fs.readFileSync(path.join(__dirname, '../tab-cycles.js'), 'utf8')));
+    check('init starts the catalogue with retries', /syncCatalogUntilLoaded\(\)/.test(html));
+  })();
+}
+
 // ── The app reads the merged catalogue ───────────────────────────────────────
 // Henrik, 2026-08-19: "Didn't we merge the catalogs?" We had — in the backend, in
 // Phase 1 — and nothing in the app was reading it. Two sources were still being
@@ -22389,12 +22411,14 @@ console.log('\n── Medication ───────────────�
 // ── The Today rings count medication (2026-11-01: "the rings dont include meds tracking") ──
 {
   const _sv = {c: G._injectionsCache, s: G._supplements, m: G._meds, l: G._medLog, p: G._syncPending, r: G._injCacheReady, g: G.document.getElementById};
-  const _rd = new Date(2026, 10, 1);
+  // Today's date, not a fixed one: buildTodayRings reads the app's own NOW (a const the harness
+  // cannot set), so a dated test passed on 2026-11-01 only and failed every day after.
+  const _rd = new Date(); _rd.setHours(12, 0, 0, 0);
   G._injectionsCache = {}; G._injectionsCache[G.dateKey(_rd)] = [{id: 'a', compound_id: 'a', time_of_day: 'AM', active: true, logged: true},
                                                               {id: 'b', compound_id: 'b', time_of_day: 'AM', active: true, logged: false}];
   G._supplements = [];
   G._meds = [{id: 'm1', name: 'A', tablets_per_day: 1, start_date: '2026-10-01'}, {id: 'm2', name: 'B', tablets_per_day: 0.5, start_date: '2026-10-01'}];
-  G._medLog = {'m1|2026-11-01': true};
+  G._medLog = {}; G._medLog['m1|' + G._medDateKey(_rd)] = true;
   const st = G._ringStats(_rd);
   check('rings: medication is counted, one tick per medication a day', st.mTot === 2 && st.mDone === 1, JSON.stringify(st));
   const _el = {innerHTML: ''};
