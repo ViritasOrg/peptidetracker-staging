@@ -109,6 +109,18 @@ function _macrosQuery(phase,onAndrogens){
 }
 // The targets for the stored profile, or null while they are being fetched. onReady
 // runs once they arrive (or the fetch fails, so the caller can say so).
+// A request that never answers must not leave the tab on "Calculating" for ever
+// (2026-11-02: the backend restarted 8 times in an hour, one machine, and a request
+// caught in a restart hung until the app was closed). After MACROS_FETCH_MS it counts
+// as failed, so the tab says so and offers Try again.
+var MACROS_FETCH_MS=15000;
+function _macrosFetchWithin(url,ms){
+  var ctrl=(typeof AbortController!=='undefined')?new AbortController():null;
+  var tid=null;
+  var late=new Promise(function(_,rej){ tid=setTimeout(function(){ try{if(ctrl)ctrl.abort();}catch(e){} rej(new Error('timeout')); },ms); });
+  var req=fetch(url,ctrl?{signal:ctrl.signal}:undefined);
+  return Promise.race([req,late]).then(function(r){ clearTimeout(tid); return r; },function(e){ clearTimeout(tid); throw e; });
+}
 function macrosForUser(phase,onAndrogens,onReady){
   var q=_macrosQuery(phase,onAndrogens);
   if(_macrosServed[q]) return _macrosServed[q];
@@ -118,7 +130,7 @@ function macrosForUser(phase,onAndrogens,onReady){
   if(onReady)(_macrosWaiting[q]=_macrosWaiting[q]||[]).push(onReady);
   if(_macrosWaiting[q]&&_macrosWaiting[q]._inflight) return null;
   (_macrosWaiting[q]=_macrosWaiting[q]||[])._inflight=true;
-  fetch(AGENT_URL+'/macro-targets?'+q)
+  _macrosFetchWithin(AGENT_URL+'/macro-targets?'+q,MACROS_FETCH_MS)
     .then(function(r){ return r.ok?r.json():null; })
     .catch(function(){ return null; })
     .then(function(d){

@@ -21118,15 +21118,17 @@ console.log('\n── Macros: the tab and the wizard read one model ────
   const _mtDir=require('path').dirname(require('path').resolve(htmlPath));
   const _mtSrc=require('fs').readFileSync(require('path').join(_mtDir,'tab-macros.js'),'utf8');
   const _ls={user_weight:'90',user_height:'180',user_age:'45',user_sex:'male'};
-  const _calls=[]; let _fail=false; const _els={};
+  const _calls=[]; let _fail=false; let _hang=false; const _els={}; const _timers=[];
   const _served={kcal:2627,protein:225,carbs:200,fat:54,tdee:2927,bmr:1805,bmrMethod:'mifflin',trainKcal:400,includeTraining:true,phaseOffset:-300,rate:{kgPerMonth:-1.186,pctBwPerWeek:0.3,tooFast:false},ea:null,missing:[],perMealProteinPerKg:0.31,proteinFloorBound:false,constants:{pal:1.4,cutPctBwPerWeek:0.7}};
   const M=vm.createContext({console,Promise,JSON,Math,String,Number,parseInt,parseFloat,isFinite,encodeURIComponent,
     AGENT_URL:'https://agent',authHeaders:()=>({}),_currentTab:'macros',
+    setTimeout:(f,ms)=>{_timers.push({f,ms});return _timers.length;},clearTimeout:()=>{},
     localStorage:{getItem:k=>(k in _ls?_ls[k]:null),setItem:(k,v)=>{_ls[k]=String(v);},removeItem:k=>{delete _ls[k];}},
     getData:(k,d)=>{try{return k in _ls?JSON.parse(_ls[k]):d;}catch(e){return d;}},setData:(k,v)=>{_ls[k]=JSON.stringify(v);},
     pushPepSettingsToAgent:()=>{},parseDec:v=>parseFloat(v),
     document:{getElementById:id=>{if(!_els[id]){let h='';_els[id]={};Object.defineProperty(_els[id],'innerHTML',{get:()=>h,set:v=>{h=v;}});}return _els[id];}},
     fetch:async(url)=>{_calls.push(url);if(/training-energy/.test(url))return{ok:true,json:async()=>({avg_per_calendar_day:400})};
+      if(_hang)return new Promise(()=>{});
       if(_fail)return{ok:false,json:async()=>({})};return{ok:true,json:async()=>Object.assign({},_served)};},
   });
   vm.runInContext(_mtSrc,M);
@@ -21166,6 +21168,20 @@ console.log('\n── Macros: the tab and the wizard read one model ────
     _fail=false; M._macrosFailed={}; M.loadMacros();
     for(let _i=0;_i<50;_i++) await Promise.resolve();
     check('  …Try again clears the failure and loads the targets', /2627/.test(_els['macros-body'].innerHTML) && /_macrosFailed=\{\};loadMacros\(\)/.test(M._macrosPendingHtml(true,'loadMacros()')));
+    // 2026-11-02: a request caught in a backend restart never answered, and the tab sat on
+    // "Calculating your targets…" until the app was closed.
+    _hang=true; M._macrosServed={}; M._macrosFailed={}; M._macrosWaiting={}; _timers.length=0;
+    M.renderMacros(91,false);
+    for(let _i=0;_i<50;_i++) await Promise.resolve();
+    check('macros tab: a request that never answers is still "Calculating" before its time limit',
+      /Calculating your targets/.test(_els['macros-body'].innerHTML));
+    const _lim=_timers.find(t=>t.ms===M.MACROS_FETCH_MS);
+    check('  …which is set, and at most 20 s', !!_lim && M.MACROS_FETCH_MS>0 && M.MACROS_FETCH_MS<=20000);
+    if(_lim) _lim.f();
+    for(let _i=0;_i<50;_i++) await Promise.resolve();
+    check('  …and once it passes the tab says it could not load and offers Try again',
+      /Could not load your targets/.test(_els['macros-body'].innerHTML) && /loadMacros\(\)/.test(_els['macros-body'].innerHTML));
+    _hang=false;
     if(failed>0) process.exitCode=1;
   })().catch(e=>{check('macros: async checks ran',false,String(e&&e.stack||e));process.exitCode=1;});
 
@@ -22312,7 +22328,7 @@ console.log('\n── Water ─────────────────�
   check('  …without a weight it asks for one instead of inventing a target', /add your weight/.test(_h) && !/Undo last/.test(_h));
   check('water: the target uses the newest weigh-in, not the profile weight (dates are not zero-padded)',
     G._wlLatestWeight([{date:'2026-6-12',weight:89.8},{date:'2026-10-25',weight:88.0},{date:'2026-10-3',weight:87}]).weight === 88 &&
-    G._wlLatestWeight([]) === null && /fetch\(AGENT_URL\+'\/weights'/.test(_wb));
+    G._wlLatestWeight([]) === null && /_wlFetchWithin\(AGENT_URL\+'\/weights'/.test(_wb));
   check('water: undo is a global delete and says so', /confirmGlobalDelete\(/.test(_wb));
   check('water: the own target is written to the backend with the device copy',
     /\/user-settings',\{method:'POST'/.test(_src.slice(_src.indexOf('async function wlSetOwn'), _src.indexOf('async function wlSetOwn') + 1200)));
@@ -22466,5 +22482,34 @@ console.log('\n── Medication ───────────────�
   G._wlTargetFail = false;
   h = G._wlHtml();
   check('  …while a missing weight still asks for one', /add your weight/.test(h) && !/could not be loaded/.test(h));
+  G._wlTargetBusy = true;
+  h = G._wlHtml();
+  check('water: while the target loads it says so, never "add your weight" (2026-11-02)', /loading your target/.test(h) && !/add your weight/.test(h));
+  G._wlTargetBusy = false;
   G._wlTarget = _sv.t; G._wlTargetFail = _sv.f; G._wlOwn = _sv.o; G._wlRows = _sv.r; G._flRows = _sv.fl;
+}
+
+// ── Water: a request that never answers fails after its time limit (2026-11-02) ──
+{
+  const _src = fs.readFileSync(htmlPath, 'utf8');
+  const _a = _src.indexOf('var WL_FETCH_MS'), _b = _src.indexOf('async function _wlLoadTarget(');
+  const _tm = [];
+  const W = vm.createContext({Promise, Object, Error, AbortController: class{constructor(){this.signal={};}abort(){}},
+    setTimeout:(f,ms)=>{_tm.push({f,ms});return _tm.length;}, clearTimeout:()=>{}, fetch:()=>new Promise(()=>{})});
+  check('water: the time-limited fetch is defined before the target loader', _a > 0 && _b > _a);
+  if (_a > 0 && _b > _a) {
+    vm.runInContext(_src.slice(_a, _b), W);
+    let _out = 'pending';
+    W._wlFetchWithin('https://agent/weights', {}, W.WL_FETCH_MS).then(()=>{_out='answered';}, ()=>{_out='failed';});
+    (async()=>{
+      for (let _i=0;_i<20;_i++) await Promise.resolve();
+      const _wasPending = _out === 'pending';
+      const _t = _tm.find(t => t.ms === W.WL_FETCH_MS); if (_t) _t.f();
+      for (let _i=0;_i<20;_i++) await Promise.resolve();
+      check('  …a hung request fails once its time limit (at most 20 s) passes', _wasPending && _out === 'failed' && W.WL_FETCH_MS > 0 && W.WL_FETCH_MS <= 20000);
+      if (failed > 0) process.exitCode = 1;
+    })();
+  }
+  check('  …and both the weight and the target requests use it',
+    /_wlFetchWithin\(AGENT_URL\+'\/weights'/.test(_src) && /_wlFetchWithin\(AGENT_URL\+'\/water-log\/target\?'/.test(_src));
 }
