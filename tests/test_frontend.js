@@ -22411,12 +22411,14 @@ console.log('\n── Medication ───────────────�
 // ── The Today rings count medication (2026-11-01: "the rings dont include meds tracking") ──
 {
   const _sv = {c: G._injectionsCache, s: G._supplements, m: G._meds, l: G._medLog, p: G._syncPending, r: G._injCacheReady, g: G.document.getElementById};
-  const _rd = new Date(2026, 10, 1);
+  // Today's date, not a fixed one: buildTodayRings reads the app's own NOW (a const the harness
+  // cannot set), so a dated test passed on 2026-11-01 only and failed every day after.
+  const _rd = new Date(); _rd.setHours(12, 0, 0, 0);
   G._injectionsCache = {}; G._injectionsCache[G.dateKey(_rd)] = [{id: 'a', compound_id: 'a', time_of_day: 'AM', active: true, logged: true},
                                                               {id: 'b', compound_id: 'b', time_of_day: 'AM', active: true, logged: false}];
   G._supplements = [];
   G._meds = [{id: 'm1', name: 'A', tablets_per_day: 1, start_date: '2026-10-01'}, {id: 'm2', name: 'B', tablets_per_day: 0.5, start_date: '2026-10-01'}];
-  G._medLog = {'m1|2026-11-01': true};
+  G._medLog = {}; G._medLog['m1|' + G._medDateKey(_rd)] = true;
   const st = G._ringStats(_rd);
   check('rings: medication is counted, one tick per medication a day', st.mTot === 2 && st.mDone === 1, JSON.stringify(st));
   const _el = {innerHTML: ''};
