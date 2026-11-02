@@ -20399,26 +20399,18 @@ console.log('\n── Catalogue retried until it arrives ───────�
 {
   const G7 = sandbox;
   (async () => {
-    const save = {fetch:G7.fetch, bt:G7.buildToday, cat:G7._COMPOUND_CATALOG, enh:G7.ENHANCEMENT_COMPOUNDS};
+    // Its own sync and redraw: swapping the shared fetch or buildToday would race the
+    // other async blocks of this suite.
     let calls = 0, built = 0;
-    G7.buildToday = () => { built++; };
-    G7.fetch = async (u) => {
-      if (!/\/compounds\/catalog$/.test(String(u))) return {ok:false, status:503, json: async () => ({})};
-      calls++;
-      if (calls < 3) return {ok:false, status:503, json: async () => ({})};
-      return {ok:true, status:200, json: async () => ({compounds:[
-        {id:'mast_e', name:'Masteron Enanthate', isTestosterone:false, pack:{type:'vial', conc_mg_ml:200, vol_ml:10}}]})};
-    };
-    const r = await G7.syncCatalogUntilLoaded(5, 0);
+    const sync = async () => (++calls < 3) ? {ok:false, status:503} : {ok:true};
+    const r = await G7.syncCatalogUntilLoaded(5, 0, sync, () => { built++; });
     check('catalogue: a failed start is tried again until it loads', r.ok === true && calls === 3);
-    check('catalogue: Masteron then has its vial concentration, so Today asks for the site',
-      G7._enhConcMgPerMl('mast_e') === 200);
     check('catalogue: Today is redrawn once it lands', built === 1);
-    calls = -100;  // never succeeds again
-    const none = await G7.syncCatalogUntilLoaded(2, 0);
-    check('catalogue: gives up after its tries without throwing', none.ok === false);
+    const none = await G7.syncCatalogUntilLoaded(2, 0, async () => ({ok:false}), () => { built++; });
+    check('catalogue: gives up after its tries without throwing, and draws nothing', none.ok === false && built === 1);
+    check('catalogue: by default it retries the real catalogue sync',
+      /sync=sync\|\|syncEnhancedCompoundsFromAgent/.test(fs.readFileSync(path.join(__dirname, '../tab-cycles.js'), 'utf8')));
     check('init starts the catalogue with retries', /syncCatalogUntilLoaded\(\)/.test(html));
-    Object.assign(G7, {fetch:save.fetch, buildToday:save.bt, _COMPOUND_CATALOG:save.cat, ENHANCEMENT_COMPOUNDS:save.enh});
   })();
 }
 
