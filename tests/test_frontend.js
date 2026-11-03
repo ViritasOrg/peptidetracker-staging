@@ -1306,6 +1306,15 @@ G.wizSave().then(async ()=>{
     }
   }
 
+  // The app always opens on Today, the injections, whatever tab was used last (Henrik, 2026-11-03:
+  // "peptide default page should be Today and the injection tab"). Boot is inside init(), so this
+  // is a structural guard; the behaviour was checked in Chromium (old build opened on Settings).
+  {
+    const _bootSrc = fs.readFileSync(htmlPath, 'utf8');
+    const _boot = _bootSrc.slice(_bootSrc.indexOf('initTabVis();(function(){PRIMARY_ORDER'), _bootSrc.indexOf('_initSwipeNav();}'));
+    check('boot always opens on Today (never the last tab used)',
+      /var startTab='today';/.test(_boot) && !/getItem\('pep-last-tab'\)/.test(_boot));
+  }
   // ── init(): stale pep-last-tab cleanup ─────────────────────────────────────────
   console.log('\n── init(): stale pep-last-tab cleanup ─────────────────────────');
   {
