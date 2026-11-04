@@ -22453,6 +22453,19 @@ console.log('\n── Medication ───────────────�
   G._meds = [];
   G.renderTodayMeds(_d);
   check('  …nothing at all when there is no medication', _w.innerHTML === '');
+  // The package photo can come from the camera OR the photo library (Henrik, 2026-11-05: "Add meds only
+  // uses camera, it should also be able to open a image from photos"). `capture` makes iOS open the camera only.
+  {
+    const _ol = {style: {}}, _gidP = G.document.getElementById, _ceP = G.document.createElement, _bd = G.document.body;
+    G.document.createElement = () => _ol; G.document.getElementById = () => null;
+    if (!G.document.body) G.document.body = {};
+    const _ap = G.document.body.appendChild; G.document.body.appendChild = () => {};
+    try { G._medOpenSheet(); } catch (e) { /* only the sheet's markup matters here */ }
+    G.document.createElement = _ceP; G.document.getElementById = _gidP; G.document.body.appendChild = _ap; if (!_bd) delete G.document.body;
+    const _inp = (String(_ol.innerHTML || '').match(/<input id="med-photo"[^>]*>/) || [''])[0];
+    check('meds: the package photo input takes images', /accept="image\/\*"/.test(_inp), _inp);
+    check('  …from the photo library as well as the camera (no capture attribute)', _inp !== '' && !/capture=/.test(_inp), _inp);
+  }
   // Picking a past day in the week strip must draw the meds for THAT day, so a tick saves that
   // day's date (Henrik, 2026-11-05: yesterday picked at 00:12, this morning's meds saved on today).
   {
