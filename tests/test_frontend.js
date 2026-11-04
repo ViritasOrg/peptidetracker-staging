@@ -22456,6 +22456,21 @@ console.log('\n── Medication ───────────────�
   G._meds = [];
   G.renderTodayMeds(_d);
   check('  …nothing at all when there is no medication', _w.innerHTML === '');
+  // Picking a past day in the week strip must draw the meds for THAT day, so a tick saves that
+  // day's date (Henrik, 2026-11-05: yesterday picked at 00:12, this morning's meds saved on today).
+  {
+    const _y = new Date(); _y.setDate(_y.getDate() - 1);
+    const _rm = G.renderTodayMeds, _seen = [];
+    G.renderTodayMeds = d => _seen.push(G._medDateKey(d));
+    try { G.showDayInline(_y, null); } catch (e) { /* the rest of the day view needs a DOM; the meds call comes first */ }
+    G.renderTodayMeds = _rm;
+    check('meds: picking yesterday draws the meds for yesterday', _seen.length > 0 && _seen[0] === G._medDateKey(_y), JSON.stringify(_seen));
+    G._meds = [{id: 'm1', name: 'Lisinopril', tablets_per_day: 1, start_date: '2020-01-01'}]; G._medLog = {};
+    G.document.getElementById = id => id === 'today-meds' ? _w : null;
+    G.renderTodayMeds(_y);
+    check("  …so its tick saves yesterday's date", _w.innerHTML.indexOf("toggleMedDose('m1','" + G._medDateKey(_y) + "')") >= 0);
+    G._meds = []; G._medLog = {};
+  }
   G.document.getElementById = _gid;
   // folding: injections open, the rest folded; a tap flips one
   check('today: injections expanded, medication and supplements folded by default',
