@@ -6006,8 +6006,8 @@ function _tcBoundStack(){
 // The pairing that actually settles these is PREDICTED vs PLOTTED weekly means in one
 // block. A screenshot can never show that; it is the first thing this prints.
 //
-// Staging only, via IS_STAGING — the same gate TAB_LABELS uses for the Storage tab.
-// The file promotes to prod unchanged and the path test simply fails there.
+// In staging and prod alike (Henrik, 2026-11-05: the only thing prod does not need is the Push to
+// Prod card). Until then it was hidden outside staging.
 //
 // Read-only: no fetches, no writes, nothing cached. And nothing authentication-shaped
 // goes in — no token, no session, no email. It is a description of the curve's inputs.
@@ -6659,12 +6659,10 @@ function buildTCalc() {
   }
   html += '</div>'; // close card
 
-  // ── Debug dump — STAGING ONLY ──────────────────────────────────────────────
-  // Same gate TAB_LABELS uses for the Storage tab. This file promotes to prod
-  // unchanged and the path test simply fails there, so the card cannot appear.
-  if (typeof IS_STAGING !== 'undefined' && IS_STAGING) {
+  // ── Debug dump ──────────────────────────────────────────────────────────────
+  {
     html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:12px">'
-      + '<div style="padding:14px 16px 0"><div style="font-size:10px;font-weight:700;letter-spacing:1.8px;color:#666">DEBUG DUMP · STAGING ONLY</div></div>'
+      + '<div style="padding:14px 16px 0"><div style="font-size:10px;font-weight:700;letter-spacing:1.8px;color:#666">DEBUG DUMP</div></div>'
       + '<div style="padding:10px 16px 14px">'
       + '<div style="font-size:12px;color:var(--muted2);margin-bottom:10px;line-height:1.5">'
       + 'The curve\u2019s inputs as text: the protocol frame, what is scheduled ahead, the '

@@ -8246,19 +8246,17 @@ console.log('\n── The loading dose ─────────────�
   {
     const src=require('fs').readFileSync(require('path').join(__dirname,'../tab-tcalc.js'),'utf8');
 
-    // THE GATE. This file promotes to prod unchanged, so the card must be behind
-    // IS_STAGING or it ships to production.
-    check('the debug card is gated on IS_STAGING', (function(){
+    // NO GATE (Henrik, 2026-11-05: the only thing prod does not need is the Push to Prod card).
+    // It was behind IS_STAGING until then; prod now builds it exactly as staging does.
+    check('the debug card is built in prod as on staging (no staging gate)', (function(){
       // The whole card, from its banner to the closing of the guard — not a fixed
       // window, which was shorter than the markup and failed on a correct gate.
-      const i=src.indexOf('// ── Debug dump — STAGING ONLY');
+      const i=src.indexOf('// ── Debug dump');
       if(i<0) return false;
       const j=src.indexOf("el.innerHTML = html;", i);
       if(j<0) return false;
       const seg=src.slice(i,j);
-      // The guard has to OPEN before any of the markup is appended.
-      const g=seg.indexOf('IS_STAGING'), o=seg.indexOf('tc-debug-out');
-      return g>=0 && o>g;
+      return seg.indexOf('IS_STAGING')<0 && seg.indexOf('tc-debug-out')>=0;
     })());
     check('  …and the dump is the only thing behind that gate in this file',
       (src.match(/id="tc-debug-out"/g)||[]).length===1);
@@ -9103,12 +9101,11 @@ console.log('\n── Injection site (Today) ───────────�
     }
 
     // ── Staging-only override (Henrik, 2026-10-14) ───────────────────────────
-    check('override: staging honours a pinned figure', G._injBodyOverrideFor(true, 'f35').key === 'f35' &&
-      G._injBodyOverrideFor(true, 'm10').key === 'm10');
-    check('override: prod ignores it entirely', G._injBodyOverrideFor(false, 'f35') === null);
+    check('override: a pinned figure is honoured, in prod as on staging', G._injBodyOverrideFor('f35').key === 'f35' &&
+      G._injBodyOverrideFor('m10').key === 'm10');
     check('override: "auto" or junk falls back to sex + body fat',
-      G._injBodyOverrideFor(true, 'auto') === null && G._injBodyOverrideFor(true, 'x9') === null &&
-      G._injBodyOverrideFor(true, '') === null);
+      G._injBodyOverrideFor('auto') === null && G._injBodyOverrideFor('x9') === null &&
+      G._injBodyOverrideFor('') === null);
     check('override: the picker asks the override before sex and body fat',
       /function _injBody\(\)\{\s*var ov=_injBodyOverride\(\); if\(ov\) return ov;/.test(siteSrc));
     {
@@ -9120,9 +9117,9 @@ console.log('\n── Injection site (Today) ───────────�
       G.setInjBodyOverride('auto');
       G.pushPepSettingsToAgent = _pushSave;
     }
-    check('override: the Settings row is hidden by default and only shown on staging',
+    check('override: the Settings row is shown in prod as on staging',
       /id="s-injbody-row" style="display:none;/.test(html) &&
-      /if\(IS_STAGING\)\{const ir=document\.getElementById\('s-injbody-row'\)/.test(html));
+      /\{const ir=document\.getElementById\('s-injbody-row'\)/.test(html) && !/IS_STAGING\)\{const ir=/.test(html));
     check('override: the settings sync restores it on a new device',
       /s\['inj-body-override'\]/.test(html));
     // ── Needle length: the backend's answer, printed as given ────────────────
@@ -10210,10 +10207,10 @@ if (typeof G._chainFromActive === 'function') {
 
 // ── Storage tab hideable via Settings ─────────────────────────────────────────
 {
-  check('TAB_LABELS uses Object.assign to conditionally include storage (IS_STAGING gate)',
-    rawScript.includes("Object.assign({today:'Today'") && rawScript.includes("IS_STAGING?{storage:'Storage'}:{}"));
-  check('TAB_DEFAULTS uses Object.assign to conditionally include storage:true',
-    rawScript.includes("IS_STAGING?{storage:true}:{}"));
+  check('TAB_LABELS includes storage in prod as on staging (no staging gate)',
+    rawScript.includes("Object.assign({today:'Today'") && rawScript.includes(",{storage:'Storage'})") && !rawScript.includes("IS_STAGING?{storage:"));
+  check('TAB_DEFAULTS includes storage:true',
+    rawScript.includes(",{storage:true})"));
   check('tab-btn-storage exists in HTML (hidden by default)',
     html.includes('id="tab-btn-storage"'));
   check('storage tab visibility gated by TAB_LABELS membership (no manual show override in init)',
@@ -22690,10 +22687,10 @@ console.log('\n── Medication ───────────────�
 
 // ── Push to Prod ships every feature: no feature is gated to staging (Henrik, 2026-11-04) ──
 // "I push stage to prod, then all features must be available in prod!" Polestar shipped behind
-// `POLESTAR_ON=IS_STAGING`, Henrik pushed to prod and the card was not there. IS_STAGING may only
-// switch ENVIRONMENT plumbing (data namespace, URLs, the Deploy and stage-copy cards) or a test
-// tool Henrik asked for as staging-only. Every use is listed here; a new one fails until it is
-// one of those and is added with its reason.
+// `POLESTAR_ON=IS_STAGING`, Henrik pushed to prod and the card was not there. Then (2026-11-05):
+// "The only feature we don't need in production is the push to prod card". IS_STAGING may only
+// switch ENVIRONMENT plumbing (data namespace, URLs, the stage-copy card) and the Push to Prod
+// card. Every use is listed here; anything else fails.
 console.log('\n── No feature is gated to staging ─────────────────────────');
 {
   const _fs = require('fs'), _path = require('path');
@@ -22703,14 +22700,11 @@ console.log('\n── No feature is gated to staging ─────────
     /const IS_STAGING=\(window\.location\.pathname/,                 // the switch itself
     /const APP_ID=IS_STAGING\?'stage':''/,                            // staging's own data namespace
     /if\(IS_STAGING\)\{var _S='staging:'/,                           // staging's own localStorage keys
-    /IS_STAGING\?\{storage:/,                                         // Storage inspector (test tool)
     /if\(IS_STAGING\)\{card\.innerHTML='';return;\}/,                // prod→stage copy card, prod only
     /env='\+\(\(typeof IS_STAGING/,                                   // environment name in a debug report
     /if\(IS_STAGING\)buildDeployCard\(\)|s-deploy-card/,              // the Push to Prod card itself
     /fetch\(\(IS_STAGING\?'https:\/\/viritasorg\.github\.io\//,       // each app's own version.json
     /if\(!IS_STAGING\|\|localStorage\.getItem\('wk-bf-isol-v1'\)\)/, // staging data isolation migration
-    /s-injbody-row|_injBodyOverrideFor\(typeof IS_STAGING/,           // body-figure override, "On stage only" (Henrik, 2026-10-14)
-    /Staging only, via IS_STAGING|DEBUG DUMP · STAGING ONLY/,         // T-Calc debug dump (test tool)
   ];
   const bad = [];
   _files.forEach(f => {
@@ -22720,7 +22714,7 @@ console.log('\n── No feature is gated to staging ─────────
       if (!ALLOWED.some(re => re.test(win))) bad.push(_path.basename(f) + ': …' + src.slice(Math.max(0, i - 40), i + 60).replace(/\s+/g, ' ') + '…');
     }
   });
-  check('every IS_STAGING use is environment plumbing or a listed test tool, never a feature gate',
+  check('every IS_STAGING use is environment plumbing or the Push to Prod card, never a feature',
     bad.length === 0, 'Push to Prod must ship every feature. Remove the gate:\n      ' + bad.join('\n      '));
 }
 
