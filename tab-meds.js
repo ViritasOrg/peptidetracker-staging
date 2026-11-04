@@ -160,7 +160,7 @@ function _medOpenSheet(editId){
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
       '<div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--text)">' + (ed?'EDIT MEDICATION':'ADD MEDICATION') + '</div>' +
       '<button onclick="_medCloseSheet()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;line-height:1">×</button></div>' +
-    '<input id="med-photo" type="file" accept="image/'+'*" capture="environment" style="display:none" onchange="_medPhotoPicked(this)">' +
+    '<input id="med-photo" type="file" accept="image/'+'*" style="display:none" onchange="_medPhotoPicked(this)">' +
     '<button id="med-photo-btn" onclick="document.getElementById(\'med-photo\').click()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:12px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:6px">📷 Photo of the package</button>' +
     '<div id="med-photo-msg" style="font-size:12px;color:var(--muted);margin-bottom:14px">Name and strength are read from the photo with your own API key (Settings, Food key). Check them before saving.</div>' +
     '<div style="margin-bottom:14px"><label style="'+lSty+'">Name</label><input id="med-name" maxlength="120" value="'+_medEsc(ed?ed.name:'')+'" style="'+iSty+'"></div>' +
