@@ -8605,7 +8605,7 @@ console.log('\n── The loading dose ─────────────�
       +'setInterval clearInterval requestAnimationFrame parseInt parseFloat isNaN isFinite AbortController '
       +'encodeURIComponent decodeURIComponent NaN Infinity undefined true false typeof instanceof new delete '
       +'void in of return if else for while do switch case break continue function var let const try catch '
-      +'finally throw yield await async this arguments null Intl Symbol Blob URL FormData TextEncoder '
+      +'finally throw yield await async this arguments null Intl Symbol Blob File URL FormData TextEncoder '
       +'performance crypto structuredClone RE').split(/\s+/));
     const suspects=[];
     Object.keys(srcMap).forEach(function(fname){
@@ -22755,14 +22755,16 @@ globalThis.__exportRun = (async function(){
   const calls = [], shared = [];
   const _f = G.fetch, _n = G.navigator, _F = G.File, _gid = G.document.getElementById;
   const els = {'s-export-btn': {textContent: '', disabled: false}, 's-export-status': {textContent: '', style: {}}};
-  G.document.getElementById = id => els[id] || null;
+  // Other async tests run alongside this one: every stub hands anything that is not the export's back to the original.
+  G.document.getElementById = id => els[id] || (_gid ? _gid.call(G.document, id) : null);
   G.File = function(parts, name, o){ this.text = parts.join(''); this.name = name; this.type = o && o.type; };
   G.navigator = {canShare: () => true, share: async o => { shared.push(o); }};
-  G.fetch = async (url) => { calls.push(url);
+  G.fetch = async function (url) { calls.push(url);
     const path = url.replace(G.AGENT_URL, '');
     const body = {'/injections?active_only=false': [{date: '2026-11-02', compound_name: 'Nebido', dose: '100', unit: 'mg', logged: true}],
       '/medications': [], '/medications/log': [], '/supplements': [], '/supplement-log': []}[path];
-    return {ok: body !== undefined, status: body ? 200 : 404, json: async () => body}; };
+    if (body === undefined) return _f(url, ...Array.prototype.slice.call(arguments, 1));
+    return {ok: true, status: 200, json: async () => body}; };
   try { await G.exportData(); } finally { G.fetch = _f; G.navigator = _n; G.File = _F; G.document.getElementById = _gid; }
   check('export: reads all five records from the backend, injections including inactive ones',
     ['/injections?active_only=false', '/medications', '/medications/log', '/supplements', '/supplement-log'].every(p => calls.some(u => u.endsWith(p))));
