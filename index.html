@@ -424,8 +424,8 @@ async function toggleAutoNext(){
 }
 let _stackViewTab='peptides';let _editInnerTab='peptides';
 let _reconStackIdx=0;let _reconStackPicked=false;let _reconState={};
-const TAB_LABELS=Object.assign({today:'Today',stacks:'Protocols',blood:'Levels',tcalc:'T-Calc',thist:'T-History',tdose:'Dose Finder',labs:'Labs',meds:'Medication',supplements:'Supplements',recon:'Recon',schedule:'Schedule',macros:'Macros',foodedit:'Food Edit',timeline:'Timeline',body:'Body Comp'},IS_STAGING?{storage:'Storage'}:{});
-const TAB_DEFAULTS=Object.assign({today:true,stacks:true,blood:true,tcalc:true,thist:true,tdose:true,labs:true,meds:true,supplements:true,recon:true,schedule:false,macros:true,foodedit:true,timeline:true,body:true},IS_STAGING?{storage:true}:{});
+const TAB_LABELS=Object.assign({today:'Today',stacks:'Protocols',blood:'Levels',tcalc:'T-Calc',thist:'T-History',tdose:'Dose Finder',labs:'Labs',meds:'Medication',supplements:'Supplements',recon:'Recon',schedule:'Schedule',macros:'Macros',foodedit:'Food Edit',timeline:'Timeline',body:'Body Comp'},{storage:'Storage'});
+const TAB_DEFAULTS=Object.assign({today:true,stacks:true,blood:true,tcalc:true,thist:true,tdose:true,labs:true,meds:true,supplements:true,recon:true,schedule:false,macros:true,foodedit:true,timeline:true,body:true},{storage:true});
 // Two-tier navigation (usability study): 6 bottom "primary" tabs, each grouping
 // several of the existing destinations as a secondary sub-tab strip. Every legacy
 // tab id and switchTab(id,el) call is preserved — this is an additive nav layer.
@@ -4093,7 +4093,7 @@ async function wlSetOwn(){var cur=_wlOwn>0?(_wlOwn/1000).toFixed(2):'';
 <script src="tab-meds.js?v=1.896"></script>
 <script>
 init();
-if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}if(IS_STAGING){const ir=document.getElementById('s-injbody-row');if(ir)ir.style.display='';const isel=document.getElementById('s-injbody-sel');if(isel){try{isel.value=localStorage.getItem('inj-body-override')||'auto';}catch(e){}}}
+if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}{const ir=document.getElementById('s-injbody-row');if(ir)ir.style.display='';const isel=document.getElementById('s-injbody-sel');if(isel){try{isel.value=localStorage.getItem('inj-body-override')||'auto';}catch(e){}}}
 checkAppVersion();const _LOAD_DATE=new Date().toDateString();document.addEventListener('visibilitychange',function(){if(!document.hidden&&new Date().toDateString()!==_LOAD_DATE)location.reload();});window.addEventListener('focus',function(){if(new Date().toDateString()!==_LOAD_DATE)location.reload();});
 </script>
 </body>
