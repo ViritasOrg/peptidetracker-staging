@@ -32,3 +32,6 @@ jobs:
 
       - name: Frontend tests
         run: node tests/test_frontend.js index.html
+
+      - name: Promote workflow tests
+        run: node tests/test_promote_workflow.js
