@@ -178,6 +178,7 @@
     <div id="s-cache-card" style="margin-top:14px"></div>
     <div id="s-rebuild-card" style="margin-top:14px"></div>
     <div id="s-stored-card" style="margin-top:14px"></div>
+    <div id="s-export-card" style="margin-top:14px"></div>
     <div id="s-stagecopy-card" style="margin-top:14px"></div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:14px;">
       <div class="s-sec-hdr" onclick="toggleSSec('data')">Data<span class="s-chev">▾</span></div>
@@ -1133,7 +1134,7 @@ function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id)
 function logout(){_googleToken='';_sessionToken='';localStorage.removeItem('google_token');localStorage.removeItem('google_email');localStorage.removeItem('session_token');localStorage.removeItem('pt-owner-name');applyOwnerName('');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('signin-screen').classList.remove('hidden');}
 function _fmtTokExp(tok){try{var p=JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));if(!p.exp)return null;return{exp:new Date(p.exp*1000),leftMin:Math.round((p.exp*1000-Date.now())/60000)};}catch(e){return null;}}
 function _renderAuthDebug(){var el=document.getElementById('s-session');if(!el)return;var st=localStorage.getItem('session_token')||'';var gt=localStorage.getItem('google_token')||'';var using=(_sessionToken?'session':(_googleToken?'google':'none'));el.textContent=st?'Present':(gt?'Google only':'None');el.style.color=st?'#3cffa0':'#f59e0b';function human(d){return d<0?'EXPIRED':d>1440?(Math.round(d/1440)+'d left'):d>60?(Math.round(d/60)+'h left'):d+'m left';}function line(label,tok){if(!tok)return'<div>'+label+': <b>absent</b></div>';var e=_fmtTokExp(tok);if(!e)return'<div>'+label+': present (no exp)</div>';return'<div>'+label+': '+human(e.leftMin)+' ('+e.exp.toLocaleString()+')</div>';}var det=document.getElementById('s-session-detail');if(det)det.innerHTML=line('Session',st)+line('Google',gt)+'<div>Using: <b>'+using+'</b></div>';}
-async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;buildSafeNamesRow();try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}_renderAuthDebug();const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData(BC_KEY,[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});if(r.ok){const hd=await r.json();aDot.className='agent-dot up';document.getElementById('s-agent-label').textContent='Online'+(hd.version?' v'+hd.version:'');}else{aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders(),signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';const _mBtn=document.getElementById('s-migrate-btn');if(_mBtn)_mBtn.style.display=unsynced===0?'none':'';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}try{const _bc=new AbortController();setTimeout(()=>_bc.abort(),5000);const _rb=await fetch(AGENT_URL+'/backups',{headers:authHeaders(),signal:_bc.signal});if(_rb.ok){const _bd=await _rb.json();const _dates=[...new Set((_bd.backups||[]).map(function(b){return b.date;}))].sort();const _dl=_dates.length?_dates[_dates.length-1]:null;const _wk=_dates.slice().reverse().find(function(d){return new Date(d+'T12:00:00').getDay()===1;})||null;const _mo=_dates.slice().reverse().find(function(d){return d.slice(8)==='01';})||null;if(document.getElementById('s-backup-daily'))document.getElementById('s-backup-daily').textContent=_dl||'None';if(document.getElementById('s-backup-weekly'))document.getElementById('s-backup-weekly').textContent=_wk||'None';if(document.getElementById('s-backup-monthly'))document.getElementById('s-backup-monthly').textContent=_mo||'None';}}catch(e){}buildTabsSettingsCard();buildAppearanceCard();buildRefsCard();buildCacheCard();buildRebuildCard();if(typeof buildStoredRowsCard==='function')buildStoredRowsCard();buildStageCopyCard();checkForUpdate();buildLastPushDropdown();const _mEl=document.getElementById('s-milestones-count');if(_mEl&&_mEl.textContent==='—')_mEl.textContent=MILESTONES.length+' events';}
+async function loadSettings(){document.getElementById('s-version').textContent='v'+VERSION;buildSafeNamesRow();try{const p=JSON.parse(atob(_googleToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));document.getElementById('s-email').textContent=p.email||'—';}catch{}_renderAuthDebug();const localDoseKeys=Object.keys(localStorage).filter(k=>k.startsWith('proto-chk-'));const localDoseCount=localDoseKeys.reduce((n,k)=>{try{return n+(JSON.parse(localStorage.getItem(k)||'[]').length);}catch{return n;}},0);document.getElementById('s-local-doses').textContent=localDoseCount+' doses ('+localDoseKeys.length+' days)';const bcData=getData(BC_KEY,[]);document.getElementById('s-local-bc').textContent=bcData.length+' entries';const aDot=document.getElementById('s-agent-dot');const sDot=document.getElementById('s-sync-dot');try{const ctrl=new AbortController();setTimeout(()=>ctrl.abort(),5000);const r=await fetch(AGENT_URL+'/health',{signal:ctrl.signal});if(r.ok){const hd=await r.json();aDot.className='agent-dot up';document.getElementById('s-agent-label').textContent='Online'+(hd.version?' v'+hd.version:'');}else{aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}}catch(e){aDot.className='agent-dot down';document.getElementById('s-agent-label').textContent='Offline';}try{const ctrl2=new AbortController();setTimeout(()=>ctrl2.abort(),5000);const r=await fetch(AGENT_URL+'/peptide-log',{headers:authHeaders(),signal:ctrl2.signal});if(r.ok){const remote=await r.json();document.getElementById('s-remote-doses').textContent=remote.length+' entries';const remoteDates=new Set(remote.map(e=>e.date));const unsynced=localDoseKeys.filter(k=>{const date=k.replace('proto-chk-','');const doses=JSON.parse(localStorage.getItem(k)||'[]');return doses.length>0&&!remoteDates.has(date);}).length;sDot.className='agent-dot '+(unsynced===0?'up':'warn');document.getElementById('s-sync-label').textContent=unsynced===0?'All synced':unsynced+' day(s) not on backend';const _mBtn=document.getElementById('s-migrate-btn');if(_mBtn)_mBtn.style.display=unsynced===0?'none':'';}else{sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Backend error';}}catch(e){sDot.className='agent-dot down';document.getElementById('s-sync-label').textContent='Check failed';}try{const _bc=new AbortController();setTimeout(()=>_bc.abort(),5000);const _rb=await fetch(AGENT_URL+'/backups',{headers:authHeaders(),signal:_bc.signal});if(_rb.ok){const _bd=await _rb.json();const _dates=[...new Set((_bd.backups||[]).map(function(b){return b.date;}))].sort();const _dl=_dates.length?_dates[_dates.length-1]:null;const _wk=_dates.slice().reverse().find(function(d){return new Date(d+'T12:00:00').getDay()===1;})||null;const _mo=_dates.slice().reverse().find(function(d){return d.slice(8)==='01';})||null;if(document.getElementById('s-backup-daily'))document.getElementById('s-backup-daily').textContent=_dl||'None';if(document.getElementById('s-backup-weekly'))document.getElementById('s-backup-weekly').textContent=_wk||'None';if(document.getElementById('s-backup-monthly'))document.getElementById('s-backup-monthly').textContent=_mo||'None';}}catch(e){}buildTabsSettingsCard();buildAppearanceCard();buildRefsCard();buildCacheCard();buildRebuildCard();if(typeof buildStoredRowsCard==='function')buildStoredRowsCard();buildExportCard();buildStageCopyCard();checkForUpdate();buildLastPushDropdown();const _mEl=document.getElementById('s-milestones-count');if(_mEl&&_mEl.textContent==='—')_mEl.textContent=MILESTONES.length+' events';}
 // Retry a failed Push to Prod (Henrik, 2026-10-12: "Can we show a retry button if operations
 // like this has hicups? Under the Deploy button for a red failed line show a small retry
 // button" — a promotion had died on a GitHub 504 while merging, with CI already green).
@@ -3263,6 +3264,7 @@ function _tourToggle(){var st=document.getElementById('tour-stage');if(!st||TOUR
 // seen version on an account that is onboarded or has history means the card never existed for it
 // yet: it gets the whole list. Key a row to the version its PR ships AS (main's version.json + 1).
 var WHATS_NEW=[
+  {v:'1.897',title:'Export',text:'Settings → Export → Export CSV saves every injection, medication and supplement you have ticked, with each one\u2019s total for its week, as a spreadsheet file.'},
   {v:'1.891',title:'Token cost',text:'Settings → Food log · API key shows what the AI calls on your own key cost each week and each month, in the currency you pick (EUR to start with).'},
   {v:'1.875',title:'Medication and water',text:'Plan → Medication: take a photo of a medicine package to fill in its name and strength, pick how many tablets a day, and tick it on Today. Macros now logs water, with a daily target worked out from your body weight. Today\'s sections fold: tap a heading.'},
   {v:'1.863',title:'Macro targets per day',text:'Food Edit shows the targets in force on any day and lets you set them from that day onward, so the history card measures each day against the right goals. Use it to fill in the periods of an imported log.'},
@@ -3499,6 +3501,92 @@ async function rebuildScheduleFrom(){
     if(out)out.textContent='Rebuild failed — nothing was changed. Try again.';
   }
   if(btn){btn.disabled=false;btn.textContent='Rebuild from this date';}
+}
+// ── Export (Henrik, 2026-11-05: "a export feature from peptide tracker. It should download a csv file with
+// injections meds and supplements (including weekly dosage)") ─────────────────────────────────────────────
+// One row per dose taken: injections ticked as logged, medication ticks, supplement ticks. Read straight from the
+// backend (the record), never from the screen. week_total is that item's total for its ISO week in that unit, so
+// the weekly dosage sits on every row; it is empty when the dose is not a number.
+var EXPORT_COLS=['date','week','type','name','dose','unit','detail','time','week_total'];
+function _expIsoWeek(ds){
+  var p=String(ds||'').split('-');if(p.length!==3)return '';
+  var d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));if(isNaN(d))return '';
+  var day=d.getUTCDay()||7;d.setUTCDate(d.getUTCDate()+4-day);
+  var y=d.getUTCFullYear(),w=Math.ceil(((d-Date.UTC(y,0,1))/86400000+1)/7);
+  return y+'-W'+String(w).padStart(2,'0');
+}
+// "50 µg (2000 IU)" -> {n:50,u:'µg'}; "2.5" -> {n:2.5,u:''}; "1 capsule" -> {n:1,u:'capsule'}
+function _expNumUnit(v){
+  var m=String(v==null?'':v).trim().match(/^(\d+(?:[.,]\d+)?)\s*([^\s(]*)/);
+  if(!m)return {n:null,u:''};
+  return {n:parseFloat(m[1].replace(',','.')),u:m[2]||''};
+}
+function buildExportRows(src){
+  src=src||{};var rows=[];
+  (src.injections||[]).forEach(function(e){
+    if(!e||!e.logged||!e.date)return;
+    var dose=(e.logged_dose!=null&&e.logged_dose!=='')?e.logged_dose:e.dose;
+    var nu=_expNumUnit(dose);
+    rows.push({date:e.date,type:'injection',name:e.compound_name||e.compound_id||'',dose:nu.n!=null?nu.n:String(dose||''),
+      unit:e.unit||nu.u,detail:e.tier||'',time:e.time_of_day||''});
+  });
+  var meds={};(src.meds||[]).forEach(function(m){if(m&&m.id)meds[m.id]=m;});
+  (src.medLog||[]).forEach(function(l){
+    if(!l||!l.date||l.taken===false)return;var m=meds[l.med_id]||{};
+    var n=Number(m.tablets_per_day);
+    rows.push({date:l.date,type:'medication',name:m.name||l.med_id||'',dose:isFinite(n)&&n>0?n:'',
+      unit:String(m.form||'tablet').toLowerCase().indexOf('caps')>=0?'capsule':'tablet',detail:m.strength||'',time:''});
+  });
+  var supps={};(src.supps||[]).forEach(function(x){if(x&&x.supp_id)supps[x.supp_id]=x;});
+  (src.suppLog||[]).forEach(function(l){
+    if(!l||!l.date||l.taken===false)return;var x=supps[l.supp_id]||{};var nu=_expNumUnit(x.dose);
+    rows.push({date:l.date,type:'supplement',name:x.name||l.supp_id||'',dose:nu.n!=null?nu.n:String(x.dose||''),
+      unit:nu.u,detail:x.dose||'',time:l.slot||''});
+  });
+  var tot={};
+  rows.forEach(function(r){r.week=_expIsoWeek(r.date);
+    if(typeof r.dose==='number'){var k=r.type+'|'+r.name+'|'+r.unit+'|'+r.week;tot[k]=(tot[k]||0)+r.dose;}});
+  rows.forEach(function(r){var k=r.type+'|'+r.name+'|'+r.unit+'|'+r.week;
+    r.week_total=typeof r.dose==='number'?Math.round(tot[k]*1000)/1000:'';});
+  rows.sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:(a.type+a.name<b.type+b.name?-1:a.type+a.name>b.type+b.name?1:0);});
+  return rows;
+}
+function _expCell(v){var s=String(v==null?'':v);return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
+function exportCsv(rows){
+  return [EXPORT_COLS.join(',')].concat((rows||[]).map(function(r){return EXPORT_COLS.map(function(c){return _expCell(r[c]);}).join(',');})).join('\r\n')+'\r\n';
+}
+function buildExportCard(){
+  var card=document.getElementById('s-export-card');if(!card)return;
+  card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'
+    +sSecHdr('export','Export')+sSecBody('export')
+    +'<div style="padding:14px 16px;"><div style="font-size:12px;color:var(--muted2);margin-bottom:12px;line-height:1.6;">'
+    +'A CSV file of every injection, medication and supplement you have ticked, with each item’s total for its week.</div>'
+    +'<button id="s-export-btn" onclick="exportData()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Export CSV</button>'
+    +'<div id="s-export-status" style="font-size:12px;color:var(--muted2);margin-top:10px;"></div>'
+    +'</div></div></div>';
+}
+async function _expGet(path){var r=await fetch(AGENT_URL+path,{headers:authHeaders()});if(!r.ok)throw new Error(path+': HTTP '+r.status);return r.json();}
+async function exportData(){
+  var btn=document.getElementById('s-export-btn'),out=document.getElementById('s-export-status');
+  if(btn){btn.disabled=true;btn.textContent='Exporting…';}
+  if(out){out.textContent='';out.style.color='var(--muted2)';}
+  try{
+    var got=await Promise.all([_expGet('/injections?active_only=false'),_expGet('/medications'),_expGet('/medications/log'),
+      _expGet('/supplements'),_expGet('/supplement-log')]);
+    var rows=buildExportRows({injections:got[0],meds:got[1],medLog:got[2],supps:got[3],suppLog:got[4]});
+    var name='peptide-tracker-'+dateKey(new Date())+'.csv';
+    var file=new File([exportCsv(rows)],name,{type:'text/csv'});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){
+      try{await navigator.share({files:[file],title:name});}catch(e){if(e&&e.name==='AbortError')return;throw e;}
+    }else{
+      var url=URL.createObjectURL(file),a=document.createElement('a');a.href=url;a.download=name;
+      document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url);},1000);
+    }
+    if(out){out.style.color='var(--accent3,#3cffa0)';out.textContent=rows.length+(rows.length===1?' row':' rows')+' exported.';}
+  }catch(e){
+    if(typeof _logErr==='function')_logErr('exportData',e);
+    if(out){out.style.color='var(--danger,#ff3c3c)';out.textContent='Export failed: '+(e.message||e);}
+  }finally{if(btn){btn.disabled=false;btn.textContent='Export CSV';}}
 }
 function buildStageCopyCard(){
   var card=document.getElementById('s-stagecopy-card');if(!card)return;
