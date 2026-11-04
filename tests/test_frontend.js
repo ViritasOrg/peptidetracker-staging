@@ -22708,3 +22708,65 @@ console.log('\n── No feature is gated to staging ─────────
   check('every IS_STAGING use is environment plumbing or a listed test tool, never a feature gate',
     bad.length === 0, 'Push to Prod must ship every feature. Remove the gate:\n      ' + bad.join('\n      '));
 }
+
+// ── Export CSV (Henrik, 2026-11-05: "a export feature from peptide tracker. It should download a csv file with
+// injections meds and supplements (including weekly dosage)") ─────────────────────────────────────────────────
+console.log('\n── Export CSV ─────────────────────────────────────────────');
+{
+  check('export: ISO weeks (Monday start, week 1 holds Thursday)',
+    G._expIsoWeek('2026-11-02') === '2026-W45' && G._expIsoWeek('2026-11-08') === '2026-W45' &&
+    G._expIsoWeek('2026-11-09') === '2026-W46' && G._expIsoWeek('2027-01-01') === '2026-W53' && G._expIsoWeek('bad') === '');
+  const rows = G.buildExportRows({
+    injections: [
+      {date: '2026-11-02', compound_name: 'Nebido', compound_id: 'nebido', tier: 'trt', dose: '100', unit: 'mg', time_of_day: 'AM', logged: true},
+      {date: '2026-11-04', compound_name: 'Nebido', compound_id: 'nebido', tier: 'trt', dose: '100', logged_dose: '120', unit: 'mg', logged: true},
+      {date: '2026-11-06', compound_name: 'Nebido', compound_id: 'nebido', tier: 'trt', dose: '100', unit: 'mg', logged: false},
+      {date: '2026-11-10', compound_name: 'Nebido', compound_id: 'nebido', tier: 'trt', dose: '100', unit: 'mg', logged: true}],
+    meds: [{id: 'm1', name: 'Lisinopril', strength: '10 mg', tablets_per_day: 0.5, form: 'tablet'}],
+    medLog: [{med_id: 'm1', date: '2026-11-03'}, {med_id: 'm1', date: '2026-11-04'}, {med_id: 'gone', date: '2026-11-04'}],
+    supps: [{supp_id: 'vitd3', name: 'Vitamin D3', dose: '50 µg (2000 IU)'}, {supp_id: 'b', name: 'B-Complex', dose: 'one'}],
+    suppLog: [{supp_id: 'vitd3', date: '2026-11-03', slot: 'AM', taken: true}, {supp_id: 'vitd3', date: '2026-11-03', slot: 'PM', taken: true},
+              {supp_id: 'vitd3', date: '2026-11-04', slot: 'AM', taken: false}, {supp_id: 'b', date: '2026-11-04', slot: 'AM', taken: true}]});
+  const inj = rows.filter(r => r.type === 'injection');
+  check('export: only injections ticked as taken, at the dose actually logged',
+    inj.length === 3 && inj[1].dose === 120 && inj[0].unit === 'mg' && inj[0].time === 'AM');
+  check('  …each carries its week\'s total (100 + 120 in W45, 100 in W46)',
+    inj[0].week_total === 220 && inj[1].week_total === 220 && inj[2].week === '2026-W46' && inj[2].week_total === 100);
+  const med = rows.filter(r => r.type === 'medication');
+  check('export: medication ticks with tablets, strength, and a weekly tablet total',
+    med.length === 3 && med[0].name === 'Lisinopril' && med[0].dose === 0.5 && med[0].unit === 'tablet' &&
+    med[0].detail === '10 mg' && med[0].week_total === 1);
+  check('  …a tick for a deleted medication keeps its row, named by its id', med.some(r => r.name === 'gone'));
+  const sup = rows.filter(r => r.type === 'supplement');
+  check('export: supplement ticks per slot, untaken left out, total in the dose\'s own unit',
+    sup.length === 3 && sup[0].dose === 50 && sup[0].unit === 'µg' && sup[0].week_total === 100 && sup[0].detail === '50 µg (2000 IU)');
+  check('  …a dose that is not a number is kept as text with no total',
+    sup.some(r => r.name === 'B-Complex' && r.dose === 'one' && r.week_total === ''));
+  check('export: rows are in date order', rows.every((r, i) => i === 0 || rows[i - 1].date <= r.date));
+  const csv = G.exportCsv([{date: '2026-11-03', week: '2026-W45', type: 'medication', name: 'A, "B"', dose: 1, unit: 'tablet', detail: '', time: '', week_total: 7}]);
+  check('export: CSV has the header and quotes commas and quotes',
+    csv.split('\r\n')[0] === 'date,week,type,name,dose,unit,detail,time,week_total' &&
+    csv.split('\r\n')[1] === '2026-11-03,2026-W45,medication,"A, ""B""",1,tablet,,,7');
+  check('export: Settings has the card and it is built with the other cards',
+    /<div id="s-export-card"/.test(require('fs').readFileSync(htmlPath, 'utf8')) && /buildExportCard\(\);buildStageCopyCard\(\)/.test(require('fs').readFileSync(htmlPath, 'utf8')));
+  check('export: What\'s new tells about it', (G.WHATS_NEW || []).some(w => /Export/.test(w.title)));
+}
+globalThis.__exportRun = (async function(){
+  const calls = [], shared = [];
+  const _f = G.fetch, _n = G.navigator, _F = G.File, _gid = G.document.getElementById;
+  const els = {'s-export-btn': {textContent: '', disabled: false}, 's-export-status': {textContent: '', style: {}}};
+  G.document.getElementById = id => els[id] || null;
+  G.File = function(parts, name, o){ this.text = parts.join(''); this.name = name; this.type = o && o.type; };
+  G.navigator = {canShare: () => true, share: async o => { shared.push(o); }};
+  G.fetch = async (url) => { calls.push(url);
+    const path = url.replace(G.AGENT_URL, '');
+    const body = {'/injections?active_only=false': [{date: '2026-11-02', compound_name: 'Nebido', dose: '100', unit: 'mg', logged: true}],
+      '/medications': [], '/medications/log': [], '/supplements': [], '/supplement-log': []}[path];
+    return {ok: body !== undefined, status: body ? 200 : 404, json: async () => body}; };
+  try { await G.exportData(); } finally { G.fetch = _f; G.navigator = _n; G.File = _F; G.document.getElementById = _gid; }
+  check('export: reads all five records from the backend, injections including inactive ones',
+    ['/injections?active_only=false', '/medications', '/medications/log', '/supplements', '/supplement-log'].every(p => calls.some(u => u.endsWith(p))));
+  check('  …and hands a .csv file to the share sheet', shared.length === 1 && /^peptide-tracker-\d{4}-\d{2}-\d{2}\.csv$/.test(shared[0].files[0].name) &&
+    shared[0].files[0].type === 'text/csv' && /Nebido,100,mg/.test(shared[0].files[0].text));
+  check('  …and says how many rows', els['s-export-status'].textContent === '1 row exported.' && els['s-export-btn'].textContent === 'Export CSV');
+})().catch(e => check('export run checks ran', false, String(e && e.stack || e)));
