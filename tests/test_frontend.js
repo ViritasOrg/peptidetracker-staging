@@ -22672,3 +22672,39 @@ console.log('\n── Medication ───────────────�
     if (failed > 0) process.exitCode = 1;
   })().catch(e => { check('water: retry checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
 }
+
+// ── Push to Prod ships every feature: no feature is gated to staging (Henrik, 2026-11-04) ──
+// "I push stage to prod, then all features must be available in prod!" Polestar shipped behind
+// `POLESTAR_ON=IS_STAGING`, Henrik pushed to prod and the card was not there. IS_STAGING may only
+// switch ENVIRONMENT plumbing (data namespace, URLs, the Deploy and stage-copy cards) or a test
+// tool Henrik asked for as staging-only. Every use is listed here; a new one fails until it is
+// one of those and is added with its reason.
+console.log('\n── No feature is gated to staging ─────────────────────────');
+{
+  const _fs = require('fs'), _path = require('path');
+  const _dir = _path.dirname(_path.resolve(htmlPath));
+  const _files = [_path.resolve(htmlPath)].concat(_fs.readdirSync(_dir).filter(f => /\.js$/.test(f)).map(f => _path.join(_dir, f)));
+  const ALLOWED = [
+    /const IS_STAGING=\(window\.location\.pathname/,                 // the switch itself
+    /const APP_ID=IS_STAGING\?'stage':''/,                            // staging's own data namespace
+    /if\(IS_STAGING\)\{var _S='staging:'/,                           // staging's own localStorage keys
+    /IS_STAGING\?\{storage:/,                                         // Storage inspector (test tool)
+    /if\(IS_STAGING\)\{card\.innerHTML='';return;\}/,                // prod→stage copy card, prod only
+    /env='\+\(\(typeof IS_STAGING/,                                   // environment name in a debug report
+    /if\(IS_STAGING\)buildDeployCard\(\)|s-deploy-card/,              // the Push to Prod card itself
+    /fetch\(\(IS_STAGING\?'https:\/\/viritasorg\.github\.io\//,       // each app's own version.json
+    /if\(!IS_STAGING\|\|localStorage\.getItem\('wk-bf-isol-v1'\)\)/, // staging data isolation migration
+    /s-injbody-row|_injBodyOverrideFor\(typeof IS_STAGING/,           // body-figure override, "On stage only" (Henrik, 2026-10-14)
+    /Staging only, via IS_STAGING|DEBUG DUMP · STAGING ONLY/,         // T-Calc debug dump (test tool)
+  ];
+  const bad = [];
+  _files.forEach(f => {
+    const src = _fs.readFileSync(f, 'utf8'); let i = -1;
+    while ((i = src.indexOf('IS_STAGING', i + 1)) >= 0) {
+      const win = src.slice(Math.max(0, i - 80), i + 400);
+      if (!ALLOWED.some(re => re.test(win))) bad.push(_path.basename(f) + ': …' + src.slice(Math.max(0, i - 40), i + 60).replace(/\s+/g, ' ') + '…');
+    }
+  });
+  check('every IS_STAGING use is environment plumbing or a listed test tool, never a feature gate',
+    bad.length === 0, 'Push to Prod must ship every feature. Remove the gate:\n      ' + bad.join('\n      '));
+}
