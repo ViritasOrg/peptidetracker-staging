@@ -307,7 +307,8 @@ function _tcSuppDailyDose(inter, kind, obj) {
     nativeDaily = raw * factor;
     nativeUnit = parts[0] || 'mg';
   } else if (kind === 'supp') {
-    var rawS = parseDec(obj.dose) || 0;
+    // × how many a day: the stored dose is one capsule's strength (_suppDoseMult, 2026-11-05)
+    var rawS = (parseDec(obj.dose) || 0) * ((typeof _suppDoseMult === 'function') ? _suppDoseMult(obj) : 1);
     var m = String(obj.dose || '').match(/(mcg|µg|mg|iu|g)/i);
     nativeUnit = m ? m[1] : 'mg';
     var f = (obj.freq === 'weekly') ? 1 / 7 : (obj.freq === 'eod') ? 0.5 : 1;

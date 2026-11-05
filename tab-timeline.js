@@ -389,7 +389,7 @@ function _tlBuildLanes(from,to){
         var taken=0;
         slots.forEach(function(sl){if(typeof _suppIsTaken==='function'&&_suppIsTaken(sid,dk,sl))taken++;});
         L.days[dk]={dose:null,unit:'',n:slots.length,logged:taken,entries:[],slots:slots,
-          doseText:(typeof _suppFmtDose==='function')?_suppFmtDose(sid,s.dose):(s.dose||'')};
+          doseText:(typeof _suppDoseLine==='function')?_suppDoseLine(s):(s.dose||'')};
       }
     });
   }
