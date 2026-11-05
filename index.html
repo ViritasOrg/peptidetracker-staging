@@ -3577,10 +3577,14 @@ function buildExportRows(src){
       rows.push({type:'medication',name:m.name||'',per_day:t?_expRound(t):'',per_week:t?_expRound(t*7):'',unit:unit,note:m.strength||''});});
   (src.supps||[]).filter(function(s){return days.some(function(d){return _suppActiveOn(s,d);});})
     .sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''));})
-    .forEach(function(s){var nu=_expNumUnit(s.dose),slots=_suppSlots(s.timing).length;
-      var perWeek=nu.n==null?null:nu.n*slots*({daily:7,eod:3.5,weekly:1}[s.freq||'daily']||7);
+    .forEach(function(s){
+      // A dosing day's amount is the dose × how many a day (_suppDoseMult), as the timeline and T-Calc count it.
+      var nu=_expNumUnit(typeof _suppFmtDose==='function'?_suppFmtDose(s.supp_id,s.dose):s.dose);
+      var mult=typeof _suppDoseMult==='function'?_suppDoseMult(s):1;
+      var perWeek=nu.n==null?null:nu.n*mult*({daily:7,eod:3.5,weekly:1}[s.freq||'daily']||7);
+      var line=typeof _suppDoseLine==='function'?_suppDoseLine(s):'';
       rows.push({type:'supplement',name:s.name||'',per_day:perWeek==null?'':_expRound(perWeek/7),per_week:perWeek==null?'':_expRound(perWeek),
-        unit:nu.u,note:perWeek==null?String(s.dose||''):''});});
+        unit:nu.u,note:perWeek==null?String(s.dose||''):(mult>1?line:'')});});
   return rows;
 }
 function _expCell(v){var s=String(v==null?'':v);return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}

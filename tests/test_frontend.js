@@ -22901,6 +22901,7 @@ console.log('\n── Export CSV ───────────────�
     supps: [{supp_id: 'vitd3', name: 'Vitamin D3', dose: '50 µg (2000 IU)', timing: 'AMPM', freq: 'daily'},
             {supp_id: 'mg', name: 'Magnesium', dose: '400 mg', timing: 'PM', freq: 'weekly', start_date: '2026-10-01'},
             {supp_id: 'b', name: 'B-Complex', dose: 'one', timing: 'AM', freq: 'daily'},
+            {supp_id: 'omega', name: 'Omega-3', dose: '500 mg', per_day: 2, per_unit: 'capsule', timing: 'AM', freq: 'daily'},
             {supp_id: 'fut', name: 'Future', dose: '1 g', start_date: '2026-12-01'}]});
   const ij = rows.filter(r => r.type === 'injection');
   check('export: one row per compound, no dates', ij.length === 2 && !G.EXPORT_COLS.some(c => /date|time/.test(c)), JSON.stringify(ij));
@@ -22913,11 +22914,14 @@ console.log('\n── Export CSV ───────────────�
   check('export: medications in use today, tablets per day and per week, strength in the note',
     med.length === 1 && med[0].name === 'Lisinopril' && med[0].per_day === 0.5 && med[0].per_week === 3.5 && med[0].unit === 'tablet' && med[0].note === '10 mg');
   const sup = rows.filter(r => r.type === 'supplement'), d3 = sup.find(r => r.name === 'Vitamin D3'), mag = sup.find(r => r.name === 'Magnesium');
-  check('export: supplements due this week, per day and per week from dose × times a day × days',
-    sup.length === 3 && d3.per_day === 100 && d3.per_week === 700 && d3.unit === 'µg' && mag.per_week === 400 && mag.per_day === 57.14 && !sup.some(r => r.name === 'Future'), JSON.stringify(sup));
+  check('export: supplements due this week, per day and per week from dose × how many a day × days',
+    sup.length === 4 && d3.per_day === 50 && d3.per_week === 350 && d3.unit === 'µg' && mag.per_week === 400 && mag.per_day === 57.14 && !sup.some(r => r.name === 'Future'), JSON.stringify(sup));
+  const om = sup.find(r => r.name === 'Omega-3');
+  check('  …counted like the timeline and T-Calc: dose × how many a day (2 capsules of 500 mg = 1000 mg a day)',
+    om && om.per_day === 1000 && om.per_week === 7000 && om.unit === 'mg' && /2 capsules a day/.test(om.note), JSON.stringify(om));
   check('  …a dose that is not a number is kept as text with no figures', sup.some(r => r.name === 'B-Complex' && r.per_day === '' && r.note === 'one'));
   check('export: injections first, then medications, then supplements',
-    rows.map(r => r.type).join(',') === 'injection,injection,medication,supplement,supplement,supplement');
+    rows.map(r => r.type).join(',') === 'injection,injection,medication,supplement,supplement,supplement,supplement');
   const csv = G.exportCsv([{type: 'medication', name: 'A, "B"', per_day: 1, per_week: 7, unit: 'tablet', note: '10 mg'}]);
   check('export: CSV has the header and quotes commas and quotes',
     csv.split('\r\n')[0] === 'type,name,per_day,per_week,unit,note' && csv.split('\r\n')[1] === 'medication,"A, ""B""",1,7,tablet,10 mg');
