@@ -19257,8 +19257,15 @@ console.log('\n── Onboarding tour + What\'s new ─────────�
   G._tourStop();
 
   // "Watch the intro again" at the top of Settings: tour only, nothing saved.
-  check('Settings opens with a "Watch the intro again" button, before the first section',
-    /id="tab-settings">\s*<button id="tour-replay-btn" onclick="openTour\(\)"[^>]*>[^<]*<span[^>]*>▶<\/span>Watch the intro again<\/button>/.test(html));
+  // Henrik, 2026-11-05: "app version should be on top", "move push to prod to spot 2 in Settings in both apps", then
+  // "you hadnt moved App version up in peptide tracker": App card (version) first and open, Push to Prod second, the
+  // intro button third.
+  check('Settings opens with the App card (version), open',
+    /id="tab-settings">\s*<div[^>]*>\s*<div class="s-sec-hdr open"[^>]*>App<\/div>\s*<div class="s-sec-body" id="s-sec-app">[\s\S]*?id="s-version"/.test(html));
+  const _st = html.slice(html.indexOf('id="tab-settings"'));
+  check('  …then the Push to Prod card, then "Watch the intro again", before every other section',
+    _st.indexOf('id="s-sec-app"') < _st.indexOf('id="s-deploy-card"') && _st.indexOf('id="s-deploy-card"') < _st.indexOf('id="tour-replay-btn"') &&
+    _st.indexOf('id="tour-replay-btn"') < _st.indexOf("toggleSSec('backend')") && /id="tour-replay-btn"[^>]*>[^<]*<span[^>]*>▶<\/span>Watch the intro again<\/button>/.test(_st));
   const ov = trk('onboarding-overlay'); ov.classList.add('hidden');
   const dots = trk('ob-dots'), backB = trk('ob-back'), nextB = trk('ob-next'), skipB = trk('ob-skip-btn'), body = trk('ob-body');
   Object.defineProperty(body, 'innerHTML', { set() {}, get() { return ''; } }); Object.defineProperty(dots, 'innerHTML', { set() {}, get() { return ''; } });
@@ -19687,7 +19694,7 @@ console.log('\n── No fixed banners over the navbar ────────�
     /id="peptide-sync-btn" onclick="pushAllPeptideToBackend\(\)"/.test(_bSrc));
   check('  …inside the Data section',
     _bSrc.indexOf('id="s-sec-data"') < _bSrc.indexOf('id="peptide-sync-btn"') &&
-    _bSrc.indexOf('id="peptide-sync-btn"') < _bSrc.indexOf('id="s-sec-app"'));
+    _bSrc.indexOf('id="peptide-sync-btn"') < _bSrc.indexOf('id="s-sec-account"'));
   check('  …and the button resets instead of removing a bar it no longer sits in',
     /btn.textContent='Sync';btn.disabled=false;/.test(rawScript) &&
     !/closest\('\.sync-bar'\)/.test(rawScript));
