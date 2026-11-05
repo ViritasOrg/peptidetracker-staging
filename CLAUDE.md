@@ -11,8 +11,8 @@ Henrik, 2026-09-08: "you must move code to Stage, and once ready for test ping m
 ## 🔗 ONE NUMBER, ONE SOURCE — NOTHING MAY DISAGREE WITH ITSELF 🔗
 Henrik, 2026-09-08: "make it a rule that nowhere in any app can there be data not agreeing with each other." Across peptidetracker, workout and their staging copies, the same quantity has one definition in one place and every surface reads it from there (compound parameters, half-lives, dose tiers, reference ranges, conversions, models, derived figures). A quantity read from the backend is read from the backend everywhere, never copied into a constant. One model, one implementation (the Dose Finder shares T-Calc's pharmacology `_tcFreeTSeries`); one renderer per kind of content (`_renderEnhancedGuide` everywhere dose guidance shows). A derived figure names its source. Fix a disagreement at the source, never at the display: say so, pick the authoritative one, make the other read from it.
 
-<!-- BEGIN ORG-WIDE RULES v15. Canonical copy: ViritasOrg/claude-agent-backend docs/org-rules.md. Edit it there; the Sync org rules workflow opens the PRs that copy this block into every other ViritasOrg repo, and the daily drift check reports any copy that differs. -->
-## Org-wide rules: every ViritasOrg repo (canonical v15, 2026-11-05)
+<!-- BEGIN ORG-WIDE RULES v16. Canonical copy: ViritasOrg/claude-agent-backend docs/org-rules.md. Edit it there; the Sync org rules workflow opens the PRs that copy this block into every other ViritasOrg repo, and the daily drift check reports any copy that differs. -->
+## Org-wide rules: every ViritasOrg repo (canonical v16, 2026-11-05)
 
 Identical in every repo's `CLAUDE.md` under `ViritasOrg`; the rest of each file adds repo-specific rules. If one seems to contradict this block, say so to Henrik instead of picking one. They bind every session, whatever started it (Claude Code, claude.ai, a Project, a scheduled task, an agent). The quote and incident behind each rule: https://github.com/ViritasOrg/claude-agent-backend/blob/main/docs/org-rules-history.md.
 
@@ -25,7 +25,7 @@ Identical in every repo's `CLAUDE.md` under `ViritasOrg`; the rest of each file 
 - **One step at a time, as the last part of the message**: a message asks Henrik for ONE thing (the next step, decision or question) with its full command or page link and what he should see, as the final part of the message. Never a list of steps; the next one comes after he says this one is done. While a step is open, every message ends with it again in full; never "the steps above" (he runs about a hundred sessions).
 - **Times in Henrik's zone**: Helsinki time labelled EET/EEST (CET/CEST while he says he is in CET), never UTC, never both.
 - **Every request carries context**: what it is for, where it fits (step N of what), what he should see when it worked.
-- **Number questions** when there are two or more, so he can answer "1 yes 2 no".
+- **Number every question, even a single one** (https://github.com/ViritasOrg/flyt/issues/1294): "1. …", so he can answer "1 yes" (two or more: "1 yes 2 no").
 - **Don't stop for minor things**: a small reversible call (an estimate, a name, an obvious adjacent fix) is made and reported, not asked. Ask only what is his: a change to what he asked for, prod, a delete, a real trade-off.
 - **Once Henrik has answered, carry on** (https://github.com/ViritasOrg/Flyt/issues/582): never end a turn on "shall I go ahead?".
 - **Never slack off when you know what to do next**: a turn never ends on a plan, a promise or a summary while work that needs nothing from Henrik is undone. End only when finished, when it truly waits on Henrik (then end with that one step) or when it waits on something that will wake the session (CI, a scheduled check), named with when it lands.
@@ -90,7 +90,7 @@ Identical in every repo's `CLAUDE.md` under `ViritasOrg`; the rest of each file 
 
 ### CLAUDE.md holds rules, not records
 - A repo's root `CLAUDE.md` is loaded into every session, so it stays under 200 lines: imperative rules, one line each, an issue URL as provenance, at most one line of why. Quotes, incident stories, feature logs, "current state" and design notes go to `docs/` (pointed to from `CLAUDE.md` in one line), or to `.claude/rules/<area>.md` with `paths:` frontmatter when a rule only matters for part of the repo. A rule Henrik gives goes in as a rule; the quote goes to `docs/rule-history.md`.
-<!-- END ORG-WIDE RULES v15 -->
+<!-- END ORG-WIDE RULES v16 -->
 
 ## This repo
 Single-file PWA: `index.html` (JS, CSS, HTML inline) plus `tab-*.js`, `css/main.css`; `const VERSION` matches `version.json`, both bumped by the version-bump workflow on merge. GitHub Pages deploys on push to `main` (the live `version.json` cannot be fetched from a session; confirm deploys from `deploy-status`, below). All development happens here; `peptidetracker` (prod) is read-only for Claude. Shared infrastructure with `workout-staging` (Push to Prod, settings sync, update checker, auth, backend calls, `IS_STAGING`): **a fix in one app is made in the other in the same session**. Tests: `node tests/test_frontend.js index.html`, 0 failures before any PR. The old `CLAUDE.md` with every incident and mechanism is `docs/claude-md-archive-2026-11-05.md`; a new rule goes below as one line, its story into `docs/rule-history.md`.
