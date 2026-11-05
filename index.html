@@ -3264,7 +3264,7 @@ function _tourToggle(){var st=document.getElementById('tour-stage');if(!st||TOUR
 // seen version on an account that is onboarded or has history means the card never existed for it
 // yet: it gets the whole list. Key a row to the version its PR ships AS (main's version.json + 1).
 var WHATS_NEW=[
-  {v:'1.897',title:'Export',text:'Settings → Export → Export CSV saves every injection, medication and supplement you have ticked, with each one\u2019s total for its week, as a spreadsheet file.'},
+  {v:'1.897',title:'Export',text:'Settings → Export → Export CSV makes a file of what you are taking now, to show a doctor: the injections planned for the next 7 days, then your medications and supplements with their daily doses.'},
   {v:'1.891',title:'Token cost',text:'Settings → Food log · API key shows what the AI calls on your own key cost each week and each month, in the currency you pick (EUR to start with).'},
   {v:'1.875',title:'Medication and water',text:'Plan → Medication: take a photo of a medicine package to fill in its name and strength, pick how many tablets a day, and tick it on Today. Macros now logs water, with a daily target worked out from your body weight. Today\'s sections fold: tap a heading.'},
   {v:'1.863',title:'Macro targets per day',text:'Food Edit shows the targets in force on any day and lets you set them from that day onward, so the history card measures each day against the right goals. Use it to fill in the periods of an imported log.'},
@@ -3502,53 +3502,46 @@ async function rebuildScheduleFrom(){
   }
   if(btn){btn.disabled=false;btn.textContent='Rebuild from this date';}
 }
-// ── Export (Henrik, 2026-11-05: "a export feature from peptide tracker. It should download a csv file with
-// injections meds and supplements (including weekly dosage)") ─────────────────────────────────────────────
-// One row per dose taken: injections ticked as logged, medication ticks, supplement ticks. Read straight from the
-// backend (the record), never from the screen. week_total is that item's total for its ISO week in that unit, so
-// the weekly dosage sits on every row; it is empty when the dose is not a number.
-var EXPORT_COLS=['date','week','type','name','dose','unit','detail','time','week_total'];
-function _expIsoWeek(ds){
-  var p=String(ds||'').split('-');if(p.length!==3)return '';
-  var d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));if(isNaN(d))return '';
-  var day=d.getUTCDay()||7;d.setUTCDate(d.getUTCDate()+4-day);
-  var y=d.getUTCFullYear(),w=Math.ceil(((d-Date.UTC(y,0,1))/86400000+1)/7);
-  return y+'-W'+String(w).padStart(2,'0');
-}
+// ── Export (Henrik, 2026-11-05: "I want one weeks planned injections, and then a days meds and supplements. not for
+// the full timespan of the protocol. I just want a list that says "what I am taking atm" to show a doctor") ──────
+// A snapshot of the regimen, not a record of what was ticked: the injections planned for the 7 days from today,
+// exactly as Today and the week strip show them (_injectionsCache, deduped the same way), then one row per
+// medication and supplement in use, at its daily dose. Taken or not is left out on purpose.
+var EXPORT_COLS=['type','day','date','time','name','dose','unit','amount','how_often'];
+var EXPORT_DAYS=7;
 // "50 µg (2000 IU)" -> {n:50,u:'µg'}; "2.5" -> {n:2.5,u:''}; "1 capsule" -> {n:1,u:'capsule'}
 function _expNumUnit(v){
   var m=String(v==null?'':v).trim().match(/^(\d+(?:[.,]\d+)?)\s*([^\s(]*)/);
   if(!m)return {n:null,u:''};
   return {n:parseFloat(m[1].replace(',','.')),u:m[2]||''};
 }
+var _EXP_DAY=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+var _EXP_FREQ={daily:'daily',eod:'every other day',weekly:'weekly'};
+// src: {start: Date (today), injByDate: {'YYYY-MM-DD': [entries]}, meds: [...], supps: [...]}
 function buildExportRows(src){
-  src=src||{};var rows=[];
-  (src.injections||[]).forEach(function(e){
-    if(!e||!e.logged||!e.date)return;
-    var dose=(e.logged_dose!=null&&e.logged_dose!=='')?e.logged_dose:e.dose;
-    var nu=_expNumUnit(dose);
-    rows.push({date:e.date,type:'injection',name:e.compound_name||e.compound_id||'',dose:nu.n!=null?nu.n:String(dose||''),
-      unit:e.unit||nu.u,detail:e.tier||'',time:e.time_of_day||''});
+  src=src||{};var rows=[];var start=new Date(src.start||NOW);start.setHours(0,0,0,0);
+  var days=[];for(var i=0;i<EXPORT_DAYS;i++){var d=new Date(start);d.setDate(start.getDate()+i);days.push(d);}
+  var slot={AM:0,PM:1};
+  days.forEach(function(d){
+    var dk=dateKey(d);
+    var list=_dedupInjectionSlots(((src.injByDate||{})[dk]||[]).filter(function(e){return e&&e.active!==false;}));
+    list.sort(function(a,b){var sa=slot[a.time_of_day]!=null?slot[a.time_of_day]:2,sb=slot[b.time_of_day]!=null?slot[b.time_of_day]:2;
+      return sa-sb||String(a.compound_name||'').localeCompare(String(b.compound_name||''));});
+    list.forEach(function(e){var nu=_expNumUnit(e.dose);
+      rows.push({type:'injection',day:_EXP_DAY[d.getDay()],date:dk,time:e.time_of_day||'',
+        name:e.compound_name||e.compound_id||'',dose:nu.n!=null?nu.n:String(e.dose||''),unit:e.unit||nu.u,amount:'',how_often:''});});
   });
-  var meds={};(src.meds||[]).forEach(function(m){if(m&&m.id)meds[m.id]=m;});
-  (src.medLog||[]).forEach(function(l){
-    if(!l||!l.date||l.taken===false)return;var m=meds[l.med_id]||{};
-    var n=Number(m.tablets_per_day);
-    rows.push({date:l.date,type:'medication',name:m.name||l.med_id||'',dose:isFinite(n)&&n>0?n:'',
-      unit:String(m.form||'tablet').toLowerCase().indexOf('caps')>=0?'capsule':'tablet',detail:m.strength||'',time:''});
-  });
-  var supps={};(src.supps||[]).forEach(function(x){if(x&&x.supp_id)supps[x.supp_id]=x;});
-  (src.suppLog||[]).forEach(function(l){
-    if(!l||!l.date||l.taken===false)return;var x=supps[l.supp_id]||{};var nu=_expNumUnit(x.dose);
-    rows.push({date:l.date,type:'supplement',name:x.name||l.supp_id||'',dose:nu.n!=null?nu.n:String(x.dose||''),
-      unit:nu.u,detail:x.dose||'',time:l.slot||''});
-  });
-  var tot={};
-  rows.forEach(function(r){r.week=_expIsoWeek(r.date);
-    if(typeof r.dose==='number'){var k=r.type+'|'+r.name+'|'+r.unit+'|'+r.week;tot[k]=(tot[k]||0)+r.dose;}});
-  rows.forEach(function(r){var k=r.type+'|'+r.name+'|'+r.unit+'|'+r.week;
-    r.week_total=typeof r.dose==='number'?Math.round(tot[k]*1000)/1000:'';});
-  rows.sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:(a.type+a.name<b.type+b.name?-1:a.type+a.name>b.type+b.name?1:0);});
+  var inWeek=function(fn,x){return days.some(function(d){return fn(x,d);});};
+  (src.meds||[]).filter(function(m){return _medActiveOn(m,start);})
+    .sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''));})
+    .forEach(function(m){var nu=_expNumUnit(m.strength);
+      rows.push({type:'medication',day:'',date:'',time:'',name:m.name||'',dose:nu.n!=null?nu.n:String(m.strength||''),unit:nu.u,
+        amount:Number(m.tablets_per_day)>0?_medFmtTablets(m.tablets_per_day,m.form)+' a day':'',how_often:'daily'});});
+  (src.supps||[]).filter(function(s){return inWeek(_suppActiveOn,s);})
+    .sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''));})
+    .forEach(function(s){var nu=_expNumUnit(s.dose);
+      rows.push({type:'supplement',day:'',date:'',time:_suppSlots(s.timing).join(' + '),name:s.name||'',
+        dose:nu.n!=null?nu.n:String(s.dose||''),unit:nu.u,amount:s.dose||'',how_often:_EXP_FREQ[s.freq||'daily']||String(s.freq)});});
   return rows;
 }
 function _expCell(v){var s=String(v==null?'':v);return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
@@ -3560,21 +3553,21 @@ function buildExportCard(){
   card.innerHTML='<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">'
     +sSecHdr('export','Export')+sSecBody('export')
     +'<div style="padding:14px 16px;"><div style="font-size:12px;color:var(--muted2);margin-bottom:12px;line-height:1.6;">'
-    +'A CSV file of every injection, medication and supplement you have ticked, with each item’s total for its week.</div>'
+    +'What you are taking now, as a CSV file to show a doctor: the injections planned for the next 7 days, then your medications and supplements with their daily doses.</div>'
     +'<button id="s-export-btn" onclick="exportData()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-ui);">Export CSV</button>'
     +'<div id="s-export-status" style="font-size:12px;color:var(--muted2);margin-top:10px;"></div>'
     +'</div></div></div>';
 }
-async function _expGet(path){var r=await fetch(AGENT_URL+path,{headers:authHeaders()});if(!r.ok)throw new Error(path+': HTTP '+r.status);return r.json();}
+// The regimen as the app holds it: the injections Today shows, and the meds and supplements caches (both mirror the backend).
+function _expSources(){return {start:NOW,injByDate:_injectionsCache,meds:_meds,supps:_supplements};}
 async function exportData(){
   var btn=document.getElementById('s-export-btn'),out=document.getElementById('s-export-status');
   if(btn){btn.disabled=true;btn.textContent='Exporting…';}
   if(out){out.textContent='';out.style.color='var(--muted2)';}
   try{
-    var got=await Promise.all([_expGet('/injections?active_only=false'),_expGet('/medications'),_expGet('/medications/log'),
-      _expGet('/supplements'),_expGet('/supplement-log')]);
-    var rows=buildExportRows({injections:got[0],meds:got[1],medLog:got[2],supps:got[3],suppLog:got[4]});
-    var name='peptide-tracker-'+dateKey(new Date())+'.csv';
+    if(!_injCacheReady)await refreshInjectionsCache();
+    var rows=buildExportRows(_expSources());
+    var name='peptide-tracker-current-'+dateKey(new Date(NOW))+'.csv';
     var file=new File([exportCsv(rows)],name,{type:'text/csv'});
     if(navigator.canShare&&navigator.canShare({files:[file]})){
       try{await navigator.share({files:[file],title:name});}catch(e){if(e&&e.name==='AbortError')return;throw e;}
@@ -3582,7 +3575,8 @@ async function exportData(){
       var url=URL.createObjectURL(file),a=document.createElement('a');a.href=url;a.download=name;
       document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url);},1000);
     }
-    if(out){out.style.color='var(--accent3,#3cffa0)';out.textContent=rows.length+(rows.length===1?' row':' rows')+' exported.';}
+    var c=function(t){return rows.filter(function(r){return r.type===t;}).length;};
+    if(out){out.style.color='var(--accent3,#3cffa0)';out.textContent='Exported '+c('injection')+' injection(s) this week, '+c('medication')+' medication(s), '+c('supplement')+' supplement(s).';}
   }catch(e){
     if(typeof _logErr==='function')_logErr('exportData',e);
     if(out){out.style.color='var(--danger,#ff3c3c)';out.textContent='Export failed: '+(e.message||e);}
