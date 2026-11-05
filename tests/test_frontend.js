@@ -22881,52 +22881,49 @@ console.log('\n── No feature is gated to staging ─────────
     bad.length === 0, 'Push to Prod must ship every feature. Remove the gate:\n      ' + bad.join('\n      '));
 }
 
-// ── Export CSV (Henrik, 2026-11-05: "I want one weeks planned injections, and then a days meds and supplements.
-// not for the full timespan of the protocol. I just want a list that says "what I am taking atm" to show a doctor") ──
+// ── Export CSV (Henrik, 2026-11-05: "It should show planned injections for a week like Testosteron E xxx mg/week,
+// HGH 6iu/Day", then "I want a short list of what I take dose peer day and week in separate columns") ──
 console.log('\n── Export CSV ─────────────────────────────────────────────');
 {
-  const inj = (date, o) => Object.assign({date, compound_id: 'nebido', compound_name: 'Nebido', dose: '100', unit: 'mg', time_of_day: 'AM', active: true}, o || {});
+  const inj = (date, o) => Object.assign({date, compound_id: 'test_e', compound_name: 'Testosterone E', dose: '125', unit: 'mg', time_of_day: 'AM', active: true}, o || {});
+  const hgh = date => inj(date, {compound_id: 'hgh', compound_name: 'HGH', dose: '6', unit: 'IU'});
+  const byDate = {};
+  for (let i = 0; i < 9; i++) { const d = new Date(2026, 10, 4 + i); const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); byDate[k] = [hgh(k)]; }
+  byDate['2026-11-05'].push(inj('2026-11-05', {logged: true}), inj('2026-11-05', {id: 'dup'}));
+  byDate['2026-11-08'].push(inj('2026-11-08'), inj('2026-11-08', {compound_id: 'old', compound_name: 'Old', active: false}));
+  byDate['2026-11-04'].push(inj('2026-11-04'));
+  byDate['2026-11-12'].push(inj('2026-11-12'));
   const rows = G.buildExportRows({
     start: new Date(2026, 10, 5),
-    injByDate: {
-      '2026-11-04': [inj('2026-11-04')],
-      '2026-11-05': [inj('2026-11-05', {logged: true}), inj('2026-11-05', {compound_id: 'bpc', compound_name: 'BPC-157', dose: '250', unit: 'µg', time_of_day: 'PM'})],
-      '2026-11-07': [inj('2026-11-07'), inj('2026-11-07', {id: 'x'}), inj('2026-11-07', {compound_id: 'old', compound_name: 'Old', active: false})],
-      '2026-11-11': [inj('2026-11-11')],
-      '2026-11-12': [inj('2026-11-12')]},
+    injByDate: byDate,
     meds: [{id: 'm1', name: 'Lisinopril', strength: '10 mg', tablets_per_day: 0.5, form: 'tablet'},
            {id: 'm2', name: 'Later', strength: '5 mg', tablets_per_day: 1, start_date: '2026-12-01'}],
     supps: [{supp_id: 'vitd3', name: 'Vitamin D3', dose: '50 µg (2000 IU)', timing: 'AMPM', freq: 'daily'},
-            {supp_id: 'mg', name: 'Magnesium', dose: '200 mg', timing: 'PM', freq: 'weekly', start_date: '2026-10-01', per_day: 2, per_unit: 'capsule'},
+            {supp_id: 'mg', name: 'Magnesium', dose: '400 mg', timing: 'PM', freq: 'weekly', start_date: '2026-10-01'},
+            {supp_id: 'b', name: 'B-Complex', dose: 'one', timing: 'AM', freq: 'daily'},
             {supp_id: 'fut', name: 'Future', dose: '1 g', start_date: '2026-12-01'}]});
   const ij = rows.filter(r => r.type === 'injection');
-  check('export: injections planned for the 7 days from today, nothing before or after',
-    ij.length === 4 && ij[0].date === '2026-11-05' && ij[ij.length - 1].date === '2026-11-11', JSON.stringify(ij));
-  check('  …whether ticked or not, deduped like Today, inactive ones left out',
-    ij.filter(r => r.date === '2026-11-07').length === 1 && !ij.some(r => r.name === 'Old'));
-  check('  …in day then AM/PM order, with weekday, time, dose and unit',
-    ij[0].name === 'Nebido' && ij[0].day === 'Thu' && ij[0].time === 'AM' && ij[0].dose === 100 && ij[0].unit === 'mg' &&
-    ij[1].name === 'BPC-157' && ij[1].time === 'PM' && ij[1].unit === 'µg');
-  check('export: no taken status and no weekly totals in the file', !G.EXPORT_COLS.some(c => /taken|logged|total|week$/.test(c)));
+  check('export: one row per compound, no dates', ij.length === 2 && !G.EXPORT_COLS.some(c => /date|time/.test(c)), JSON.stringify(ij));
+  const te = ij.find(r => r.name === 'Testosterone E'), gh = ij.find(r => r.name === 'HGH');
+  check('  …Testosterone E: the week\'s planned doses (deduped like Today, inactive left out) as mg per week and per day',
+    te && te.per_week === 250 && te.per_day === 35.71 && te.unit === 'mg' && te.note === '2 injections a week', JSON.stringify(te));
+  check('  …HGH 6 IU every day reads 6 per day and 42 per week', gh && gh.per_day === 6 && gh.per_week === 42 && gh.unit === 'IU', JSON.stringify(gh));
+  check('export: columns are per day and per week side by side', G.EXPORT_COLS.join(',') === 'type,name,per_day,per_week,unit,note');
   const med = rows.filter(r => r.type === 'medication');
-  check('export: medications in use today, with strength and the daily amount',
-    med.length === 1 && med[0].name === 'Lisinopril' && med[0].dose === 10 && med[0].unit === 'mg' && med[0].amount === '½ tablet a day' && med[0].how_often === 'daily');
-  const sup = rows.filter(r => r.type === 'supplement');
-  check('export: supplements due this week, with their dose, times of day and how often',
-    sup.length === 2 && sup[1].name === 'Vitamin D3' && sup[1].dose === 50 && sup[1].unit === 'µg' && sup[1].time === 'AM + PM' &&
-    sup[1].how_often === 'daily' && sup[0].name === 'Magnesium' && sup[0].how_often === 'weekly');
-  check('export: a supplement with a count shows the strength per capsule and how many a day (2026-11-05)',
-    sup[0].dose === 200 && sup[0].unit === 'mg' && sup[0].amount === '2 capsules a day', JSON.stringify(sup[0]));
-  check('  …one saved before the count keeps its dose as the amount', sup[1].amount === '50 µg (2000 IU)');
+  check('export: medications in use today, tablets per day and per week, strength in the note',
+    med.length === 1 && med[0].name === 'Lisinopril' && med[0].per_day === 0.5 && med[0].per_week === 3.5 && med[0].unit === 'tablet' && med[0].note === '10 mg');
+  const sup = rows.filter(r => r.type === 'supplement'), d3 = sup.find(r => r.name === 'Vitamin D3'), mag = sup.find(r => r.name === 'Magnesium');
+  check('export: supplements due this week, per day and per week from dose × times a day × days',
+    sup.length === 3 && d3.per_day === 100 && d3.per_week === 700 && d3.unit === 'µg' && mag.per_week === 400 && mag.per_day === 57.14 && !sup.some(r => r.name === 'Future'), JSON.stringify(sup));
+  check('  …a dose that is not a number is kept as text with no figures', sup.some(r => r.name === 'B-Complex' && r.per_day === '' && r.note === 'one'));
   check('export: injections first, then medications, then supplements',
-    rows.map(r => r.type).join(',') === 'injection,injection,injection,injection,medication,supplement,supplement');
-  const csv = G.exportCsv([{type: 'medication', name: 'A, "B"', dose: 1, unit: 'mg', amount: '1 tablet a day', how_often: 'daily'}]);
+    rows.map(r => r.type).join(',') === 'injection,injection,medication,supplement,supplement,supplement');
+  const csv = G.exportCsv([{type: 'medication', name: 'A, "B"', per_day: 1, per_week: 7, unit: 'tablet', note: '10 mg'}]);
   check('export: CSV has the header and quotes commas and quotes',
-    csv.split('\r\n')[0] === 'type,day,date,time,name,dose,unit,amount,how_often' &&
-    csv.split('\r\n')[1] === 'medication,,,,"A, ""B""",1,mg,1 tablet a day,daily');
+    csv.split('\r\n')[0] === 'type,name,per_day,per_week,unit,note' && csv.split('\r\n')[1] === 'medication,"A, ""B""",1,7,tablet,10 mg');
   check('export: Settings has the card and it is built with the other cards',
     /<div id="s-export-card"/.test(require('fs').readFileSync(htmlPath, 'utf8')) && /buildExportCard\(\);buildStageCopyCard\(\)/.test(require('fs').readFileSync(htmlPath, 'utf8')));
-  check('export: What\'s new tells about it', (G.WHATS_NEW || []).some(w => /Export/.test(w.title) && /doctor/.test(w.text)));
+  check('export: What\'s new tells about it', (G.WHATS_NEW || []).some(w => /Export/.test(w.title) && /per day and per week/.test(w.text)));
 }
 globalThis.__exportRun = (async function(){
   const shared = [];
@@ -22938,8 +22935,8 @@ globalThis.__exportRun = (async function(){
   G.navigator = {canShare: () => true, share: async o => { shared.push(o); }};
   try { await G.exportData(); } finally { G.navigator = _n; G.File = _F; G.document.getElementById = _gid; }
   check('export: hands a .csv file to the share sheet', shared.length === 1 && /^peptide-tracker-current-\d{4}-\d{2}-\d{2}\.csv$/.test(shared[0].files[0].name) &&
-    shared[0].files[0].type === 'text/csv' && /^type,day,date,time,name,dose,unit,amount,how_often\r\n/.test(shared[0].files[0].text), String(shared[0] && shared[0].files[0].text));
-  check('  …and says what it exported', /^Exported \d+ injection\(s\) this week, \d+ medication\(s\), \d+ supplement\(s\)\.$/.test(els['s-export-status'].textContent) &&
+    shared[0].files[0].type === 'text/csv' && /^type,name,per_day,per_week,unit,note\r\n/.test(shared[0].files[0].text), String(shared[0] && shared[0].files[0].text));
+  check('  …and says what it exported', /^Exported \d+ compound\(s\), \d+ medication\(s\), \d+ supplement\(s\)\.$/.test(els['s-export-status'].textContent) &&
     els['s-export-btn'].textContent === 'Export CSV', els['s-export-status'].textContent);
 })().catch(e => check('export run checks ran', false, String(e && e.stack || e)));
 
