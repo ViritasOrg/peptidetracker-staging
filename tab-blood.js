@@ -382,7 +382,9 @@ function _blBuildLines(){
     // so the mg-equivalent magnitude is correct rather than treating IU as mg.
     var _fmt = (typeof _suppFmtDose==='function') ? _suppFmtDose(s.supp_id, s.dose) : s.dose;
     var _sp  = (typeof _suppParseDose==='function') ? _suppParseDose(_fmt) : null;
-    var dose = _sp ? _sp.amount : (parseDec(s.dose) || 1);
+    // × how many a day: the stored dose is one capsule's strength (_suppDoseMult, 2026-11-05)
+    var _mult = (typeof _suppDoseMult==='function') ? _suppDoseMult(s) : 1;
+    var dose = (_sp ? _sp.amount : (parseDec(s.dose) || 1)) * _mult;
     var sUnit = _sp ? _sp.unit : 'mg';
     var sStart = s.start_date ? parseLocalDate(s.start_date) : firstDate;
     var offset = Math.round((sStart.getTime() - firstDate.getTime())/86400000);
@@ -392,7 +394,7 @@ function _blBuildLines(){
     if(!injDays.length) return;
     // Average daily dose in IU (for biomarker models keyed in IU, e.g. Vitamin D →
     // 25-OH-D). Prefer an explicit "… IU" dose; else convert µg (D3: 1 µg = 40 IU).
-    var _perDose = /IU/i.test(String(s.dose||'')) ? (parseDec(s.dose)||0)
+    var _perDose = /IU/i.test(String(s.dose||'')) ? (parseDec(s.dose)||0)*_mult
                  : (s.supp_id==='vitd3' && sUnit==='µg' ? dose*40 : 0);
     var _freqF = s.freq==='weekly' ? 1/7 : (s.freq==='eod' ? 1/2 : 1);
     lines.push({ id:'supp_'+(s.id||s.supp_id), pkId:s.supp_id, name:s.name||s.supp_id, color:_BL_SUPP_COLORS[i%_BL_SUPP_COLORS.length],

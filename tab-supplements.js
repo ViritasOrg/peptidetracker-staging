@@ -64,6 +64,42 @@ var _suppViewDate = null;// date currently shown in the Today section (for re-re
 function _suppEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function _suppCat(id){ return SUPPLEMENT_CAT.find(function(c){return c.id===id;}); }
 
+// ── How many a day (Henrik, 2026-11-05: "assumes one capsule is the daily dose … I need to add
+// number of capsules/tablets taken per day per supplement (or grams for powders etc)") ─────────
+// A row's dose is the strength of ONE per_unit when that is a count (capsule, tablet …), so the
+// day's amount is dose × per_day. For g and ml (powder or liquid by weight or volume) the dose is
+// already the day's amount. Rows saved before carry no per_day: their dose counts once, as before.
+var SUPP_PER_UNITS = ['capsule','tablet','softgel','gummy','scoop','drop','serving','g','ml'];
+function _suppIsCountUnit(u){ return SUPP_PER_UNITS.indexOf(u) >= 0 && u !== 'g' && u !== 'ml'; }
+function _suppFmtNum(n){
+  var w = Math.floor(n), f = Math.round((n - w) * 100) / 100;
+  var fr = f === 0.5 ? '½' : (f === 0.25 ? '¼' : (f === 0.75 ? '¾' : ''));
+  if(fr) return (w ? String(w) : '') + fr;
+  return String(Math.round(n * 100) / 100);
+}
+function _suppUnitWord(u, n){
+  if(!_suppIsCountUnit(u) || n <= 1) return u;
+  return u === 'gummy' ? 'gummies' : u + 's';
+}
+// "2 capsules a day", "5 g a day", or '' for a row without a per-day amount.
+function _suppPerDayText(s){
+  var n = s ? Number(s.per_day) : 0;
+  if(!(n > 0) || !s.per_unit) return '';
+  return _suppFmtNum(n) + ' ' + _suppUnitWord(s.per_unit, n) + ' a day';
+}
+// What the stored dose is multiplied by to get the day's amount of the active ingredient.
+function _suppDoseMult(s){
+  var n = s ? Number(s.per_day) : 0;
+  return (n > 0 && _suppIsCountUnit(s.per_unit)) ? n : 1;
+}
+// The dose line shown wherever a supplement is listed: "200 mg per capsule · 2 capsules a day".
+function _suppDoseLine(s){
+  var d = _suppFmtDose(s.supp_id, s.dose) || '';
+  var p = _suppPerDayText(s);
+  if(d && p && _suppIsCountUnit(s.per_unit)) d += ' per ' + s.per_unit;
+  return [d, p].filter(Boolean).join(' · ');
+}
+
 // Display-only formatting of a stored dose string. Supplements saved before the metric/µg
 // change keep their old dose text (e.g. "5000 IU", "100 mcg") — the stored value is left
 // untouched, but for display we (1) write micrograms as "µg" not "mcg", and (2) upgrade an
@@ -368,7 +404,7 @@ function renderTodaySupplements(date){
     return '<div class="check-item'+(taken?' checked-item':'')+'" onclick="toggleSupplementDose(\''+_suppEsc(r.s.supp_id)+'\',\''+dstr+'\',\''+r.slot+'\')">' +
       '<div class="check-box'+(taken?' checked':'')+'"><svg width="12" height="10" viewBox="0 0 12 10" fill="none"><path d="M1 5l3.5 3.5L11 1" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>' +
       '<div class="check-main"><div class="check-name" style="color:var(--text)">' + _suppEsc(r.s.name) + '</div>' +
-      (r.s.dose ? '<div class="check-detail">' + _suppEsc(_suppFmtDose(r.s.supp_id, r.s.dose)) + '</div>' : '') + '</div>' +
+      (_suppDoseLine(r.s) ? '<div class="check-detail">' + _suppEsc(_suppDoseLine(r.s)) + '</div>' : '') + '</div>' +
       '<div class="check-time">' + r.slot + '</div></div>';
   }).join('');
   wrap.innerHTML =
@@ -398,7 +434,7 @@ function buildSupplements(){
         '<div style="width:9px;height:9px;border-radius:50%;background:var(--accent3,#7bd88f);flex-shrink:0"></div>' +
         '<div style="flex:1;min-width:0">' +
           '<div style="font-size:15px;font-weight:600;color:var(--text)">' + _suppEsc(s.name) + '</div>' +
-          '<div style="font-size:12px;color:var(--muted2);margin-top:3px">' + _suppEsc(_suppFmtDose(s.supp_id, s.dose)||'') + (s.dose?' · ':'') + meta + '</div>' +
+          '<div style="font-size:12px;color:var(--muted2);margin-top:3px">' + _suppEsc(_suppDoseLine(s)) + (_suppDoseLine(s)?' · ':'') + meta + '</div>' +
         '</div>' +
         '<button onclick="_suppOpenAddSheet(\'' + _suppEsc(s.id) + '\')" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">Edit</button>' +
         '<button onclick="_suppDelete(\'' + _suppEsc(s.id) + '\')" aria-label="Delete" style="background:none;border:none;color:var(--muted2);font-size:20px;cursor:pointer;line-height:1;padding:2px 4px">×</button>' +
@@ -436,10 +472,15 @@ function _suppOpenAddSheet(editId){
     '</div>' +
     '<input id="supp-photo" type="file" accept="image/'+'*" style="display:none" onchange="_suppPhotoPicked(this)">' +
     '<button id="supp-photo-btn" onclick="document.getElementById(\'supp-photo\').click()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:12px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:6px">📷 Photo of the label</button>' +
-    '<div id="supp-photo-msg" style="font-size:12px;color:var(--muted);margin-bottom:14px">Name and daily dose are read from the photo with your own API key (Settings, Food key). Check them before saving. A supplement not in the list is added to it.</div>' +
+    '<div id="supp-photo-msg" style="font-size:12px;color:var(--muted);margin-bottom:14px">Name, dose and how many a day are read from the photo with your own API key (Settings, Food key). Check them before saving. A supplement not in the list is added to it.</div>' +
     '<div style="margin-bottom:14px"><label style="'+lSty+'">Supplement</label>' +
-      '<select id="supp-as-comp" onchange="_suppFillDoses()" style="'+iSty+'">'+compOpts+'</select></div>' +
-    '<div style="margin-bottom:14px"><label style="'+lSty+'">Dose</label>' +
+      '<select id="supp-as-comp" onchange="_suppFillDoses();_suppFillPerDay(null,null)" style="'+iSty+'">'+compOpts+'</select></div>' +
+    '<div style="margin-bottom:14px"><label style="'+lSty+'">Per day</label>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
+        '<select id="supp-as-perday" aria-label="How many a day" style="'+iSty+'"></select>' +
+        '<select id="supp-as-perunit" aria-label="Counted in" onchange="_suppPerUnitSel()" style="'+iSty+'"></select>' +
+      '</div></div>' +
+    '<div style="margin-bottom:14px"><label id="supp-as-dose-lbl" style="'+lSty+'">Dose</label>' +
       '<select id="supp-as-dose" onchange="_suppDoseSel()" style="'+iSty+';margin-bottom:8px"></select>' +
       '<div id="supp-as-dose-custom" style="display:none;grid-template-columns:1fr 1fr;gap:12px">' +
         '<div style="min-width:0"><label style="'+lSty+'">Amount</label>' +
@@ -455,6 +496,42 @@ function _suppOpenAddSheet(editId){
     '</div>';
   document.body.appendChild(ol);
   _suppFillDoses(editing ? _suppFmtDose(editing.supp_id, editing.dose) : null);
+  _suppFillPerDay(editing ? editing.per_day : null, editing ? editing.per_unit : null);
+}
+
+// ── Per day: how many (amount dropdown) of what (unit dropdown) ──────────────
+function _suppPerDayOptions(unit){
+  if(unit === 'g')    return [0.5,1,2,3,5,10,15,20,25,30,40,50];
+  if(unit === 'ml')   return [1,2.5,5,10,15,20,30,50];
+  if(unit === 'drop') return [1,2,3,4,5,10,15,20,30];
+  return [0.5,1,1.5,2,3,4,5,6,8,10];
+}
+// Unit a supplement is most likely counted in, from its catalogue doses.
+function _suppDefaultPerUnit(){
+  var compEl = document.getElementById('supp-as-comp');
+  var cat = compEl ? _suppCat(compEl.value) : null;
+  var d = (cat && cat.doses && cat.doses[0]) ? String(cat.doses[0]) : '';
+  if(/scoop/.test(d) || /^\s*[\d.]+\s*g\b/.test(d)) return 'scoop';
+  if(/serving/.test(d)) return 'serving';
+  return 'capsule';
+}
+function _suppFillPerDay(n, unit){
+  var uEl = document.getElementById('supp-as-perunit'), nEl = document.getElementById('supp-as-perday');
+  if(!uEl || !nEl) return;
+  var u = SUPP_PER_UNITS.indexOf(unit) >= 0 ? unit : _suppDefaultPerUnit();
+  uEl.innerHTML = SUPP_PER_UNITS.map(function(x){ return '<option value="'+x+'"'+(x===u?' selected':'')+'>'+_suppUnitWord(x, 2)+'</option>'; }).join('');
+  uEl.value = u;
+  var opts = _suppPerDayOptions(u).slice();
+  var sel = (Number(n) > 0) ? Number(n) : 1;
+  if(opts.indexOf(sel) === -1){ opts.push(sel); opts.sort(function(a,b){ return a-b; }); }
+  nEl.innerHTML = opts.map(function(v){ return '<option value="'+v+'"'+(v===sel?' selected':'')+'>'+_suppFmtNum(v)+'</option>'; }).join('');
+  nEl.value = String(sel);
+  var lbl = document.getElementById('supp-as-dose-lbl');
+  if(lbl) lbl.textContent = _suppIsCountUnit(u) ? ('Dose per ' + u) : 'Dose a day';
+}
+function _suppPerUnitSel(){
+  var uEl = document.getElementById('supp-as-perunit'), nEl = document.getElementById('supp-as-perday');
+  _suppFillPerDay(nEl ? Number(nEl.value) : null, uEl ? uEl.value : null);
 }
 
 function _suppCloseAddSheet(){
@@ -493,6 +570,7 @@ function _suppApplyRead(j){
     compEl.value = cat.id;
   }
   _suppFillDoses(dose || null);
+  _suppFillPerDay(j.per_day, j.per_unit);
   return cat;
 }
 async function _suppPhotoPicked(inp){
@@ -510,7 +588,7 @@ async function _suppPhotoPicked(inp){
       var cat = _suppApplyRead(j);
       if(!cat) _suppSetPhotoMsg('No supplement read from the photo. Pick it from the list.', true);
       else _suppSetPhotoMsg((cat._new ? 'New supplement: it is added to the list when you save. ' : '') +
-        (j.dose ? 'Daily dose read from the label. Check it, then save.' : 'No amount was visible. Pick the dose, then save.'));
+        (j.dose ? 'Dose and how many a day read from the label. Check them, then save.' : 'No amount was visible. Pick the dose, then save.'));
     }
   }catch(e){
     _suppSheet.busy = false;
@@ -627,6 +705,8 @@ function _suppDoseSel(){
   }
 }
 
+function _suppSheetPerDay(){ var el = document.getElementById('supp-as-perday'); var n = el ? Number(el.value) : 0; return n > 0 ? n : 1; }
+function _suppSheetPerUnit(){ var el = document.getElementById('supp-as-perunit'); return (el && SUPP_PER_UNITS.indexOf(el.value) >= 0) ? el.value : 'serving'; }
 async function _suppConfirmAdd(editId){
   var compEl = document.getElementById('supp-as-comp');
   var doseEl = document.getElementById('supp-as-dose');
@@ -653,7 +733,9 @@ async function _suppConfirmAdd(editId){
     dose:       dose,
     freq:       freqEl ? freqEl.value : 'daily',
     timing:     timeEl ? timeEl.value : 'AM',
-    start_date: (existing && existing.start_date) ? existing.start_date : _suppToday()
+    start_date: (existing && existing.start_date) ? existing.start_date : _suppToday(),
+    per_day:    _suppSheetPerDay(),
+    per_unit:   _suppSheetPerUnit()
   };
   // optimistic local update
   if(editId){
