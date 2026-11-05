@@ -21985,6 +21985,100 @@ console.log('\n── Food log ────────────────�
   })().catch(e => { check('food log: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
 }
 
+// ── Supplements: label photo → supplement + daily dose, added to the backend catalogue (2026-11-05) ──
+// Henrik: "peptide add supplement needs to support taking a picture of a supplement and adding daily
+// dose. Any supplement added like this needs to update backend catalog of supplements available in app
+// drop down." tab-supplements.js runs here in its own context against a fake backend.
+{
+  const _sjs = fs.readFileSync(path.join(path.dirname(path.resolve(htmlPath)), 'tab-supplements.js'), 'utf8');
+  const calls = [], els = {}, store = {};
+  let catalogOk = true, labelAnswer = {name: 'Shilajit (Resin)', dose: '500 mg'}, lastSheet = null;
+  const el = (id) => { if (id === 'supp-add-overlay') return null; if (!els[id]) { let h = ''; els[id] = {value: '', style: {}, setAttribute(){}, removeAttribute(){}, getAttribute(){ return null; }};
+    Object.defineProperty(els[id], 'innerHTML', {get: () => h, set: v => { h = v; const m = /<option value="([^"]*)"[^>]*selected/.exec(v) || /<option value="([^"]*)"/.exec(v); els[id].value = m ? m[1] : ''; }}); } return els[id]; };
+  const S = vm.createContext({console, Promise, JSON, Math, String, Number, Object, Array, Date, parseFloat, isNaN, encodeURIComponent,
+    AGENT_URL: 'https://agent', NOW: new Date(), _currentTab: 'supplements', alert: () => {},
+    authHeaders: (x) => Object.assign({}, x || {}), _logHttp: () => {}, _logErr: () => {},
+    getData: (k, d) => (k in store ? JSON.parse(store[k]) : d), setData: (k, v) => { store[k] = JSON.stringify(v); },
+    _flShrink: async () => 'UEhPVE8=',
+    document: {getElementById: el, createElement: () => (lastSheet = {style: {}, remove(){}}), body: {appendChild(){}}},
+    fetch: async (url, opt) => { const m = (opt && opt.method) || 'GET'; const body = opt && opt.body ? JSON.parse(opt.body) : null; calls.push({url, m, body});
+      if (/read-label$/.test(url)) return {ok: true, status: 200, json: async () => labelAnswer};
+      if (/supplement-catalog$/.test(url) && m === 'POST') { if (!catalogOk) return {ok: false, status: 500, json: async () => ({})};
+        const id = body.name === 'Vitamin D3' ? 'vitd3' : 'u-shilajit-resin';
+        return {ok: true, status: 200, json: async () => ({ok: true, entry: {id, name: body.name, doses: [body.dose]}})}; }
+      if (/supplement-catalog$/.test(url)) return {ok: true, status: 200, json: async () => [{id: 'vitd3', name: 'Vitamin D3', doses: ['75 µg']}, {id: 'u-ksm', name: 'KSM-66', doses: ['600 mg']}]};
+      if (/\/supplements$/.test(url) && m === 'POST') return {ok: true, status: 200, json: async () => ({ok: true, entry: Object.assign({}, body, {id: 'srv1'})})};
+      return {ok: true, status: 200, json: async () => ([])}; },
+  });
+  vm.runInContext(_sjs, S);
+  S.renderTodaySupplements = () => {};   // Today's section is covered elsewhere
+  (async () => {
+    const n0 = S.SUPPLEMENT_CAT.length;
+    await S.syncSupplementCatalogFromAgent();
+    check('supp catalogue: the backend list is merged into the dropdown, new supplements at the end',
+      S.SUPPLEMENT_CAT.length === n0 + 1 && S.SUPPLEMENT_CAT[n0].id === 'u-ksm');
+    check('  …and a new dose of a listed supplement is added after its own',
+      S._suppCat('vitd3').doses[S._suppCat('vitd3').doses.length - 1] === '75 µg' && S._suppCat('vitd3').doses[0] === '25 µg (1000 IU)');
+    check('  …and kept as the cache for the next start', JSON.parse(store['pep-supp-catalog']).length === 2);
+    await S.syncSupplementCatalogFromAgent();
+    check('  …a second sync adds no duplicates', S.SUPPLEMENT_CAT.length === n0 + 1);
+
+    S._suppOpenAddSheet();
+    check('supp photo: the Add sheet has a label-photo button whose input takes camera or library images',
+      /id="supp-photo-btn"/.test(lastSheet.innerHTML) && /<input id="supp-photo" type="file" accept="image\/\*"/.test(lastSheet.innerHTML) && !/capture=/.test(lastSheet.innerHTML));
+    el('supp-as-freq').value = 'daily'; el('supp-as-timing').value = 'AM';
+    calls.length = 0;
+    await S._suppPhotoPicked({files: [{}], value: 'x'});
+    const rl = calls.find(c => /read-label$/.test(c.url));
+    check('supp photo: the label photo is sent as a JPEG to /supplements/read-label',
+      rl && rl.m === 'POST' && rl.body.image_b64 === 'UEhPVE8=' && rl.body.media_type === 'image/jpeg');
+    check('  …an unknown supplement gets a provisional entry, selected, with the read daily dose',
+      els['supp-as-comp'].value.indexOf('new-') === 0 && /Shilajit \(Resin\) \(new\)/.test(els['supp-as-comp'].innerHTML) &&
+      els['supp-as-dose'].value === '500 mg');
+    check('  …and nothing is saved by reading the photo', !calls.some(c => c.m === 'POST' && !/read-label$/.test(c.url)));
+    catalogOk = false; calls.length = 0;
+    await S._suppConfirmAdd();
+    check('supp photo: when the catalogue refuses, nothing is saved and it says so',
+      !calls.some(c => /\/supplements$/.test(c.url)) && /could not be added to the list/.test(els['supp-photo-msg'].textContent || ''));
+    catalogOk = true; calls.length = 0;
+    await S._suppConfirmAdd();
+    const ca = calls.find(c => /supplement-catalog$/.test(c.url) && c.m === 'POST');
+    const sv = calls.find(c => /\/supplements$/.test(c.url) && c.m === 'POST');
+    check('supp photo: saving adds the supplement and its dose to the backend catalogue first',
+      ca && ca.body.name === 'Shilajit (Resin)' && ca.body.dose === '500 mg' && calls.indexOf(ca) < calls.indexOf(sv));
+    check('  …then saves the regimen row under the catalogue id, with the daily dose',
+      sv && sv.body.supp_id === 'u-shilajit-resin' && sv.body.name === 'Shilajit (Resin)' && sv.body.dose === '500 mg' && sv.body.freq === 'daily');
+    check('  …and the dropdown lists it from now on, without the provisional entry',
+      !!S._suppCat('u-shilajit-resin') && !S.SUPPLEMENT_CAT.some(c => c._new));
+
+    // a supplement already in the list is selected, not duplicated, and the catalogue still hears of it
+    S._suppOpenAddSheet();
+    labelAnswer = {name: 'vitamin d3', dose: '125 µg (5000 IU)'};
+    await S._suppPhotoPicked({files: [{}], value: 'x'});
+    check('supp photo: a known supplement is selected by name, not added twice',
+      els['supp-as-comp'].value === 'vitd3' && !S.SUPPLEMENT_CAT.some(c => c._new) && els['supp-as-dose'].value === '125 µg (5000 IU)');
+    calls.length = 0;
+    await S._suppConfirmAdd();
+    check('  …and saving still sends it to the catalogue, then saves it as vitd3',
+      calls.some(c => /supplement-catalog$/.test(c.url) && c.m === 'POST') &&
+      calls.some(c => /\/supplements$/.test(c.url) && c.body && c.body.supp_id === 'vitd3'));
+
+    // a provisional entry that is never saved leaves the dropdown with the sheet
+    S._suppOpenAddSheet();
+    labelAnswer = {name: 'Sea Moss', dose: ''};
+    await S._suppPhotoPicked({files: [{}], value: 'x'});
+    check('supp photo: no visible amount says so', /No amount was visible/.test(els['supp-photo-msg'].textContent || ''));
+    S._suppCloseAddSheet();
+    check('  …and closing the sheet without saving drops the provisional entry', !S.SUPPLEMENT_CAT.some(c => c._new));
+
+    // a regimen row whose supplement isn't listed keeps its own name when edited
+    S._supplements = [{id: 'r9', supp_id: 'u-gone', name: 'Old Thing', dose: '1 g', freq: 'daily', timing: 'AM'}];
+    S._suppOpenAddSheet('r9');
+    check('supp edit: an unlisted supplement stays selected under its own name', /<option value="u-gone" selected>Old Thing<\/option>/.test(lastSheet.innerHTML));
+    if (failed > 0) process.exitCode = 1;
+  })().catch(e => { check('supp photo: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
+}
+
 // ── Food log: a photo is attached, then Log sends it with the typed amount (2026-10-21) ──
 // Henrik: a photo of a 500 g tub of cottage cheese was logged as the whole tub, with no way
 // to say he ate 115 g. Picking a photo must not send anything on its own.
