@@ -515,7 +515,11 @@ function _suppOpenAddSheet(editId, replacing){
 }
 
 // ── Per day: how many (amount dropdown) of what (unit dropdown) ──────────────
+// Capsules and softgels cannot be cut, so they are counted whole (Henrik, 2026-11-09: "a tablett
+// can be cut into smaller pieces, capsules can not, only offer whole number of capsules").
+function _suppWholeOnly(unit){ return unit === 'capsule' || unit === 'softgel'; }
 function _suppPerDayOptions(unit){
+  if(_suppWholeOnly(unit)) return [1,2,3,4,5,6,8,10];
   if(unit === 'g')    return [0.5,1,2,3,5,10,15,20,25,30,40,50];
   if(unit === 'ml')   return [1,2.5,5,10,15,20,30,50];
   if(unit === 'drop') return [1,2,3,4,5,10,15,20,30];
@@ -538,6 +542,7 @@ function _suppFillPerDay(n, unit){
   uEl.value = u;
   var opts = _suppPerDayOptions(u).slice();
   var sel = (Number(n) > 0) ? Number(n) : 1;
+  if(_suppWholeOnly(u)) sel = Math.max(1, Math.round(sel));
   if(opts.indexOf(sel) === -1){ opts.push(sel); opts.sort(function(a,b){ return a-b; }); }
   nEl.innerHTML = opts.map(function(v){ return '<option value="'+v+'"'+(v===sel?' selected':'')+'>'+_suppFmtNum(v)+'</option>'; }).join('');
   nEl.value = String(sel);
