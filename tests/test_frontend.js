@@ -22016,7 +22016,7 @@ console.log('\n── Food log ────────────────�
     fetch: async (url, opt) => { const m = (opt && opt.method) || 'GET'; const body = opt && opt.body ? JSON.parse(opt.body) : null; calls.push({url, m, body});
       if (/read-label$/.test(url)) return {ok: true, status: 200, json: async () => labelAnswer};
       if (/supplement-catalog$/.test(url) && m === 'POST') { if (!catalogOk) return {ok: false, status: 500, json: async () => ({})};
-        const id = body.name === 'Vitamin D3' ? 'vitd3' : 'u-shilajit-resin';
+        const id = body.name === 'Vitamin D3' ? 'vitd3' : 'u-' + body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
         return {ok: true, status: 200, json: async () => ({ok: true, entry: {id, name: body.name, doses: [body.dose]}})}; }
       if (/supplement-catalog$/.test(url)) return {ok: true, status: 200, json: async () => [{id: 'vitd3', name: 'Vitamin D3', doses: ['75 µg']}, {id: 'u-ksm', name: 'KSM-66', doses: ['600 mg']}]};
       if (/\/supplements$/.test(url) && m === 'POST') return {ok: true, status: 200, json: async () => ({ok: true, entry: Object.assign({}, body, {id: 'srv1'})})};
@@ -22128,6 +22128,42 @@ console.log('\n── Food log ────────────────�
     S.parseLocalDate = (k) => { const p = k.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); };
     try { S.renderTodaySupplements(new Date()); } catch (e) { /* Today needs more of the app; the row markup is what matters */ }
     check('supp per day: Today shows how many a day', /200 mg per capsule · 2 capsules a day/.test(els['today-supplements'].innerHTML), els['today-supplements'].innerHTML.slice(0, 300));
+
+    // ── 📷 Update: replace a supplement from a photo of the new bottle (Henrik, 2026-11-09) ──
+    {
+      const _bodyEl = el('supplements-body');
+      S._supplements = [{id: 'r1', supp_id: 'magnesium', name: 'Magnesium (Glycinate)', dose: '200 mg', freq: 'daily', timing: 'PM', start_date: '2026-01-10', per_day: 2, per_unit: 'capsule'}];
+      store['pep-supplements'] = JSON.stringify(S._supplements);
+      S.buildSupplements();
+      check('supp update: every supplement row has a 📷 Update button for that row',
+        /_suppUpdateByPhoto\('r1'\)/.test(_bodyEl.innerHTML) && /📷 Update/.test(_bodyEl.innerHTML));
+      let clicked = 0;
+      el('supp-photo').click = () => { clicked++; };
+      S._suppUpdateByPhoto('r1');
+      check('  …it opens that row\'s sheet as UPDATE with a Replace button, naming what it replaces',
+        /UPDATE SUPPLEMENT/.test(lastSheet.innerHTML) && />Replace<\/button>/.test(lastSheet.innerHTML) &&
+        /it replaces Magnesium \(Glycinate\)/.test(lastSheet.innerHTML) && /_suppConfirmAdd\('r1'\)/.test(lastSheet.innerHTML));
+      check('  …and opens the camera in the same tap', clicked === 1);
+      labelAnswer = {name: 'Magnesium (Citrate)', dose: '150 mg', per_day: 3, per_unit: 'tablet'};
+      await S._suppPhotoPicked({files: [{}], value: 'x'});
+      el('supp-as-freq').value = 'daily'; el('supp-as-timing').value = 'PM';
+      calls.length = 0;
+      await S._suppConfirmAdd('r1');
+      const up = calls.find(c => /\/supplements$/.test(c.url) && c.m === 'POST');
+      check('  …Replace adds the new product to the catalogue and saves it over the same row',
+        calls.some(c => /supplement-catalog$/.test(c.url) && c.m === 'POST' && c.body.name === 'Magnesium (Citrate)') &&
+        up && up.body.id === 'r1' && up.body.name === 'Magnesium (Citrate)' && up.body.dose === '150 mg' &&
+        up.body.per_day === 3 && up.body.per_unit === 'tablet' && up.body.start_date === '2026-01-10', JSON.stringify(up && up.body));
+      check('  …so the list still has one supplement, now the new one',
+        S._supplements.length === 1 && S._supplements[0].name === 'Magnesium (Citrate)');
+      el('supp-photo').click = undefined;
+      S._suppOpenAddSheet(S._supplements[0].id);
+      check('supp edit: plain Edit is still EDIT with Save', /EDIT SUPPLEMENT/.test(lastSheet.innerHTML) && />Save<\/button>/.test(lastSheet.innerHTML) && !/UPDATE SUPPLEMENT/.test(lastSheet.innerHTML));
+      S._suppCloseAddSheet();
+      let none = 0; el('supp-photo').click = () => { none++; };
+      S._suppUpdateByPhoto('nope');
+      check('  …Update on an unknown row does nothing', none === 0);
+    }
     if (failed > 0) process.exitCode = 1;
   })().catch(e => { check('supp photo: async checks ran', false, String(e && e.stack || e)); process.exitCode = 1; });
 }

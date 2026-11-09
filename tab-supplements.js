@@ -436,6 +436,7 @@ function buildSupplements(){
           '<div style="font-size:15px;font-weight:600;color:var(--text)">' + _suppEsc(s.name) + '</div>' +
           '<div style="font-size:12px;color:var(--muted2);margin-top:3px">' + _suppEsc(_suppDoseLine(s)) + (_suppDoseLine(s)?' · ':'') + meta + '</div>' +
         '</div>' +
+        '<button onclick="_suppUpdateByPhoto(\'' + _suppEsc(s.id) + '\')" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">📷 Update</button>' +
         '<button onclick="_suppOpenAddSheet(\'' + _suppEsc(s.id) + '\')" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">Edit</button>' +
         '<button onclick="_suppDelete(\'' + _suppEsc(s.id) + '\')" aria-label="Delete" style="background:none;border:none;color:var(--muted2);font-size:20px;cursor:pointer;line-height:1;padding:2px 4px">×</button>' +
       '</div>';
@@ -445,8 +446,20 @@ function buildSupplements(){
   el.innerHTML = '<div style="padding:16px">' + header + vitD + body + '</div>';
 }
 
+// ── Update by photo (Henrik, 2026-11-09: "need a update supplement button that uses the same
+// camera logic to replace an old supplement with a new one (different brands and doses etc)") ──
+// Opens this row's sheet as UPDATE and the camera at once, in the same tap (iOS only opens a
+// file picker from a user gesture). The label fills the sheet as on Add; Replace saves over the
+// same row, so it stays one supplement in the list and keeps its start date.
+function _suppUpdateByPhoto(id){
+  if(!(_supplements||[]).some(function(s){ return s.id===id; })) return;
+  _suppOpenAddSheet(id, true);
+  var inp = document.getElementById('supp-photo');
+  if(inp && typeof inp.click === 'function') inp.click();
+}
+
 // ── Add / edit bottom sheet ──────────────────────────────────────────────────
-function _suppOpenAddSheet(editId){
+function _suppOpenAddSheet(editId, replacing){
   _suppCloseAddSheet();
   var editing = editId ? (_supplements||[]).find(function(s){return s.id===editId;}) : null;
   var iSty = 'background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:11px 13px;color:var(--text);font-size:15px;font-family:inherit;outline:none;width:100%;box-sizing:border-box';
@@ -467,12 +480,14 @@ function _suppOpenAddSheet(editId){
   ol.innerHTML =
     '<div style="background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 36px;max-height:88vh;overflow-y:auto">' +
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
-      '<div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--text)">' + (editing?'EDIT SUPPLEMENT':'ADD SUPPLEMENT') + '</div>' +
+      '<div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--text)">' + (editing?(replacing?'UPDATE SUPPLEMENT':'EDIT SUPPLEMENT'):'ADD SUPPLEMENT') + '</div>' +
       '<button onclick="_suppCloseAddSheet()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;line-height:1">×</button>' +
     '</div>' +
     '<input id="supp-photo" type="file" accept="image/'+'*" style="display:none" onchange="_suppPhotoPicked(this)">' +
     '<button id="supp-photo-btn" onclick="document.getElementById(\'supp-photo\').click()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:12px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:6px">📷 Photo of the label</button>' +
-    '<div id="supp-photo-msg" style="font-size:12px;color:var(--muted);margin-bottom:14px">Name, dose and how many a day are read from the photo with your own API key (Settings, Food key). Check them before saving. A supplement not in the list is added to it.</div>' +
+    '<div id="supp-photo-msg" style="font-size:12px;color:var(--muted);margin-bottom:14px">' + (editing && replacing
+      ? ('Take a photo of the new label: it replaces ' + _suppEsc(editing.name) + '. Name, dose and how many a day are read with your own API key (Settings, Food key). Check them, then Replace.')
+      : 'Name, dose and how many a day are read from the photo with your own API key (Settings, Food key). Check them before saving. A supplement not in the list is added to it.') + '</div>' +
     '<div style="margin-bottom:14px"><label style="'+lSty+'">Supplement</label>' +
       '<select id="supp-as-comp" onchange="_suppFillDoses();_suppFillPerDay(null,null)" style="'+iSty+'">'+compOpts+'</select></div>' +
     '<div style="margin-bottom:14px"><label style="'+lSty+'">Per day</label>' +
@@ -492,7 +507,7 @@ function _suppOpenAddSheet(editId){
       '<div style="min-width:0"><label style="'+lSty+'">Cadence</label><select id="supp-as-freq" style="'+iSty+'">'+freqOpts+'</select></div>' +
       '<div style="min-width:0"><label style="'+lSty+'">Timing</label><select id="supp-as-timing" style="'+iSty+'">'+timeOpts+'</select></div>' +
     '</div>' +
-    '<button onclick="_suppConfirmAdd(' + (editing?('\''+_suppEsc(editId)+'\''):'') + ')" style="width:100%;background:var(--accent);color:#000;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit">' + (editing?'Save':'Add supplement') + '</button>' +
+    '<button onclick="_suppConfirmAdd(' + (editing?('\''+_suppEsc(editId)+'\''):'') + ')" style="width:100%;background:var(--accent);color:#000;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit">' + (editing?(replacing?'Replace':'Save'):'Add supplement') + '</button>' +
     '</div>';
   document.body.appendChild(ol);
   _suppFillDoses(editing ? _suppFmtDose(editing.supp_id, editing.dose) : null);
