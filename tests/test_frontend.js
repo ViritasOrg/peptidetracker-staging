@@ -22111,6 +22111,19 @@ console.log('\n── Food log ────────────────�
       /<option value="5"/.test(els['supp-as-perday'].innerHTML) && els['supp-as-dose-lbl'].textContent === 'Dose a day');
     S._suppCloseAddSheet();
 
+    // capsules and softgels cannot be cut: whole numbers only; tablets keep halves (Henrik, 2026-11-09)
+    S._suppOpenAddSheet();
+    S._suppFillPerDay(1, 'capsule');
+    const _capOpts = (els['supp-as-perday'].innerHTML.match(/value="([^"]+)"/g) || []).map(v => Number(v.slice(7, -1)));
+    check('supp per day: capsules offer whole numbers only', _capOpts.length > 0 && _capOpts.every(Number.isInteger), JSON.stringify(_capOpts));
+    S._suppFillPerDay(1, 'softgel');
+    check('  …softgels too', !/value="0\.5"|value="1\.5"/.test(els['supp-as-perday'].innerHTML));
+    S._suppFillPerDay(1, 'tablet');
+    check('  …tablets can still be halved', /value="0\.5"/.test(els['supp-as-perday'].innerHTML) && /value="1\.5"/.test(els['supp-as-perday'].innerHTML));
+    S._suppFillPerDay(1.5, 'capsule');
+    check('  …1½ tablets switched to capsules becomes 2 capsules, never 1½', els['supp-as-perday'].value === '2' && !/value="1\.5"/.test(els['supp-as-perday'].innerHTML));
+    S._suppCloseAddSheet();
+
     // the one place the day's amount is worked out, and what every list shows
     check('supp per day: dose × count for count units', S._suppDoseMult({per_day: 2, per_unit: 'capsule'}) === 2 && S._suppDoseMult({per_day: 0.5, per_unit: 'tablet'}) === 0.5);
     check('  …g and ml are already the day\'s amount, and a row saved before counts once',
