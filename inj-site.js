@@ -103,6 +103,43 @@ function _injSiteApplies(dose){
   return (typeof _enhConcMgPerMl==='function') && _enhConcMgPerMl(dose.compound_id)>0;
 }
 
+// ── THE LAST THREE SITES, ON THE NAME ────────────────────────────────────────
+// Henrik, 2026-11-12: "for oils show the last injection site used so I dont have to
+// check yesterdays site, actually add the last 3 sites used to the oil name (same
+// color) Like "Big Earn L1-R1-L3s"".
+//
+// Most recent first, for this compound (canonical id, so an ester stored under two
+// tiers is one compound), from TAKEN doses with a site, never this row itself and
+// never a later day — on a past day the label says what came before THAT dose.
+//
+// Today's cache only reaches 14 days back, which a weekly oil fills with two sites at
+// most, so the label also reads its own window of the record: one GET per session,
+// read-only, merged under the cache so a site tapped a moment ago counts at once.
+// The history read lives with Today's other injection reads (_injLoadSiteHistory in
+// tab-today.js); the picker itself never fetches.
+function _injRecentSites(dose,n){
+  if(!_injSiteApplies(dose)) return [];
+  var canon=function(id){ return (typeof _tcCanonCompId==='function')?_tcCanonCompId(id):id; };
+  var cid=canon(dose.compound_id), byId={};
+  ((typeof _injSiteHist!=='undefined'&&_injSiteHist)||[]).forEach(function(e){ if(e&&e.id) byId[e.id]=e; });
+  // The cache is the fresher copy of any row both hold.
+  if(typeof _injectionsCache!=='undefined'&&_injectionsCache)
+    Object.keys(_injectionsCache).forEach(function(dk){
+      (_injectionsCache[dk]||[]).forEach(function(e){ if(e&&e.id) byId[e.id]=e; });
+    });
+  var rows=Object.keys(byId).map(function(k){ return byId[k]; }).filter(function(e){
+    return e.logged&&e.id!==dose.id&&_injSiteLabel(e.site)&&canon(e.compound_id)===cid
+      &&(!dose.date||String(e.date||'')<=String(dose.date));
+  });
+  rows.sort(function(a,b){
+    var da=String(a.date||''), db=String(b.date||'');
+    if(da!==db) return da<db?1:-1;
+    var ta=String(a.logged_at||''), tb=String(b.logged_at||'');
+    return ta===tb?0:(ta<tb?1:-1);
+  });
+  return rows.slice(0,n||3).map(function(e){ return _injSiteLabel(e.site); });
+}
+
 
 // ── A BODY LIKE THE USER'S ───────────────────────────────────────────────────
 // Henrik, 2026-10-13: "put haircrosses in a clear color on images of bodies for the
@@ -290,15 +327,28 @@ function _injSiteButton(dose){
   }(dose.id));
   return b;
 }
+// The picker's subtitle: name, dose (with the draw volume) and date. Rebuilt after a dose
+// change so the picker never shows the old milligrams under the new ones.
+function _injSiteSub(row){
+  var name=(typeof _tdName==='function')?_tdName(row.compound_name||row.compound_id,row.compound_id)
+                                        :(row.compound_name||row.compound_id||'');
+  var amount=(row.dose||'')+(row.unit?' '+((typeof UNIT_LABELS!=='undefined'&&UNIT_LABELS[row.unit])||row.unit):'');
+  var ml=(typeof _todayDrawMl==='function')?_todayDrawMl(row):null;
+  return _esc(name)+(amount?' &middot; <b style="color:var(--text)">'+_esc(amount)+(ml?' &middot; '+ml+' ml':'')+'</b>':'')
+    +' &middot; '+_esc(row.date||'');
+}
+function _injSiteRefreshDose(){
+  var el=document.getElementById('inj-site-sub');
+  if(!el||!_injSiteEditId) return;
+  var row=(typeof _findCachedInjection==='function')?_findCachedInjection(_injSiteEditId):null;
+  if(row) el.innerHTML=_injSiteSub(row);
+}
 function openInjSitePicker(id,opts){
   var row=(typeof _findCachedInjection==='function')?_findCachedInjection(id):null;
   if(!row) return false;
   _injSiteEditId=id;
   var logMode=!!(opts&&opts.logOnPick)&&!row.logged;
   _injSiteLogOnPick=logMode;
-  var name=(typeof _tdName==='function')?_tdName(row.compound_name||row.compound_id,row.compound_id)
-                                        :(row.compound_name||row.compound_id||'');
-  var amount=(row.dose||'')+(row.unit?' '+((typeof UNIT_LABELS!=='undefined'&&UNIT_LABELS[row.unit])||row.unit):'');
   var o=document.createElement('div');
   o.id='inj-site-modal';
   o.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.93);z-index:9999;'
@@ -343,8 +393,7 @@ function openInjSitePicker(id,opts){
       +'border:1px solid var(--border);border-radius:16px;overflow:hidden">'
     +'<div style="padding:16px 18px;border-bottom:1px solid var(--border)">'
       +'<div style="font-size:16px;font-weight:800;color:var(--text)">Injection site</div>'
-      +'<div style="font-size:12px;color:var(--muted2);margin-top:3px">'+_esc(name)
-        +(amount?' &middot; '+_esc(amount):'')+' &middot; '+_esc(row.date||'')+'</div>'
+      +'<div id="inj-site-sub" style="font-size:12px;color:var(--muted2);margin-top:3px">'+_injSiteSub(row)+'</div>'
     +'</div>'
     +'<div style="padding:14px 16px">'
       +'<div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:10px">'
@@ -365,6 +414,10 @@ function openInjSitePicker(id,opts){
         +(_injSiteLabel(row.site)?('Recorded: <b style="color:var(--accent)">'+_esc(_injSiteLabel(row.site))+'</b> &middot; '+_esc(_injSiteName(row.site))):'No site recorded yet')
       +'</div>'
       +((_injSiteLabel(row.site)&&!logMode)?('<button onclick="setInjSite(null)" style="'+btn+'background:var(--surface2);color:var(--muted2);border:1px solid var(--border)">CLEAR SITE</button>'):'')
+      // The dose is changed HERE, not on the Today row (Henrik, 2026-11-12: "too easy to by
+      // misstake click the dosage instead of checking the injection … lets the dose change be
+      // on the injection window instead"). The editor opens on top; the picker stays put.
+      +((typeof openInjectionDoseEditor==='function')?('<button onclick="openInjectionDoseEditor(\''+_esc(String(id))+'\')" style="'+btn+'background:var(--surface2);color:var(--text);border:1px solid var(--border)">CHANGE DOSE</button>'):'')
       +'<button onclick="_closeInjSitePicker()" style="'+btn+'background:var(--surface2);color:var(--text);border:1px solid var(--border)">CLOSE</button>'
     +'</div></div>';
   document.body.appendChild(o);

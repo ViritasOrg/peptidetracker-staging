@@ -2502,8 +2502,13 @@ console.log('\n── Editing when a dose was taken ─────────�
   {
     const _mkCell = (dose) => { const el={style:{},onclick:null,textContent:''};
                                 G._todayDoseCell(el, dose); return el; };
-    check('a real row gets a tappable dose',
-      !!_mkCell(_r()).onclick && _mkCell(_r()).style.cursor==='pointer');
+    // Henrik, 2026-11-12: an oil's dose moved into its injection window, so the row's
+    // dose is plain text there; a non-oil row keeps the tappable dose.
+    const _pep = {id:'d1', compound_id:'retatrutide', tier:'peptide', dose:'2', unit:'mg'};
+    check('a real non-oil row gets a tappable dose',
+      !!_mkCell(_pep).onclick && _mkCell(_pep).style.cursor==='pointer');
+    check('  …but an oil row does not — its dose changes in the injection window',
+      !_mkCell(_r()).onclick && _mkCell(_r()).style.cursor!=='pointer');
     check('  …and a legacy log row with no record behind it does not',
       !_mkCell({id:'reta-sun_2026-09-14', compound_id:'reta-sun', dose:'', logged:true}).onclick);
   }
@@ -9022,6 +9027,32 @@ console.log('\n── Injection site (Today) ───────────�
       G.toggleInjection = _ts.tog;
     }
 
+    // ── The last three sites on the oil's name (Henrik, 2026-11-12) ──────────
+    {
+      const _hs = {h:G._injSiteHist, c:G._injectionsCache};
+      const mk = (id, date, site, extra) => Object.assign({id, date, site, compound_id:'enanthate',
+        tier:'trt', logged:true, active:true, dose:'125', unit:'mg'}, extra||{});
+      G._injSiteHist = [mk('h1','2026-08-01','r_quad'), mk('h2','2026-08-08','l_delt'),
+                        mk('h3','2026-08-15','r_delt')];
+      G._injectionsCache = {'2026-08-22':[mk('c1','2026-08-22','l_glute')],
+        '2026-08-29':[mk('t1','2026-08-29',null,{logged:false})],
+        '2026-08-30':[mk('fut','2026-08-30','r_lat')]};
+      const cur = {id:'t1', date:'2026-08-29', compound_id:'enanthate', tier:'trt', logged:false};
+      check('an oil shows its last three sites, most recent first, from cache and history',
+        G._injRecentSites(cur,3).join('-') === 'L3s-R1-L1', G._injRecentSites(cur,3).join('-'));
+      check('  …on the name itself, joined by dashes',
+        G._todayRowName(Object.assign({compound_name:'Testosterone Enanthate'}, cur)) === 'Testosterone Enanthate L3s-R1-L1',
+        G._todayRowName(Object.assign({compound_name:'Testosterone Enanthate'}, cur)));
+      G._injectionsCache['2026-08-22'][0].logged = false;
+      check('  …counting only doses actually taken',
+        G._injRecentSites(cur,3).join('-') === 'R1-L1-R4', G._injRecentSites(cur,3).join('-'));
+      check('  …and another compound\'s sites never appear',
+        G._injRecentSites({id:'x', date:'2026-08-29', compound_id:'tren_e', tier:'enhanced'},3).length === 0);
+      check('a peptide gets no sites on its name',
+        G._todayRowName({id:'p', compound_id:'retatrutide', compound_name:'Retatrutide', tier:'peptide', date:'2026-08-29'}) === 'Retatrutide');
+      G._injSiteHist = _hs.h; G._injectionsCache = _hs.c;
+    }
+
     G.fetch = _save.f; G._injectionsCache = _save.c; G._viewDate = _save.vd; G.document = _save.d;
   }
   G._enhConcMgPerMl = _apSave;
@@ -9035,6 +9066,10 @@ console.log('\n── Injection site (Today) ───────────�
     // feature added to one of them only is the tier-parity break in miniature.
     check('source: both Today row renderers append the site button',
       (tdSrc.match(/_injSiteButton\(dose\)/g) || []).length === 2);
+    check('source: both Today row renderers name the row with its recent sites',
+      (tdSrc.match(/nameEl\.textContent=_todayRowName\(dose\)/g) || []).length === 2);
+    check('source: the injection window carries CHANGE DOSE',
+      /CHANGE DOSE/.test(siteSrc) && /openInjectionDoseEditor\(/.test(siteSrc));
     check('source: the picker is loaded by the app',
       /<script src="inj-site\.js/.test(html));
     // The single generic figures were replaced by the body-fat figures (INJ_BODIES) and
@@ -19001,7 +19036,8 @@ console.log('\n── Screenshot-safe names (Today) ─────────�
   // ── Today actually uses it, and stored data does not ──────────────────────
   const _tdSrc = fs.readFileSync(path.join(path.dirname(htmlPath), 'tab-today.js'), 'utf8');
   check('source: the Today dose rows render through _tdName',
-    /nameEl\.textContent=_tdName\(dose\.compound_name,\s*dose\.compound_id\)/.test(_tdSrc));
+    /nameEl\.textContent=_todayRowName\(dose\)/.test(_tdSrc)
+    && /function _todayRowName\(dose\)\{\n  var n=_tdName\(dose\.compound_name,dose\.compound_id\);/.test(_tdSrc));
   check('source: no Today row prints compound_name raw',
     !/nameEl\.textContent=dose\.compound_name/.test(_tdSrc));
   check('source: _tdName falls back to the real name if the engine is missing',
