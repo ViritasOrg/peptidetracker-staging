@@ -2837,7 +2837,21 @@ function _tcFreeTSeries(sorted, hooks) {
           return gp.asymSnap * (1 - Math.exp(-(day - gp.ghDay0) / gp.halfTime));
         }
         // Post-draw: relax from the level reached at the draw toward today's asymptote.
+        // For supplements like Boron (pepId starts with 'supp_'), if the current dose is
+        // within 10% of what was active at the draw, stabilize SHBG at the draw-level —
+        // don't let it keep tracking toward asymCur and re-apply suppression beyond what the
+        // blood test actually measured. Compounds (GH peptides etc.) keep their normal
+        // dose-tracking behavior so different doses produce different curves.
+        var _stablePostDraw = false;
+        if (gp.asymSnap != null &&
+            String(gp.pepId || '').indexOf('supp_') === 0 &&
+            Math.abs(gp.asymCur - gp.asymSnap) / Math.max(gp.asymCur, gp.asymSnap, 0.01) < 0.10) {
+          _stablePostDraw = true;
+        }
         var suppDraw = gp.asymSnap * (1 - Math.exp(-(gp.drawDay - gp.ghDay0) / gp.halfTime));
+        if (_stablePostDraw) {
+          return suppDraw;  // stay at the draw level — boron's effect is stable, don't re-apply
+        }
         return gp.asymCur + (suppDraw - gp.asymCur) * Math.exp(-(day - gp.drawDay) / gp.halfTime);
       };
       var _ghProd = function(day) {
