@@ -2261,6 +2261,42 @@ function _tcToggleBw() {
 
 // ── Bloodwork backend functions ───────────────────────────────────────────────
 
+// ── THE ONE RULE FOR "WHICH DRAW CALIBRATES" ─────────────────────────────
+// Rows that carry a usable reading (free T or total T) and are not dated in the future,
+// newest first. A pending draw (Log Draw, results not back yet) carries no values and is
+// never one of them. Every surface that asks "what is the latest blood test" for the
+// curve reads this, so the curve and the notes about the curve cannot disagree.
+function _tcCalibratingEntries(entries) {
+  var _n = new Date();
+  var today = _n.getFullYear() + '-' + String(_n.getMonth() + 1).padStart(2, '0') + '-' +
+    String(_n.getDate()).padStart(2, '0');
+  return (entries || []).filter(function(e){
+    return e && e.date && e.date <= today &&
+      (parseDec(e.free_t) > 0 || parseDec(e.total_t) > 0);
+  }).sort(function(a, b){ return a.date === b.date ? 0 : (b.date < a.date ? -1 : 1); });
+}
+
+// The "how well is this curve calibrated" note. Pure: entries + plan start date in,
+// note text (or null) out. Pending draws are not blood tests yet, so they neither count
+// as a draw nor date the calibration.
+function _tcCalibrationNote(entries, startDate) {
+  var cal = _tcCalibratingEntries(entries);
+  if (!cal.length)
+    return 'No bloodwork on file, so the curve is scaled from a population '
+      +'estimate for your age rather than from a measurement. Levels are indicative; '
+      +'add a draw and the whole plan re-scales to it.';
+  var latest = cal[0];
+  var ageD = Math.round((new Date(startDate+'T12:00:00')-new Date(latest.date+'T12:00:00'))/86400000);
+  var msgs = [];
+  if (cal.length === 1) msgs.push('one draw');
+  if (ageD >= 56) msgs.push('taken '+ageD+' days before this plan starts');
+  if (!msgs.length) return null;
+  return 'Calibrated on '+msgs.join(', ')+'. The whole curve is scaled off that '
+    +'single point, so treat the absolute levels as approximate — the SHAPE of the '
+    +'ramp is far more reliable than the numbers on it. A more recent draw tightens '
+    +'every figure here.';
+}
+
 async function _tcFetchBwEntries() {
   var h = (typeof authHeaders==='function') ? authHeaders() : null;
   if (!h) { _tcBwEntries = []; _tcBwLoading = false; buildTCalc(); return; }
@@ -2302,14 +2338,7 @@ async function _tcFetchBwEntries() {
   // other way round. A level cannot have been measured on a day that has not happened,
   // so a future-dated draw is not a measurement yet; _bwAnchorDate skips it, and a
   // `latest` that did not would feed the curve a value from a row the anchor refused.
-  var _bwToday = (function(){ var _n = new Date(); return _n.getFullYear() + '-' +
-    String(_n.getMonth() + 1).padStart(2, '0') + '-' + String(_n.getDate()).padStart(2, '0'); })();
-  var latest = null;
-  for (var _li = 0; _li < _tcBwEntries.length; _li++) {
-    var _le = _tcBwEntries[_li];
-    if (!_le || !_le.date || _le.date > _bwToday) continue;
-    if (parseDec(_le.free_t) > 0 || parseDec(_le.total_t) > 0) { latest = _le; break; }
-  }
+  var latest = _tcCalibratingEntries(_tcBwEntries)[0] || null;
   if (latest) {
     if (latest.total_t    != null) _tcp.totalT         = String(latest.total_t);
     if (latest.shbg       != null) _tcp.shbg           = String(latest.shbg);
@@ -4807,23 +4836,8 @@ function tcSolveTransition(opts){
   // drug was on board, and every level downstream is scaled off it.
   (function(){
     var bw=(typeof _tcBwEntries!=='undefined'&&_tcBwEntries)?_tcBwEntries:[];
-    if(!bw.length){
-      notes.push('No bloodwork on file, so the curve is scaled from a population '
-        +'estimate for your age rather than from a measurement. Levels are indicative; '
-        +'add a draw and the whole plan re-scales to it.');
-      return;
-    }
-    var latest=bw.slice().sort(function(a,b){return (a.date||'')<(b.date||'')?-1:1;}).pop();
-    if(!latest||!latest.date) return;
-    var ageD=Math.round((new Date(ctx.startDate+'T12:00:00')-new Date(latest.date+'T12:00:00'))/86400000);
-    var msgs=[];
-    if(bw.length===1) msgs.push('one draw');
-    if(ageD>=56) msgs.push('taken '+ageD+' days before this plan starts');
-    if(msgs.length)
-      notes.push('Calibrated on '+msgs.join(', ')+'. The whole curve is scaled off that '
-        +'single point, so treat the absolute levels as approximate — the SHAPE of the '
-        +'ramp is far more reliable than the numbers on it. A more recent draw tightens '
-        +'every figure here.');
+    var _calNote=_tcCalibrationNote(bw, ctx.startDate);
+    if(_calNote) notes.push(_calNote);
   })();
   if(best.phases.some(function(p){return p.overshoot;})){
     notes.push('The outgoing ester alone already puts you at or above '+Math.round(ctx.targetPmol)

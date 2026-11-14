@@ -8774,6 +8774,37 @@ console.log('\n── The loading dose ─────────────�
     G._tcp=_bbSave.tp; G._tcBwEntries=_bbSave.bw; G._tcRateAtDate=_bbSave.rate;
   }
 
+  // -- A PENDING DRAW DOES NOT DATE THE CALIBRATION ----------------------------
+  // Found 2026-11-14: a Log Draw row (2026-11-13, results not back) sat beside the
+  // 2026-09-15 draw the curve is actually calibrated on. The "Calibrated on ... taken N
+  // days before" note picked the newest row by date alone, so it dated the calibration
+  // from the pending row (1 day) and stayed silent about a 60-day-old anchor. It now
+  // reads the same rule as the curve. Fails on the pre-fix source: _tcCalibrationNote
+  // did not exist, and the inline note took the pending row as "latest".
+  if (typeof G._tcCalibrationNote === 'function') {
+    console.log('\n-- T-calc: a pending draw does not date the calibration --');
+    const _pdRows = [
+      {id:'pending',  date:'2026-11-13', free_t:null, total_t:null, shbg:null, markers:{}},
+      {id:'91318589', date:'2026-09-15', free_t:634,  total_t:43.3, shbg:39},
+      {id:'da53a820', date:'2026-06-26', free_t:217,  total_t:17,   shbg:45}];
+    const _pdCal = G._tcCalibratingEntries(_pdRows);
+    check('the calibrating draw is the newest row with a reading, not the pending one',
+      _pdCal.length === 2 && _pdCal[0].id === '91318589',
+      JSON.stringify(_pdCal.map(e => e.id)));
+    const _pdNote = G._tcCalibrationNote(_pdRows, '2026-11-14');
+    check('  ...so the note dates the calibration from that draw',
+      typeof _pdNote === 'string' && /taken 60 days before/.test(_pdNote), String(_pdNote));
+    check('  ...and a pending row is not counted as a draw',
+      !/one draw/.test(_pdNote || ''), String(_pdNote));
+    const _pdOnly = G._tcCalibrationNote([_pdRows[0]], '2026-11-14');
+    check('  ...a record holding only a pending draw reads as no bloodwork, as the curve does',
+      /No bloodwork on file/.test(_pdOnly || ''), String(_pdOnly));
+    check('  ...and a recent single draw still says so',
+      /Calibrated on one draw\./.test(G._tcCalibrationNote([_pdRows[1]], '2026-09-20') || ''));
+  } else {
+    check('_tcCalibrationNote exists', false);
+  }
+
 // ── Injection site (Today) ───────────────────────────────────────────────────
 // Henrik, 2026-10-03: a button next to each oil injection in Today, opening the
 // body image, tap one of six spots. R1-R3 / L1-L3, numbered top down.
