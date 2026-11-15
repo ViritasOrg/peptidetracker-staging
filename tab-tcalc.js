@@ -677,7 +677,7 @@ var TCALC_ENDOG_T_MGD = 5;
 // that the disagreement is dose-dependent. This change does not resolve that and must not
 // be described as having done so. It changes WHICH quantity is personalised, not whether
 // the pharmacology is right.
-var TCALC_TT_PER_MGD = 1.947;
+var TCALC_TT_PER_MGD = 1.5;
 
 // The slope actually used: backend-served when available, the constant above otherwise.
 function _tcTtPerMgd() {
