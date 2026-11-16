@@ -23236,5 +23236,26 @@ console.log('\n── Food Edit: Update an entry ──────────�
     const help = fs.readFileSync(path.join(__dirname, '..', 'help.html'), 'utf8');
     check('help page: the profile warning has its section, and the page carries the app icon and manifest', /id="profile-invalid"[\s\S]*What it means[\s\S]*What happens if you ignore it[\s\S]*How to fix it/.test(help) && /rel="icon"[^>]*protocol-icon\.png/.test(help) && /rel="manifest"/.test(help));
   }
+  // Henrik, 2026-11-16: "profile in peptidetracker-staging doesnt use the full screen, but macro does?" — a chart drawn
+  // while Profile was hidden (the sync redraws it) measured 0, fell back to 300px and pinned style.width to it, so every
+  // later draw read 300 again. A chart is 100% wide and measured afresh on every draw.
+  {
+    const mk = () => { const c = { style: {}, width: 0, height: 0, visible: false,
+      get offsetWidth() { return !this.visible ? 0 : (this.style.width === '100%' ? 900 : parseInt(this.style.width) || 900); },
+      getContext: () => new Proxy({}, { get: (t, k) => k === 'measureText' ? () => ({ width: 10 }) : (k in t ? t[k] : () => {}), set: (t, k, v) => { t[k] = v; return true; } }) }; return c; };
+    const cv = { 'chart-weight-trend': mk(), 'chart-bf': mk(), 'chart-bmi': mk(), pfMacroChart: mk() }, _gid3 = G.document.getElementById;
+    G.document.getElementById = (id) => cv[id] || _gid3.call(G.document, id);
+    const _dpr = G.window.devicePixelRatio; G.window.devicePixelRatio = 1;
+    const draw = () => { try { G.bcDrawWeightLeanChart(); } catch (e) {} try { G.bcDrawChart('chart-bmi', [25, 26], ['2026-11-01', '2026-11-02'], '#0f0', ''); } catch (e) {}
+      try { G._pfDrawMacroChart({ series: [{ date: '2026-11-01', kcal: 100 }, { date: '2026-11-02', kcal: 90 }] }); } catch (e) {} };
+    draw();
+    Object.values(cv).forEach(c => { c.visible = true; });
+    draw();
+    check('charts on Profile use the full width once shown, even after a draw while hidden',
+      ['chart-weight-trend', 'chart-bmi', 'pfMacroChart'].every(id => cv[id].width === 900 && cv[id].style.width === '100%'),
+      ['chart-weight-trend', 'chart-bmi', 'pfMacroChart'].map(id => id + ':' + cv[id].width + '/' + cv[id].style.width).join(' '));
+    check('…the body-fat chart is measured the same way', /cssW=\(canvas\.style\.width='100%',canvas\.offsetWidth\)\|\|300/.test(fs.readFileSync(path.join(__dirname, '..', 'tab-body.js'), 'utf8')));
+    G.document.getElementById = _gid3; G.window.devicePixelRatio = _dpr;
+  }
   if (failed > 0) process.exitCode = 1;
 })();
