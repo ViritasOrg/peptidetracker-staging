@@ -255,6 +255,9 @@ console.log('\n── Push to Prod: the promoted tests read only what prod has �
     .map(([tf, p]) => tf + ' reads ' + p);
   check('the promoted tests read no file that only staging has', prodLacks.length === 0 && testFiles.length > 0,
     prodLacks.join('\n      ') || ('tests scanned: ' + testFiles.join(', ')));
+  // Henrik, 2026-11-16: the Profile page's warnings link help.html#…, so prod needs the page too.
+  check('the sync step copies the help page the warnings link to', fs.existsSync(path.join(prod, 'help.html')) &&
+    fs.readFileSync(path.join(prod, 'help.html'), 'utf8') === fs.readFileSync(path.join(root, 'help.html'), 'utf8'));
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 

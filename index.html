@@ -22,9 +22,10 @@
   <div class="hdr">
     <div>
       <div class="hdr-title">PROTOCOL</div>
-      <div class="hdr-sub"><span style="color:var(--accent);font-weight:600;letter-spacing:1px" id="header-version"></span></div>
+      <div class="hdr-sub"><span style="color:var(--accent);font-weight:600;letter-spacing:1px" id="header-version"></span><span class="hdr-date"><span id="hdr-weekday">—</span> <span id="hdr-day">—</span></span></div>
     </div>
-    <div class="hdr-right"><div class="hdr-day" id="hdr-day">—</div><div class="hdr-weekday" id="hdr-weekday">—</div></div>
+    <div class="hdr-right">
+      <button class="pf-badge" id="hdr-profile" onclick="switchPrimary('profile')" aria-label="Profile"><svg width="24" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg><span id="hdr-profile-lbl">Profile</span></button></div>
   </div>
   <div style="height:14px"></div>
   <div class="week-strip" id="week-strip"></div>
@@ -44,7 +45,7 @@
     <div class="tab"        id="tab-btn-macros"   onclick="switchTab('macros',this)">Macros</div>
     <div class="tab"        id="tab-btn-foodedit" onclick="switchTab('foodedit',this)">Food Edit</div>
     <div class="tab"        id="tab-btn-timeline" onclick="switchTab('timeline',this)">Timeline</div>
-    <div class="tab"        id="tab-btn-body"     onclick="switchTab('body',this)">Body Comp</div>
+    <div class="tab"        id="tab-btn-body"     onclick="switchTab('body',this)">Profile</div>
     <div class="tab"        id="tab-btn-settings" onclick="switchTab('settings',this)">Settings</div>
     <div class="tab"        id="tab-btn-storage"  onclick="switchTab('storage',this)" style="display:none">Storage</div>
   </div>
@@ -84,26 +85,7 @@
   <div class="content hidden" id="tab-foodedit"><div id="food-edit-body"></div></div>
   <div class="content hidden" id="tab-timeline"><div id="timeline-body" style="display:flex;flex-direction:column;gap:14px"></div></div>
   <div class="content hidden" id="tab-body">
-    <div style="padding:16px 20px;border-bottom:1px solid var(--border)">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-        <div>
-          <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Weight (kg)</div>
-          <div style="display:flex;gap:6px"><input id="bc-weight-in" type="text" inputmode="decimal" placeholder="0.0" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:14px;flex:1;font-family:inherit;outline:none;width:0"><button onclick="saveBodyMeasurement('weight')" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:8px 12px;font-weight:700;cursor:pointer;font-size:12px;font-family:inherit">Save</button></div>
-        </div>
-        <div>
-          <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Height (cm)</div>
-          <div style="display:flex;gap:6px"><input id="bc-height-in" type="number" inputmode="numeric" step="1" placeholder="180" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:14px;flex:1;font-family:inherit;outline:none;width:0"><button onclick="saveBodyMeasurement('height')" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-weight:700;cursor:pointer;font-size:12px;font-family:inherit">Save</button></div>
-        </div>
-      </div>
-      <div>
-        <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Biological Sex</div>
-        <div style="display:flex;gap:6px"><div id="sex-chip-male" class="time-chip sel" onclick="setBioSex('male')" style="cursor:pointer;user-select:none;">Male</div><div id="sex-chip-female" class="time-chip" onclick="setBioSex('female')" style="cursor:pointer;user-select:none;">Female</div></div>
-      </div>
-      <div style="margin-top:10px;max-width:calc(50% - 5px)">
-        <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Age</div>
-        <div style="display:flex;gap:6px"><input id="bc-age-in" type="number" inputmode="numeric" min="18" max="100" placeholder="e.g. 35" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:14px;flex:1;font-family:inherit;outline:none;width:0"><button onclick="saveBodyMeasurement('age')" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-weight:700;cursor:pointer;font-size:12px;font-family:inherit">Save</button></div>
-      </div>
-    </div>
+    <div id="pf-info"></div>
     <div class="card">
       <div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--accent)"></div><div class="card-title">LOG MEASUREMENT</div></div><span class="card-badge badge-today" id="bc-date-badge">—</span></div>
       <div class="card-body" style="gap:12px;">
@@ -148,6 +130,7 @@
       <div onclick="toggleBcWeightHist()" style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;cursor:pointer;"><div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted2);text-transform:uppercase;">Weight History</div><span id="bc-wh-chev" style="font-size:14px;color:var(--muted2);transition:transform 0.2s;">▾</span></div>
       <div id="bc-weight-history-list" style="display:none;flex-direction:column;"></div>
     </div>
+    <div id="pf-macros"></div>
     <div class="card" id="bc-history-card" style="display:none;"><div class="card-header"><div class="card-title-wrap"><div class="card-dot" style="background:var(--muted2)"></div><div class="card-title">HISTORY</div></div><button onclick="bcClearAll()" style="font-size:10px;color:var(--danger);background:none;border:none;cursor:pointer;font-family:var(--font-ui);letter-spacing:1px;text-transform:uppercase;">Clear All</button></div><div id="bc-history-list" style="display:flex;flex-direction:column;"></div></div>
   </div>
   <div class="content hidden" id="tab-settings">
@@ -425,16 +408,16 @@ async function toggleAutoNext(){
 }
 let _stackViewTab='peptides';let _editInnerTab='peptides';
 let _reconStackIdx=0;let _reconStackPicked=false;let _reconState={};
-const TAB_LABELS=Object.assign({today:'Today',stacks:'Protocols',blood:'Levels',tcalc:'T-Calc',thist:'T-History',tdose:'Dose Finder',labs:'Labs',meds:'Medication',supplements:'Supplements',recon:'Recon',schedule:'Schedule',macros:'Macros',foodedit:'Food Edit',timeline:'Timeline',body:'Body Comp'},{storage:'Storage'});
+const TAB_LABELS=Object.assign({today:'Today',stacks:'Protocols',blood:'Levels',tcalc:'T-Calc',thist:'T-History',tdose:'Dose Finder',labs:'Labs',meds:'Medication',supplements:'Supplements',recon:'Recon',schedule:'Schedule',macros:'Macros',foodedit:'Food Edit',timeline:'Timeline',body:'Profile'},{storage:'Storage'});
 const TAB_DEFAULTS=Object.assign({today:true,stacks:true,blood:true,tcalc:true,thist:true,tdose:true,labs:true,meds:true,supplements:true,recon:true,schedule:false,macros:true,foodedit:true,timeline:true,body:true},{storage:true});
 // Two-tier navigation (usability study): 6 bottom "primary" tabs, each grouping
 // several of the existing destinations as a secondary sub-tab strip. Every legacy
 // tab id and switchTab(id,el) call is preserved — this is an additive nav layer.
-const PRIMARY_GROUPS={today:['today','macros','foodedit','schedule'],plan:['stacks','meds','supplements','recon'],timeline:['timeline'],levels:['blood','tcalc','thist','tdose'],labs:['labs','body'],more:['settings','storage']};
+const PRIMARY_GROUPS={today:['today','macros','foodedit','schedule'],plan:['stacks','meds','supplements','recon'],timeline:['timeline'],levels:['blood','tcalc','thist','tdose'],labs:['labs'],profile:['body'],more:['settings','storage']};
 const PRIMARY_LABELS={today:'Today',plan:'Plan',timeline:'Timeline',levels:'Levels',labs:'Labs',more:'More'};
-const PRIMARY_ORDER=['today','plan','timeline','levels','labs','more'];
+const PRIMARY_ORDER=['today','plan','timeline','levels','labs','profile','more'];
 // Human surface names for the sub-tabs (T-Calc→Testosterone, Recon→Reconstitution…).
-const SUBTAB_LABELS={today:'Today',meds:'Medication',supplements:'Supplements',schedule:'Schedule',stacks:'Protocols',timeline:'Timeline',recon:'Reconstitution',blood:'Blood Levels',tcalc:'Testosterone',thist:'T-History',tdose:'Dose Finder',labs:'Bloodwork',body:'Body Comp',macros:'Macros',foodedit:'Food Edit',settings:'Settings',storage:'Storage'};
+const SUBTAB_LABELS={today:'Today',meds:'Medication',supplements:'Supplements',schedule:'Schedule',stacks:'Protocols',timeline:'Timeline',recon:'Reconstitution',blood:'Blood Levels',tcalc:'Testosterone',thist:'T-History',tdose:'Dose Finder',labs:'Bloodwork',body:'Profile',macros:'Macros',foodedit:'Food Edit',settings:'Settings',storage:'Storage'};
 function primaryOf(id){for(var _p in PRIMARY_GROUPS){if(PRIMARY_GROUPS[_p].indexOf(id)>=0)return _p;}return '';}
 let _tabVis={};let _currentTab='today';let _currentPrimary='today';let _lastSub={};
 const GOOGLE_CLIENT_ID='580935445116-sovhqu5i940pjvb3co63af3tm0ekjds8.apps.googleusercontent.com';let _googleToken=localStorage.getItem('google_token')||'';let _sessionToken=localStorage.getItem('session_token')||'';function authHeaders(extra){const h={};if(APP_ID)h['X-App-Id']=APP_ID;const _t=_sessionToken||_googleToken;if(_t)h['Authorization']='Bearer '+_t;return extra?Object.assign({},h,extra):h;}
@@ -666,8 +649,18 @@ function applyOwnerName(name){
   _ownerName=String(name==null?'':name).trim();
   try{document.title=ownerTitle(_ownerName,'Protocol');}catch(e){}
   var l=document.querySelector('.signin-logo');if(l)l.textContent=ownerTitle(_ownerName,APP_NOUN);
-  var h=document.querySelector('.hdr-title');if(h)h.textContent=ownerTitle(_ownerName,APP_NOUN);
+  // The main screen says PROTOCOL only; the name is on the Profile button (Henrik, 2026-11-16: "make the same Profile
+  // changes in peptide tracker", after Workout's "I want the main screen to say TRAINING (no name) - ... - Profile symbol
+  // with user name").
+  var h=document.querySelector('.hdr-title');if(h)h.textContent=APP_NOUN;
+  var pl=profileLabel(_ownerName);['hdr-profile-lbl'].forEach(function(id){var e=document.getElementById(id);if(e)e.textContent=pl;});
+  _fitHeaderTitle();
 }
+function profileLabel(name){var n=String(name==null?'':name).trim();return n||'Profile';}
+// A long title shrinks (34px down to 16px) instead of pushing the Profile button off the screen.
+function _fitHeaderTitle(){var h=document.querySelector&&document.querySelector('.hdr-title');if(!h||!h.style)return;var px=34;h.style.fontSize=px+'px';
+  while(px>16&&h.scrollWidth>h.clientWidth){px--;h.style.fontSize=px+'px';}}
+if(window.addEventListener)window.addEventListener('resize',function(){try{_fitHeaderTitle();}catch(e){}});
 function _cachedOwnerName(){
   var c=getData('pt-owner-name',null);
   if(!c||!c.id)return '';
@@ -921,7 +914,7 @@ function _bfReadinessCard(tier){
   var tgt=cfg.target_pct&&cfg.target_pct[sex];var elev=cfg.elevated_pct&&cfg.elevated_pct[sex];
   var bf=_latestBodyFat();
   var accent,statusLbl,statusMsg;
-  if(bf==null){accent='var(--muted2)';statusLbl='';statusMsg='Log your body fat in Body Comp to see how ready you are to start.';}
+  if(bf==null){accent='var(--muted2)';statusLbl='';statusMsg='Log your body fat in Profile to see how ready you are to start.';}
   else if(elev!=null&&bf>elev){accent='#ff6b2b';statusLbl='Recommend leaning out first';statusMsg='You’re at '+_bfFmt(bf)+'% — above the '+elev+'% mark where estrogen conversion climbs. Getting toward '+tgt+'% first will lift your free T and cut cycle side-effects.';}
   else if(tgt!=null&&bf>tgt){accent='#e8c34a';statusLbl='A little above ideal';statusMsg='You’re at '+_bfFmt(bf)+'%. The ideal pre-cycle range is at or below '+tgt+'% — close, but trimming a bit more first still helps.';}
   else{accent='var(--accent3)';statusLbl='Good range to start';statusMsg='You’re at '+_bfFmt(bf)+'%'+(tgt!=null?', at or under the '+tgt+'% target':'')+' — a solid base to start from.';}
@@ -1129,7 +1122,7 @@ function lsDbgCopy(i,btn){var k=_lsDbgKeys[i];if(k==null)return;var v=localStora
 function lsDbgCopyAll(btn){var out={};for(var _ci=0;_ci<localStorage.length;_ci++){var _ck=localStorage.key(_ci);if(!_ck)continue;var _cv=localStorage.getItem(_ck)||'';try{out[_ck]=JSON.parse(_cv);}catch(e){out[_ck]=_cv;}}_lsCopyText(JSON.stringify(out,null,2),btn||document.getElementById('lsdbg-copy-all'));}
 function lsDbgClearAll(){if(!confirm('Clear all local cache? The app will reload and re-sync from the backend. You will stay signed in.'))return;var _t=window.localStorage.getItem('google_token');var _e=window.localStorage.getItem('google_email');localStorage.clear();if(_t)window.localStorage.setItem('google_token',_t);if(_e)window.localStorage.setItem('google_email',_e);window.location.reload();}
 function _setPrimaryActive(p){PRIMARY_ORDER.forEach(function(pp){var b=document.getElementById('navbtn-'+pp);if(b){if(pp===p)b.classList.add('active');else b.classList.remove('active');}});}
-function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id);var _pr=primaryOf(id);if(_pr){_currentPrimary=_pr;_lastSub[_pr]=id;try{localStorage.setItem('pep-last-sub-'+_pr,id);}catch(e){}_setPrimaryActive(_pr);_applySubtabVis(_pr);}document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body')setTimeout(bcRender,50);if(id==='settings'){loadSettings();buildFlKeyCard();}if(id==='storage')buildStoragePage();if(id==='macros'){buildWaterLog();buildFoodLog();loadMacros();}if(id==='foodedit')buildFoodEdit();if(id==='timeline')buildTimeline();if(id==='recon')renderRecon();if(id==='meds')buildMeds();if(id==='supplements')buildSupplements();if(id==='schedule')buildSchedule();if(id==='stacks'){buildStackStore();openCyclesTab();}if(id==='blood')buildBloodLevels();if(id==='tcalc')buildTCalc();if(id==='thist')buildTHist();if(id==='tdose')buildTDose();if(id==='labs')buildLabs();if(id==='body'){var wi=document.getElementById('bc-weight-in');var hi=document.getElementById('bc-height-in');if(wi){var sw=localStorage.getItem('user_weight');var sh=localStorage.getItem('user_height');if(sw)wi.value=sw;if(sh)hi.value=sh;}setBioSex(localStorage.getItem('user_sex')||'male');var ai=document.getElementById('bc-age-in');if(ai){var sa=localStorage.getItem('user_age');if(sa)ai.value=sa;}}}
+function switchTab(id,el){_currentTab=id;localStorage.setItem('pep-last-tab',id);var _pr=primaryOf(id);if(_pr){_currentPrimary=_pr;_lastSub[_pr]=id;try{localStorage.setItem('pep-last-sub-'+_pr,id);}catch(e){}_setPrimaryActive(_pr);_applySubtabVis(_pr);}document.querySelectorAll('.content').forEach(c=>c.classList.add('hidden'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.remove('hidden');el.classList.add('active');if(id==='body'){setTimeout(bcRender,50);if(typeof _pfRenderInfo==='function'){_pfRenderInfo();_pfRenderMacros();}}if(id==='settings'){loadSettings();buildFlKeyCard();}if(id==='storage')buildStoragePage();if(id==='macros'){buildWaterLog();buildFoodLog();loadMacros();}if(id==='foodedit')buildFoodEdit();if(id==='timeline')buildTimeline();if(id==='recon')renderRecon();if(id==='meds')buildMeds();if(id==='supplements')buildSupplements();if(id==='schedule')buildSchedule();if(id==='stacks'){buildStackStore();openCyclesTab();}if(id==='blood')buildBloodLevels();if(id==='tcalc')buildTCalc();if(id==='thist')buildTHist();if(id==='tdose')buildTDose();if(id==='labs')buildLabs();if(id==='body'){var wi=document.getElementById('bc-weight-in');var hi=document.getElementById('bc-height-in');if(wi){var sw=localStorage.getItem('user_weight');var sh=localStorage.getItem('user_height');if(sw)wi.value=sw;if(sh)hi.value=sh;}setBioSex(localStorage.getItem('user_sex')||'male');var ai=document.getElementById('bc-age-in');if(ai){var sa=localStorage.getItem('user_age');if(sa)ai.value=sa;}}}
 
 function logout(){_googleToken='';_sessionToken='';localStorage.removeItem('google_token');localStorage.removeItem('google_email');localStorage.removeItem('session_token');localStorage.removeItem('pt-owner-name');applyOwnerName('');if(window.google&&google.accounts)google.accounts.id.disableAutoSelect();document.getElementById('app').classList.remove('visible');document.getElementById('signin-screen').classList.remove('hidden');}
 function _fmtTokExp(tok){try{var p=JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));if(!p.exp)return null;return{exp:new Date(p.exp*1000),leftMin:Math.round((p.exp*1000-Date.now())/60000)};}catch(e){return null;}}
@@ -3206,7 +3199,7 @@ var TOUR_TABS=[
   ['▤','Plan','Your protocols, medication, supplements and reconstitution math. Add a medicine by photographing its package.'],
   ['▦','Timeline','Every cycle, dose and supplement drawn across time.'],
   ['∿','Levels','Predicted plasma levels from your protocol, with your bloodwork on top.'],
-  ['⬡','Labs','Bloodwork results and body composition.'],
+  ['⬡','Labs','Bloodwork results.'],
   ['≡','More','Macros (log food by text or photo), settings and extras.']];
 var _TOUR_GOAL_LABELS={hormone:'Hormone health / TRT',recovery:'Recovery & healing',muscle:'Muscle & performance',fatloss:'Fat loss'};
 // What the movie shows follows the answers given earlier in the wizard (Henrik: "ask the
@@ -3297,6 +3290,7 @@ function _tourToggle(){var st=document.getElementById('tour-stage');if(!st||TOUR
 // seen version on an account that is onboarded or has history means the card never existed for it
 // yet: it gets the whole list. Key a row to the version its PR ships AS (main's version.json + 1).
 var WHATS_NEW=[
+  {v:'1.923',title:'Profile',text:'The button at the top right now shows your name and opens Profile (it was Body Comp under Labs): your details, Log weight, and Edit profile, which edits sex, age, height and weight right there with Save and Cancel. Below are your body-fat measurements, trends and a new Macro adherence chart.'},
   {v:'1.919',title:'Oil doses and sites',text:'Today: an oil\'s name now ends with its last three injection sites, newest first (e.g. L1-R1-L3s). To change an oil\'s dose for one day, tap the row and use CHANGE DOSE in the injection window; the dose on the row is no longer a button.'},
   {v:'1.911',title:'Update a supplement by photo',text:'Plan → Supplements: tap 📷 Update on a supplement and photograph the new bottle. A new brand, dose or number a day replaces the old one.'},
   {v:'1.903',title:'Supplements by photo',text:'Plan → Supplements → + Add: take a photo of the label to fill in the supplement, its dose and how many a day. A supplement that is not in the list is added to it when you save.'},

@@ -6594,7 +6594,7 @@ function buildTCalc() {
       html += '<span style="font-size:15px;font-weight:700;color:var(--text)">' + _bwAge + ' yrs</span>';
       html += '</div>';
     } else if (_tcAgeMissing) {
-      html += '<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:8px;padding:10px 14px;font-size:12px;color:#f59e0b;">⚠ Age not set — go to Body Comp → Age to enable age-stratified reference ranges.</div>';
+      html += '<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:8px;padding:10px 14px;font-size:12px;color:#f59e0b;">⚠ Age not set — go to Profile → Age to enable age-stratified reference ranges.</div>';
     }
 
     // Bloodwork entry lives in the Labs tab now — this panel is read-only context

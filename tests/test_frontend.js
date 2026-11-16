@@ -15496,7 +15496,7 @@ if (typeof G._blBuildLines === 'function') {
     check('timeline nav: and no longer a sub-tab of Plan',
       /plan:\['stacks','meds','supplements','recon'\]/.test(rawScript));
     check('timeline nav: it sits immediately after Plan',
-      /PRIMARY_ORDER=\['today','plan','timeline','levels','labs','more'\]/.test(rawScript));
+      /PRIMARY_ORDER=\['today','plan','timeline','levels','labs','profile','more'\]/.test(rawScript));
     check('timeline nav: the bottom-nav button is placed after Plan',
       html.indexOf('id="navbtn-timeline"') > html.indexOf('id="navbtn-plan"') &&
       html.indexOf('id="navbtn-timeline"') < html.indexOf('id="navbtn-levels"'));
@@ -23172,5 +23172,69 @@ console.log('\n── Food Edit: Update an entry ──────────�
   await U.flUpdRun('a1');
   check('a failed update says why and keeps the box open', U._flUpdErr === 'Google is busy.' && U._flUpd === 'a1');
   check('every Food Edit entry has an Update button', /_flBtn\('Update',"flUpdOpen\('/.test(_src));
+
+  // ── Profile (Henrik, 2026-11-16: "make the same Profile changes in peptide tracker") ──────────────
+  console.log('\n── Profile ───────');
+  {
+    const src = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8'), css = fs.readFileSync(path.join(__dirname, '../css/main.css'), 'utf8');
+    const hdr = src.slice(src.indexOf('<div class="hdr">'), src.indexOf('<div class="week-strip"'));
+    check('the header has a Profile button that opens the Profile section', /id="hdr-profile" onclick="switchPrimary\('profile'\)"/.test(hdr) && /id="hdr-profile-lbl">Profile</.test(hdr));
+    check('…and keeps the date, now beside the version under the title so title and button keep their size', /class="hdr-sub">[\s\S]*id="hdr-weekday"[\s\S]*id="hdr-day"/.test(hdr) && !/class="hdr-right">[\s\S]*hdr-day/.test(hdr));
+    check('Profile is the former Body Comp page, and Labs keeps the labs', JSON.stringify(G.PRIMARY_GROUPS.profile) === JSON.stringify(['body']) && JSON.stringify(G.PRIMARY_GROUPS.labs) === JSON.stringify(['labs']) && G.primaryOf('body') === 'profile' && />Profile</.test(src.slice(src.indexOf('id="tab-btn-body"'), src.indexOf('id="tab-btn-body"') + 80)));
+    check('title, date and button are centred on one line, the button 56px high, a long label cut with an ellipsis',
+      /\.hdr\{[^}]*align-items:center/.test(css) && /\.pf-badge\{height:56px/.test(css) && /\.pf-badge span\{[^}]*max-width:96px;overflow:hidden;text-overflow:ellipsis/.test(css) && /\.hdr>div:first-child\{min-width:0;flex:1 1 auto;\}/.test(css));
+    {
+      const t = { textContent: 'PROTOCOL', style: {}, clientWidth: 400, get scrollWidth() { return parseInt(this.style.fontSize) * 7; } }, lbl = { textContent: '' }, logo = { textContent: '' };
+      const _qs = G.document.querySelector, _gid = G.document.getElementById;
+      G.document.querySelector = (q) => q === '.hdr-title' ? t : q === '.signin-logo' ? logo : null; G.document.getElementById = (id) => id === 'hdr-profile-lbl' ? lbl : _gid.call(G.document, id);
+      G.applyOwnerName('Henrik');
+      check('the main screen says PROTOCOL with no name; the name is on the Profile button; the sign-in logo keeps it', t.textContent === 'PROTOCOL' && lbl.textContent === 'Henrik' && /HENRIK/.test(logo.textContent));
+      G.applyOwnerName('');
+      check('…an account with no name shows Profile', lbl.textContent === 'Profile');
+      t.clientWidth = 150; G._fitHeaderTitle();
+      check('a title too wide for its space shrinks (34px down to 16px); one that fits keeps 34px', t.style.fontSize === '21px' && (t.clientWidth = 400, G._fitHeaderTitle(), t.style.fontSize === '34px'));
+      G.document.querySelector = _qs; G.document.getElementById = _gid;
+    }
+    const _ls = G.localStorage, keys = ['user_sex', 'user_age', 'user_height', 'user_weight', 'pep-profile', 'weight_log', G.BC_KEY || 'proto-bodycomp-v2'], saved = {};
+    keys.forEach(k => saved[k] = _ls.getItem(k));
+    const _w = G.weights;
+    _ls.setItem('user_sex', 'male'); _ls.setItem('user_age', '40'); _ls.setItem('user_height', '180'); _ls.setItem('pep-profile', JSON.stringify({ sex: 'male', onboarded: true }));
+    _ls.setItem('proto-bodycomp-v2', JSON.stringify([{ date: '2026-11-05', bf: 18, method: 'dexa' }]));
+    G.weights = [{ date: '2026-11-01', weight: 88 }, { date: '2026-11-10', weight: 86 }];
+    const info = G._pfInfoHtml();
+    check('profile card: sex, age, height, latest weight, BMI, body fat and lean mass', ['Male', '40 yrs', '180 cm', '86 kg', '26.5', '18 %', '70.5 kg'].every(x => info.includes(x)), info.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 300));
+    check('…with Log weight and Edit profile', info.includes('data-pf-weight="1" onclick="pfLogWeight()"') && info.includes('data-pf-edit="1" onclick="pfEditStart()"'));
+    const el = { innerHTML: '' }, ef = {}, _gid2 = G.document.getElementById;
+    G.document.getElementById = (id) => id === 'pf-info' ? el : (ef[id] || _gid2.call(G.document, id));
+    const sent = [], _ps = G.pushPepSettingsToAgent, _pw = G.pushWeightToAgent, _br = G.bcRender, _sb = G.setBioSex;
+    G.pushPepSettingsToAgent = (kv) => sent.push(['settings', kv]); G.pushWeightToAgent = (d, w) => sent.push(['weight', d, w]); let rendered = 0; G.bcRender = () => { rendered++; }; G.setBioSex = () => {};
+    G.pfLogWeight();
+    check('Log weight opens a weight box with Save, logged the way Body Comp always logged it', el.innerHTML.includes('id="bc-weight-in"') && el.innerHTML.includes('onclick="pfLogWeightSave()"'));
+    G.pfLogWeight();
+    G.pfEditStart();
+    const eh = el.innerHTML;
+    check('Edit profile makes sex, age, height and weight editable in place', ['pf-e-age', 'pf-e-height', 'pf-e-weight'].every(id => eh.includes('id="' + id + '"')) && eh.includes('data-pf-sex="female"') && /id="pf-e-age"[^>]*value="40"/.test(eh));
+    check('…Edit becomes Save and Log weight becomes Cancel', /data-pf-save="1" onclick="pfEditSave\(\)"[^>]*>Save</.test(eh) && /data-pf-cancel="1" onclick="pfEditCancel\(\)"[^>]*>Cancel</.test(eh) && !eh.includes('data-pf-weight') && !eh.includes('data-pf-edit="1"'));
+    check('…readable: 15px or larger and never greyed', !/font-size:1[0-4]px/.test(eh + info) && !/var\(--muted2?\)/.test(eh + info));
+    G.pfEditCancel();
+    check('Cancel changes nothing', sent.length === 0 && el.innerHTML.includes('data-pf-edit="1"'));
+    G.pfEditStart(); ef['pf-e-age'] = { value: '41' }; ef['pf-e-height'] = { value: '90' }; ef['pf-e-weight'] = { value: '85,5' };
+    G.pfEditSex('female');
+    G.pfEditSave();
+    check('an impossible value saves nothing and says what to do, with its help link', sent.length === 0 && el.innerHTML.includes('data-pf-edit-err="1"') && el.innerHTML.includes('height') && el.innerHTML.includes('href="help.html#profile-invalid"') && _ls.getItem('user_height') === '180');
+    ef['pf-e-height'] = { value: '181' }; G.pfEditSave();
+    const pp = JSON.parse(_ls.getItem('pep-profile') || '{}'), today = G.dateKey(new Date());
+    check('Save stores sex, age and height like the wizard does, on the device and the backend', _ls.getItem('user_sex') === 'female' && _ls.getItem('user_age') === '41' && _ls.getItem('user_height') === '181' && pp.sex === 'female' && pp.age === 41 && pp.height === 181 && pp.onboarded === true &&
+      sent.some(x => x[0] === 'settings' && x[1].user_sex === 'female' && x[1].user_age === 41 && x[1].user_height === 181 && x[1]['pep-profile']));
+    check('…a changed weight is logged for today', G.weights.some(w => w.date === today && w.weight === 85.5) && sent.some(x => x[0] === 'weight' && x[2] === 85.5) && rendered >= 1 && G._pfEdit === null);
+    G.document.getElementById = _gid2; G.pushPepSettingsToAgent = _ps; G.pushWeightToAgent = _pw; G.bcRender = _br; G.setBioSex = _sb; G.weights = _w;
+    keys.forEach(k => { if (saved[k] === null) _ls.removeItem(k); else _ls.setItem(k, saved[k]); });
+    const ms = { from: '2026-11-01', to: '2026-11-02', metrics: { kcal: { avg: 96 }, protein: { avg: 88 }, carbs: null, fat: null }, series: [{ date: '2026-11-01', kcal: 100, protein: 90 }, { date: '2026-11-02', kcal: 92, protein: 86 }] };
+    const mh = G._pfMacroHtml(ms);
+    check('Macro adherence: each day as % of its goals, with each macro\'s average', mh.includes('id="pfMacroChart"') && mh.includes('Kcal 96 % avg') && !mh.includes('data-pf-macro="carbs"') && G._pfMacroHtml(null).includes('data-pf-macro-empty'));
+    check('…on the Profile page', src.includes('<div id="pf-macros"></div>') && src.includes('<div id="pf-info"></div>'));
+    const help = fs.readFileSync(path.join(__dirname, '..', 'help.html'), 'utf8');
+    check('help page: the profile warning has its section, and the page carries the app icon and manifest', /id="profile-invalid"[\s\S]*What it means[\s\S]*What happens if you ignore it[\s\S]*How to fix it/.test(help) && /rel="icon"[^>]*protocol-icon\.png/.test(help) && /rel="manifest"/.test(help));
+  }
   if (failed > 0) process.exitCode = 1;
 })();

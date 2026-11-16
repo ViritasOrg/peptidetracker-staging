@@ -41,6 +41,8 @@ jobs:
 
           # Copy index.html from staging
           cp ../staging/index.html ./index.html
+          # The help page the app's warnings link to (help.html#...), so prod has it too.
+          [ -f ../staging/help.html ] && cp ../staging/help.html ./help.html
 
           # Copy every JS module the page actually loads, derived from index.html's own
           # <script src> tags.
