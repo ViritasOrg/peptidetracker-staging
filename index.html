@@ -229,10 +229,10 @@
   </div>
 </div>
 <script>
-const VERSION='1.922';
+const VERSION='1.923';
 // BUILD_NO counts staging builds and is never rewritten by Push to Prod (which resets VERSION to
 // prod's own counter). The What's new card is keyed to it, so its rows show in both apps (2026-11-01).
-const BUILD_NO='1.922';
+const BUILD_NO='1.923';
 const IS_STAGING=(window.location.pathname||'').startsWith('/peptidetracker-staging');
 // Backend data namespace, sent as X-App-Id on every call. Staging gets its own so
 // testing here cannot write over production data — before 2026-08-01 both sent no
@@ -4217,23 +4217,23 @@ async function wlSetOwn(){var cur=_wlOwn>0?(_wlOwn/1000).toFixed(2):'';
     if(!r.ok){alert('Not saved: the server answered '+r.status+'.');return;}}catch(e){alert('Not saved: could not reach the server.');return;}
   _wlOwn=ml;if(ml)localStorage.setItem('water-goal-ml',String(ml));else localStorage.removeItem('water-goal-ml');_wlRender();}
 </script>
-<script src="inj-writer.js?v=1.922"></script>
-<script src="tab-cycles.js?v=1.922"></script>
-<script src="tab-macros.js?v=1.922"></script>
-<script src="tab-stack.js?v=1.922"></script>
-<script src="tab-today.js?v=1.922"></script>
-<script src="inj-site.js?v=1.922"></script>
-<script src="tab-schedule.js?v=1.922"></script>
-<script src="tab-timeline.js?v=1.922"></script>
-<script src="tab-body.js?v=1.922"></script>
-<script src="tab-recon.js?v=1.922"></script>
-<script src="tab-blood.js?v=1.922"></script>
-<script src="tab-labs.js?v=1.922"></script>
-<script src="tab-tcalc.js?v=1.922"></script>
-<script src="tab-thist.js?v=1.922"></script>
-<script src="tab-tdose.js?v=1.922"></script>
-<script src="tab-supplements.js?v=1.922"></script>
-<script src="tab-meds.js?v=1.922"></script>
+<script src="inj-writer.js?v=1.923"></script>
+<script src="tab-cycles.js?v=1.923"></script>
+<script src="tab-macros.js?v=1.923"></script>
+<script src="tab-stack.js?v=1.923"></script>
+<script src="tab-today.js?v=1.923"></script>
+<script src="inj-site.js?v=1.923"></script>
+<script src="tab-schedule.js?v=1.923"></script>
+<script src="tab-timeline.js?v=1.923"></script>
+<script src="tab-body.js?v=1.923"></script>
+<script src="tab-recon.js?v=1.923"></script>
+<script src="tab-blood.js?v=1.923"></script>
+<script src="tab-labs.js?v=1.923"></script>
+<script src="tab-tcalc.js?v=1.923"></script>
+<script src="tab-thist.js?v=1.923"></script>
+<script src="tab-tdose.js?v=1.923"></script>
+<script src="tab-supplements.js?v=1.923"></script>
+<script src="tab-meds.js?v=1.923"></script>
 <script>
 init();
 if(IS_STAGING){const dc=document.getElementById('s-deploy-card');if(dc)dc.style.display='';}{const ir=document.getElementById('s-injbody-row');if(ir)ir.style.display='';const isel=document.getElementById('s-injbody-sel');if(isel){try{isel.value=localStorage.getItem('inj-body-override')||'auto';}catch(e){}}}
