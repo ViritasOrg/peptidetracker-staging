@@ -1776,6 +1776,7 @@ async function loadUserStacks(){
   if(!_userStacks.length)_activeStackIndices=[];
   _normalizeActiveStack();
   var _needIdSave=_userStacks.some(function(s){return s&&!s.id;});
+  if(typeof _funRenameStacks==='function'&&_funRenameStacks(_userStacks))_needIdSave=true;
   var _rampHealed=_healSinglePhaseRamps(_userStacks);
   _userStacks.forEach(function(stack){
     _ensureStackId(stack);
@@ -2618,18 +2619,8 @@ function buildStackStore(){
     body.innerHTML='<div class="stack-empty"><div class="today-spinner"><div class="today-spinner-dot"></div></div></div>';
     return;
   }
-  var SLOTS=4;
-  // ⚠️ minmax(0,1fr), NOT 1fr — A LONG PROTOCOL NAME MUST NOT RESIZE THE GRID.
-  // A `1fr` track's minimum is `auto`, which resolves to min-content, so the
-  // track grows to fit the widest unbreakable thing inside it. .stack-card-name
-  // has had ellipsis truncation all along and it never fired, because the column
-  // simply widened to accommodate the name instead of the name being clipped to
-  // the column. Reported 2026-09-09: "Protocol 4 TRT-HGH-Mast-Reta/GLOW" took
-  // most of the row, squeezing the card beside it to a sliver.
-  //
-  // minmax(0,1fr) floors the track at 0 so it can shrink below its content, at
-  // which point the ellipsis does its job. Paired with min-width:0 on .stack-card
-  // in main.css — the track can only shrink if the item inside it can too.
+  // One column of cards, every protocol, no cap (Henrik, 2026-11-17: cards and fun names as in Workout, where the
+  // 2x2 grid and its four-slot limit went); min-width:0 and overflow-wrap keep a long name inside its card.
   // The option itself. Shown only when there is something it could chain — with one
   // protocol it is a control with no possible effect, which is just noise.
   var _anOn=_autoNextEnabled();
@@ -2640,8 +2631,8 @@ function buildStackStore(){
       +'<div style="min-width:0"><div style="font-size:12px;font-weight:700;color:var(--text)">Show the next protocol too</div>'
       +'<div style="font-size:10px;color:var(--muted2);line-height:1.4;margin-top:1px">A protocol that starts on or after the active one ends also counts as active, so its curve and its injections show up before it begins. Protocols that overlap in time are never chained.</div></div></div>';
   }
-  html+='<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;">';
-  for(var i=0;i<Math.min(_userStacks.length,SLOTS);i++){
+  html+='<div style="display:flex;flex-direction:column;gap:10px;">';
+  for(var i=0;i<_userStacks.length;i++){
     var st=_userStacks[i];
     var isActive=_isActiveStack(i);
     var _tf=_stackTierFlags(st,isActive,_stackHasScheduledTrt(st.id));
@@ -2651,14 +2642,9 @@ function buildStackStore(){
     html+='<div style="flex:1;min-width:0;">';
     html+='<div onclick="event.stopPropagation();toggleStack('+i+')" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin-bottom:5px;"><div style="width:34px;height:18px;border-radius:9px;background:'+(isActive?'var(--accent)':'rgba(255,255,255,0.15)')+';position:relative;flex-shrink:0;"><div style="position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:2px;left:'+(isActive?'18px':'2px')+';box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div></div><span style="font-size:10px;font-weight:600;color:'+(isActive?'var(--accent)':'var(--muted2)')+';letter-spacing:0.3px;">'+(isActive?(_activeStackIndices[0]===i?'Active':'Active · next'):'Inactive')+'</span></div>';
     html+='<div class="stack-card-name">'+_esc(st.name||'Protocol '+(i+1))+'</div>';
-    var _csDisp=st.cycle_start||'';
-    if(_csDisp){var _csdD=parseLocalDate(_csDisp);
-      // END DATE WINS, and cycle_length is only the fallback. cycle_length is whole weeks
-      // ROUNDED UP, so deriving the end from it overshoots by up to six days: a protocol
-      // running 18 May → 26 Aug is 100 days, which rounds to 15 weeks, and this card printed
-      // 31 Aug while the editor right next to it said 26 Aug (reported 2026-08-22).
-      var _cedStr=(typeof _cycleEndDateStr==='function')?_cycleEndDateStr(st):'';
-      if(_cedStr){var _cedD=parseLocalDate(_cedStr);html+='<div style="font-size:10px;color:var(--muted2);margin-top:2px;">'+fmtDate(_csdD)+' → '+fmtDate(_cedD)+'</div>';}else{html+='<div style="font-size:10px;color:var(--muted2);margin-top:2px;">'+fmtDate(_csdD)+' → ongoing</div>';}}
+    // Goal, length, dates and contents under the name, as on Workout's program cards; the dates come from
+    // stackDetails, which takes the end date first (_cycleEndDateStr), cycle_length only as the fallback.
+    html+='<div class="stack-card-details">'+_esc(stackDetails(st))+'</div>';
     html+='</div>';
     html+='</div>';
     html+='<div class="stack-card-meta">';
@@ -2670,22 +2656,11 @@ function buildStackStore(){
     if(_tf.trt||_tf.enhanced)_chips+=_stackTierChip('ENHANCED','var(--accent4)');
     if(!_chips)_chips='<span style="font-size:10px;color:var(--muted2)">Empty</span>';
     html+='<div style="display:flex;flex-wrap:wrap;margin-bottom:4px">'+_chips+'</div>';
-    if(_tf.peptide)html+='<div style="font-size:10px;color:var(--muted2);margin-bottom:4px">'+pCount+' peptide'+(pCount===1?'':'s')+'</div>';
     html+='<button onclick="event.stopPropagation();openCartModal('+i+')" style="margin-top:4px;background:transparent;border:1px solid var(--border);color:var(--muted2);border-radius:6px;padding:4px 10px;font-size:10px;font-weight:600;cursor:pointer;font-family:inherit;letter-spacing:0.3px">🛒 Shopping List</button>';
     html+='</div>';
     html+='</div>';
   }
-  var firstEmpty=true;
-  for(var j=_userStacks.length;j<SLOTS;j++){
-    html+='<div class="stack-card-empty">';
-    if(firstEmpty){
-      html+='<button onclick="createNewStack()" style="background:none;border:none;color:var(--muted2);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;font-family:inherit;font-size:12px;padding:8px;line-height:1;">';
-      html+='<span style="font-size:22px;font-weight:300;">+</span><span>Add Protocol</span>';
-      html+='</button>';
-      firstEmpty=false;
-    }
-    html+='</div>';
-  }
+  html+='<button onclick="createNewStack()" style="background:none;border:1.5px dashed rgba(255,255,255,0.25);border-radius:10px;color:var(--text);cursor:pointer;font-family:inherit;font-size:15px;font-weight:600;padding:14px;">+ Add Protocol</button>';
   html+='</div>';
   body.innerHTML=html;
 }
@@ -3290,6 +3265,7 @@ function _tourToggle(){var st=document.getElementById('tour-stage');if(!st||TOUR
 // seen version on an account that is onboarded or has history means the card never existed for it
 // yet: it gets the whole list. Key a row to the version its PR ships AS (main's version.json + 1).
 var WHATS_NEW=[
+  {v:'1.925',title:'Fun protocol names and protocol cards',text:'A new protocol gets a random fun name for its goal, like "Back to 25", 12-Week TRT or "Glow Getter", 8-Week Skin & Anti-aging, never one another of your protocols already has; protocols still called Protocol 1, 2 and so on got one too, and a name you type is kept. Plan shows every protocol as a card in one column with its goal, length, dates and contents under the name, and there is no limit of four protocols any more.'},
   {v:'1.923',title:'Profile',text:'The button at the top right now shows your name and opens Profile (it was Body Comp under Labs): your details, Log weight, and Edit profile, which edits sex, age, height and weight right there with Save and Cancel. Below are your body-fat measurements, trends and a new Macro adherence chart.'},
   {v:'1.919',title:'Oil doses and sites',text:'Today: an oil\'s name now ends with its last three injection sites, newest first (e.g. L1-R1-L3s). To change an oil\'s dose for one day, tap the row and use CHANGE DOSE in the injection window; the dose on the row is no longer a button.'},
   {v:'1.911',title:'Update a supplement by photo',text:'Plan → Supplements: tap 📷 Update on a supplement and photograph the new bottle. A new brand, dose or number a day replaces the old one.'},

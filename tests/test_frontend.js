@@ -267,8 +267,40 @@ if(typeof G._nextStackName==='function'){
   G._userStacks=_nsSaved;
   // initWizard uses it for a fresh (non-edit) stack
   G._userStacks=[{name:'Protocol 1'}]; G.initWizard();
-  check('initWizard: default name bumps (Protocol 2)', G._wiz.stackName==='Protocol 2');
+  // Henrik, 2026-11-17: fun names, as in Workout ("random, so a user can never get the same name for exact the same
+  // prgoram ever"): a new protocol gets '"<fun>", <N>-Week <goal>' instead of "Protocol N".
+  check('initWizard: a new protocol gets a fun name, not "Protocol N"', /^".+", 12-Week Protocol$/.test(G._wiz.stackName), G._wiz.stackName);
   G._userStacks=_nsSaved;
+}
+if(typeof G.stackFunName==='function'){
+  var _fnSaved=G._userStacks;
+  check('fun name: Enhanced first in the pool', G.stackFunName('enhanced',16,0,[])==='"Better Living Through Chemistry", 16-Week Enhanced', G.stackFunName('enhanced',16,0,[]));
+  check('fun name: each goal has its own pool', new Set(['enhanced','trt','muscle','recovery','skin','fat','cognitive','antiaging'].map(function(g){return G.STACK_FUN_NAMES[g][0];})).size===8);
+  var _tk=[];for(var _k=0;_k<40;_k++)_tk.push(G.stackFunName('fat',12,Math.random(),_tk));
+  check('fun name: 40 identical protocols never share a name', new Set(_tk.map(function(n){return n.toLowerCase();})).size===40, _tk.slice(-2).join(' | '));
+  var _sn=new Set();for(var _k2=0;_k2<30;_k2++)_sn.add(G.stackFunName('skin',8,Math.random(),[]));
+  check('fun name: the pick is random', _sn.size>1);
+  check('goal: Enhanced compounds win', G._stackFunGoal({enhanced:{compounds:[{id:'x'}]},trt:{compounds:[{id:'t'}]},peptides:[]})==='enhanced');
+  check('goal: then TRT', G._stackFunGoal({trt:{compounds:[{id:'t'}]},peptides:[]})==='trt');
+  check('goal: the wizard goals count', G._stackFunGoal({goals:['fat'],peptides:[]})==='fat');
+  check('goal: nothing in it is general', G._stackFunGoal({peptides:[]})==='general');
+  // The wizard: the name follows the choices until typed, an edited protocol keeps its own.
+  G._userStacks=[]; G.initWizard(); G._wiz.goals=['cognitive']; G._wizAutoName();
+  var _n1=G._wiz.stackName; G._wizAutoName();
+  check('wizard: the name follows the goal and stays put while open', /^".+", 12-Week Cognitive$/.test(_n1) && G._wiz.stackName===_n1, _n1);
+  G.wizSetStackName('My Stack'); G._wizAutoName();
+  check('wizard: a typed name always wins', G._wiz.stackName==='My Stack' && G._wiz.nameTyped===true);
+  G._wiz={editMode:true,stackName:'Protocol 1',goals:['fat']}; G._wizAutoName();
+  check('wizard: editing keeps the protocol\'s own name', G._wiz.stackName==='Protocol 1');
+  // Existing protocols still called "Protocol N" are renamed once; a chosen name is left alone.
+  var _st=[{name:'Protocol 1',cycle_length:12,peptides:[],enhanced:{compounds:[{id:'a'}]}},{name:'Protocol 2',cycle_length:12,peptides:[],enhanced:{compounds:[{id:'a'}]}},{name:'Cutting',peptides:[]},{name:'',cycle_length:8,peptides:[]}];
+  var _chg=G._funRenameStacks(_st);
+  check('rename: "Protocol N" and unnamed protocols get fun names, all different', _chg===true && /^".+", 12-Week Enhanced$/.test(_st[0].name) && /^".+", 12-Week Enhanced$/.test(_st[1].name) && _st[0].name!==_st[1].name && /^".+", 8-Week Protocol$/.test(_st[3].name), _st.map(function(x){return x.name;}).join(' | '));
+  check('rename: a chosen name is left alone', _st[2].name==='Cutting');
+  check('rename: a second load changes nothing', G._funRenameStacks(_st)===false);
+  var _d=G.stackDetails({cycle_length:12,peptides:[{id:'a'},{id:'b'}],enhanced:{compounds:[{id:'c'}]}});
+  check('details: goal, length and contents', _d==='Enhanced · 12 weeks · 2 peptides · 1 compound', _d);
+  G._userStacks=_fnSaved;
 }
 
 // ── Today view: de-dupe injection slots (dose-edit doubling fix) ──
@@ -3973,15 +4005,13 @@ console.log('\n── Protocol cards: a long name cannot break the grid ──�
 
   // BOTH are needed and NEITHER is sufficient: the track can only shrink if the
   // item inside it can too, and the item can only shrink if the track lets it.
-  check('the grid tracks can shrink below their content',
-    /grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\)/.test(_buildG));
+  check('the protocols are one column of cards, every protocol (Henrik, 2026-11-17)',
+    /flex-direction:column/.test(_buildG) && !/grid-template-columns/.test(_buildG) && !/SLOTS/.test(_buildG));
   check('  …and the card itself can shrink with them',
     /\.stack-card\{[^}]*min-width:0;?\}/.test(_cssG));
   // The truncation that was already there and could not fire.
-  check('  …so the name truncates instead of widening the column',
-    /\.stack-card-name\{[^}]*text-overflow:ellipsis[^}]*\}/.test(_cssG) &&
-    /\.stack-card-name\{[^}]*white-space:nowrap[^}]*\}/.test(_cssG) &&
-    /\.stack-card-name\{[^}]*overflow:hidden[^}]*\}/.test(_cssG));
+  check('  …so a long name wraps inside the card instead of widening it',
+    /\.stack-card-name\{[^}]*overflow-wrap:anywhere[^}]*\}/.test(_cssG));
   // A plain 1fr anywhere in this grid reintroduces the bug.
   check('  …with no bare 1fr track left in the protocol grid',
     !/grid-template-columns:1fr 1fr/.test(_buildG));

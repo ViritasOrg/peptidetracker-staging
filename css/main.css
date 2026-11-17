@@ -318,7 +318,8 @@
   .stack-card:active{opacity:0.8;}
   .stack-card.active{border-color:var(--accent);background:rgba(232,255,60,0.08);}
   .stack-card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:4px;}
-  .stack-card-name{font-size:13px;font-weight:600;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .stack-card-name{font-size:17px;font-weight:700;color:var(--text);flex:1;min-width:0;overflow-wrap:anywhere;line-height:1.3;}
+  .stack-card-details{font-size:15px;font-weight:400;color:var(--text);line-height:1.4;margin-top:2px;overflow-wrap:anywhere;}
   .stack-card-meta{font-size:13px;color:var(--muted2);display:flex;flex-direction:column;gap:2px;}
   .stack-card-empty{border:1.5px dashed rgba(255,255,255,0.12);border-radius:10px;padding:12px;background:transparent;display:flex;align-items:center;justify-content:center;min-height:86px;}
   .stack-icon-btn{background:none;border:none;color:var(--muted2);cursor:pointer;padding:3px 5px;border-radius:4px;font-size:14px;line-height:1;transition:color 0.12s;flex-shrink:0;}

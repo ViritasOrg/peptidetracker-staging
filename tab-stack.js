@@ -11,8 +11,62 @@ function _nextStackName(){
   return 'Protocol '+(Math.max(maxN,stacks.length)+1);
 }
 function initWizard(){
-  _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compounds:[]},enhanced:{enabled:false,compounds:[]},editMode:false,stackIndex:-1,stackName:_nextStackName(),cycle_length:12};
+  _wiz={step:0,goals:[],peptides:[],trt:{enabled:false,compounds:[]},enhanced:{enabled:false,compounds:[]},editMode:false,stackIndex:-1,stackName:'',cycle_length:12};
+  _wizAutoName();
 }
+// ── Fun protocol names (Henrik, 2026-11-17: "yes, add the cards and fun names to peptide tracker too", after the
+// Workout request "Change so Name is a separate generated name, make it fun, different names for different goals ...
+// random, so a user can never get the same name for exact the same prgoram ever") ──────────────────────────────────
+// A pool per goal; the protocol's goal is Enhanced, then TRT, then the peptide goal most of its peptides serve. Random
+// start in the pool, never a name another protocol already has, sequel tags when the pool is used up; a typed name wins.
+var STACK_FUN_NAMES={
+  enhanced:['Better Living Through Chemistry','Big Dog Season','Mass Appeal','Gear Up, Buttercup','Hulk Mode: On','Main Event Energy','Doorframes Beware'],
+  trt:['Back to 25','Barry White Mode','Low T, No More','Alpha Maintenance Plan','Testy but Tasty','Vintage Engine, New Oil'],
+  muscle:['Growth Spurt 2.0','Swole Food','Muscle Memory Lane','Anabolic Window Shopping','Recovery Is My Cardio','Gains Train'],
+  recovery:['Wolverine Mode','Heal Yeah','Tendons of Steel','Duct Tape Edition','Bounce Back Club','Patch Me Up, Scotty'],
+  skin:['Glow Getter','Benjamin Button Protocol','Collagen Is My Cardio','Filter Not Required','Dewy Decimal System','Selfie Season'],
+  fat:['Shrinkflation','Belt Notch Bandit','Fridge Raid Cancelled','Snatched Era','Six-Pack Pending','Waist Management'],
+  cognitive:['Big Brain Energy','Limitless (Budget Edition)','Galaxy Brain','Neuron Nitro','Brainiac Mode','Focus Pocus'],
+  antiaging:['Forever 29','Mitochondria Mode','Age Is Just a Number','Fountain of Youth Pass','Time Lord Protocol','Vintage, Not Old'],
+  general:['Pin Cushion Club','Small Pokes, Big Hopes','Needle in a Haystack','Science Experiment No. 1','Fresh Start']};
+var STACK_GOAL_LABELS={enhanced:'Enhanced',trt:'TRT',muscle:'Muscle & Recovery',recovery:'Injury & Healing',skin:'Skin & Anti-aging',fat:'Fat Loss',cognitive:'Cognitive',antiaging:'Longevity',general:'Protocol'};
+var STACK_SEQUELS=['',' Reloaded',' Strikes Back',' Returns',' 2: Electric Boogaloo',' The Sequel',' Director’s Cut',' Remastered',' Unleashed',' Origins'];
+// The goal a protocol (or the wizard's draft, which carries `goals`) is named after.
+function _stackFunGoal(st){if(!st)return'general';
+  var goals=st.goals||[];
+  if(goals.indexOf('enhanced')>=0||(st.enhanced&&st.enhanced.compounds&&st.enhanced.compounds.length))return'enhanced';
+  if(goals.indexOf('trt')>=0||(st.trt&&(st.trt.enabled||st.trt.compound||(st.trt.compounds&&st.trt.compounds.length))))return'trt';
+  var count={},cat=(typeof PEPTIDE_CAT!=='undefined'&&PEPTIDE_CAT)||[];
+  goals.forEach(function(g){if(STACK_FUN_NAMES[g])count[g]=(count[g]||0)+10;});
+  (st.peptides||[]).forEach(function(p){var c=cat.find(function(x){return x.id===p.id;});((c&&c.goals)||[]).forEach(function(g){if(STACK_FUN_NAMES[g])count[g]=(count[g]||0)+1;});});
+  var best='general',n=0;Object.keys(count).forEach(function(g){if(count[g]>n){n=count[g];best=g;}});return best;}
+// Pure: '"<fun>", <N>-Week <goal>', never one in `taken`; seed (0..1) picks the random start.
+function stackFunName(goal,weeks,seed,taken){var pool=STACK_FUN_NAMES[goal]||STACK_FUN_NAMES.general;
+  var tail=(weeks?weeks+'-Week ':'')+(STACK_GOAL_LABELS[goal]||'Protocol');
+  var used={};(taken||[]).forEach(function(t){used[String(t||'').toLowerCase()]=1;});
+  var st=Math.floor((seed||0)*pool.length)%pool.length;
+  for(var r=0;r<200;r++){var tag=r<STACK_SEQUELS.length?STACK_SEQUELS[r]:' '+(r-STACK_SEQUELS.length+2);
+    for(var k=0;k<pool.length;k++){var nm='"'+pool[(st+k)%pool.length]+tag+'", '+tail;if(!used[nm.toLowerCase()])return nm;}}
+  return tail;}
+function _stackTakenNames(skipIdx){return((typeof _userStacks!=='undefined'&&_userStacks)||[]).filter(function(s,i){return i!==skipIdx;}).map(function(s){return s&&s.name;});}
+// The wizard's name follows its choices until the user types one (a protocol being edited keeps its name).
+function _wizAutoName(){if(!_wiz||_wiz.nameTyped||_wiz.editMode)return;if(_wiz.funSeed==null)_wiz.funSeed=Math.random();
+  _wiz.stackName=stackFunName(_stackFunGoal(_wiz),_wiz.cycle_length,_wiz.funSeed,_stackTakenNames(-1));}
+// Protocols still called "Protocol N" (or nothing) get a fun name once (Henrik, 2026-11-17, as for Workout's
+// "update existing users saved programs if they have the standard name still"); a chosen name is never touched.
+function _funRenameStacks(stacks){var changed=false;(stacks||[]).forEach(function(st,i){if(!st)return;
+    if(st.name&&!/^Protocol \d+$/.test(st.name))return;
+    st.name=stackFunName(_stackFunGoal(st),st.cycle_length,Math.random(),stacks.map(function(s){return s&&s.name;}));changed=true;});
+  return changed;}
+// The details line under a protocol's name on its card: goal, length, dates, what is in it.
+function stackDetails(st){if(!st)return'';var parts=[STACK_GOAL_LABELS[_stackFunGoal(st)]];
+  if(st.cycle_length)parts.push(st.cycle_length+' weeks');
+  if(st.cycle_start&&typeof parseLocalDate==='function'&&typeof fmtDate==='function'){var ce=(typeof _cycleEndDateStr==='function')?_cycleEndDateStr(st):'';
+    parts.push(fmtDate(parseLocalDate(st.cycle_start))+' → '+(ce?fmtDate(parseLocalDate(ce)):'ongoing'));}
+  var np=(st.peptides||[]).length,nc=((st.trt&&st.trt.compounds)||[]).length+((st.enhanced&&st.enhanced.compounds)||[]).length+(st.trt&&st.trt.compound&&!(st.trt.compounds||[]).length?1:0);
+  if(np)parts.push(np+' peptide'+(np===1?'':'s'));if(nc)parts.push(nc+' compound'+(nc===1?'':'s'));
+  return parts.join(' · ');}
+
 function editStackWithCycle(idx){
   if(idx<0||idx>=_userStacks.length)return;
   var st=_userStacks[idx];
@@ -146,6 +200,7 @@ async function wizSave(){
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   // The target-free-T step asks for a first injection; that is the protocol's start.
   if(_wiz.trtPlan&&_wiz.trtPlan.startDate&&!_wiz.cycle_start)_wiz.cycle_start=_wiz.trtPlan.startDate;
+  if(!String(_wiz.stackName||'').trim()){_wiz.nameTyped=false;_wizAutoName();}
   var proto={name:_wiz.stackName,cycle_length:_wiz.cycle_length,cycle_start:_wiz.cycle_start||undefined,peptides:_wiz.peptides,trt:(_wiz.trt&&_wiz.trt.enabled)?_wiz.trt:{},enhanced:((_wiz.goals||[]).includes('enhanced')&&_wiz.enhanced&&_wiz.enhanced.compounds&&_wiz.enhanced.compounds.length)?_wiz.enhanced:{}};
   // Preserve the stable id when editing (proto is rebuilt from the wizard state);
   // assign one for a brand-new stack. Keeps this stack's injections linked.
@@ -168,7 +223,6 @@ async function wizSave(){
     // one usually starts after the current one ends, so it would leave a gap.
     if(!(_activeStackIndices&&_activeStackIndices.length))_activeStackIndices=[_wiz.stackIndex];
   }
-  _userStacks=_userStacks.slice(0,4);
   // ── THE WIZARD'S TESTOSTERONE STEP WRITES INTO THE PROTOCOL ───────────────
   // It used to write into T-Calc's simple planner and then hand the user over to
   // that tab. Phase 6 deleted the planner, and this hand-off was left behind: the
@@ -261,7 +315,6 @@ async function useTemplate(tid){
   var t=((typeof _protocolTemplates!=='undefined'&&_protocolTemplates)||[]).find(function(x){return x.id===tid;});
   if(!t)return;
   if(!Array.isArray(_userStacks))_userStacks=[];
-  if(_userStacks.length>=4){alert('You already have 4 protocols — remove one first.');return;}
   var _t0=new Date(NOW);_t0.setHours(0,0,0,0);
   var proto={name:t.name,cycle_length:t.cycle_length||12,cycle_start:dateKey(_t0),
     peptides:(t.peptides||[]).map(function(p){var _e={id:p.id,name:p.name,dot:p.dot,times:(p.times||['AM']).slice(),days:(p.days||[0,1,2,3,4,5,6]).slice(),active:true};TIME_SLOTS.forEach(function(tm){var k=_slotKey(tm);_e['dose_'+k]=p['dose_'+k]||'';_e['unit_'+k]=p['unit_'+k]||'';});return _e;}),
@@ -269,7 +322,7 @@ async function useTemplate(tid){
     enhanced:(t.enhanced&&t.enhanced.compounds&&t.enhanced.compounds.length)?{enabled:true,compounds:t.enhanced.compounds.map(function(c){return {id:c.id,name:c.name,dot:c.dot,dose:c.dose,unit:c.unit,days:(c.days||[0,1,2,3,4,5,6]).slice()};})}:{}
   };
   if(typeof _ensureStackId==='function')_ensureStackId(proto);
-  _userStacks.push(proto);_userStacks=_userStacks.slice(0,4);
+  _userStacks.push(proto);
   var _idx=_userStacks.length-1;
   // Only one protocol may be active — starting one from a template makes it THE
   // active one rather than adding it alongside whatever was already running.
@@ -1917,7 +1970,8 @@ function wizStep4(body,footer){
   var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
   var issues=checkStack(pepObjs);
   var hasErrors=issues.some(function(i){return i.level==='err';});
-  var html='<div class="wiz-section">Protocol Name</div><input class="trt-in" type="text" value="'+String(_wiz.stackName||'')+'" oninput="wizSetStackName(this.value)" placeholder="e.g. Cutting, Bulk 1, TRT base…"><div class="wiz-section" style="margin-top:16px">Check</div><div id="wiz-chk-section">'+renderCheckResults(pepObjs,'wizinline')+'</div>';
+  _wizAutoName();
+  var html='<div class="wiz-section">Protocol Name</div><input class="trt-in" type="text" value="'+_esc(String(_wiz.stackName||''))+'" oninput="wizSetStackName(this.value)" placeholder="e.g. Cutting, Bulk 1, TRT base…"><div class="wiz-section" style="margin-top:16px">Check</div><div id="wiz-chk-section">'+renderCheckResults(pepObjs,'wizinline')+'</div>';
   html+='<div class="wiz-section">Summary</div>';
   if(_wiz.peptides.length){
     _wiz.peptides.forEach(function(p){
@@ -1937,7 +1991,7 @@ function wizStep4(body,footer){
   var saveLabel=hasErrors?'Save Anyway (conflicts)':'Save Protocol';
   footer.innerHTML='<button class="btn-check" onclick="wizShowCheck()">Re-check</button><button class="btn btn-primary" style="flex:1" onclick="wizSave()">'+saveLabel+'</button>';
 }
-function wizSetStackName(val){_wiz.stackName=val;}
+function wizSetStackName(val){_wiz.stackName=val;_wiz.nameTyped=true;}
 
 function _synthesizeProtocol(weekly){
   var seen={};var peptides=[];
@@ -5274,6 +5328,7 @@ function wizSetMacroPhase(p){if(typeof setMacrosPhase==='function')setMacrosPhas
 function wizStepReview(body,footer){
   var pepObjs=_wiz.peptides.map(function(p){return PEPTIDE_CAT.find(function(c){return c.id===p.id;})||{id:p.id,cg:[]};});
   var hasErrors=checkStack(pepObjs).some(function(i){return i.level==='err';});
+  _wizAutoName();
   var html='<div class="wiz-section">Protocol Name</div><input class="trt-in" type="text" value="'+_esc(String(_wiz.stackName||''))+'" oninput="wizSetStackName(this.value)" placeholder="e.g. Cutting, Bulk 1, TRT base…">';
   html+='<div class="wiz-section" style="margin-top:16px">Summary</div>';
   var _reviewFlow=_wizFlow();
