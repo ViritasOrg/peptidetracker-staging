@@ -18575,13 +18575,12 @@ console.log('\n── The card and the editor agree on the end date ────
   check('  …and reports nothing for an open-ended protocol',
     G._cycleEndDateStr({cycle_start:'2026-05-18'}) === '');
 
-  const _src = require('fs').readFileSync(__dirname + '/../index.html', 'utf8');
-  const _cardIdx = _src.indexOf("' → ongoing<");
-  const _around = _src.slice(Math.max(0, _cardIdx - 1400), _cardIdx + 200);
+  // The card's dates now come from stackDetails (2026-11-17, one-column cards): the end date wins over cycle_length.
+  const _sd = G.stackDetails({cycle_start:'2026-05-18', end_date:'2026-08-26', cycle_length:15, peptides:[]});
   check('the protocol card resolves its end through _cycleEndDateStr',
-    _around.indexOf('_cycleEndDateStr') >= 0);
-  check('  …and no longer multiplies cycle_length by seven itself',
-    _around.indexOf('cycle_length*7*86400000') < 0);
+    _sd.indexOf(G.fmtDate(G.parseLocalDate('2026-08-26'))) >= 0, _sd);
+  check('  …and no longer derives it from cycle_length when an end date exists',
+    _sd.indexOf(G.fmtDate(G.parseLocalDate('2026-08-31'))) < 0, _sd);
 
   const _stack = require('fs').readFileSync(__dirname + '/../tab-stack.js', 'utf8');
   check('the TRT day cutoff honours the end date', _stack.indexOf('_trtEnd') >= 0);
