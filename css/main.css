@@ -429,3 +429,5 @@
   .s-chev{font-size:18px;color:var(--muted2);transition:transform 0.2s;}
   .s-sec-hdr.open .s-chev{transform:rotate(180deg);}
   .s-sec-body.collapsed{display:none;}
+  /* The dropdown arrow is drawn by the app, 14px in from the right edge and in the dropdown's own text colour, never the browser's own that hugs the border (Henrik, 2026-11-18). */
+  select:not([multiple]):not([size]){-webkit-appearance:none !important;appearance:none !important;padding-right:34px !important;background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%) !important;background-position:right 20px center,right 14px center !important;background-size:6px 6px,6px 6px !important;background-repeat:no-repeat !important;}
