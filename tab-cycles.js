@@ -251,6 +251,61 @@ async function syncEnhancedCompoundsFromAgent(){
     return{ok:true};
   }catch(e){clearTimeout(tid2);_logErr('syncEnhanced',e);return{ok:false,status:null,msg:String(e&&e.message||e)};}
 }
+// ── EVERY CATALOGUE PEPTIDE IS IN THE PICKER (Henrik, 2026-11-18) ────────────
+// "add all peptides we have in the catalog to the peptidetracker app, I wanted to log a
+// PT-141 1mg injection now at 00:36 but couldnt find it in the app." The picker read only
+// the bundled PEPTIDE_CAT; the backend catalogue held more. GET /peptide-catalog serves
+// every one of them, and the ones the bundled list lacks are added to it here, so every
+// screen that reads PEPTIDE_CAT (the wizard, Add peptide, the info card) has them.
+//
+// The catalogue holds no dose, unit, half-life or schedule for them and none is made up
+// here: the dose field starts empty and the unit is the editor's own default.
+var _PEP_CAT_CACHE_KEY='proto-peptide-cat';
+var _PEP_SERVED_DOT='#ffffff';
+function _peptideFromCatalog(r){
+  if(!r||typeof r.id!=='string'||!/^[a-z0-9_-]+$/i.test(r.id)||!r.name)return null;
+  var esc=function(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');};
+  // A section the bundled list already has is matched on its plain name and reused as
+  // it is spelt there, so "Skin & Healing" stays one section and not two.
+  var rawGroup=String(r.group||r.category||'Peptide');
+  var peer=PEPTIDE_CAT.find(function(c){return !c._served&&c.group===rawGroup;});
+  var group=peer?peer.group:esc(rawGroup);
+  var goals=(Array.isArray(r.goals)?r.goals:[]).filter(function(g){return typeof g==='string'&&/^[a-z]+$/.test(g);});
+  if(!goals.length)goals=['other'];
+  var mech=[r.description,r.uses].filter(function(x){return x;}).map(esc).join(' ');
+  return{id:r.id,name:esc(r.name),sku:'',group:group,goals:goals,dot:(peer&&peer.dot)||_PEP_SERVED_DOT,
+    cg:(Array.isArray(r.cg)?r.cg:[]).filter(function(g){return typeof g==='string';}),
+    desc:esc(r.category||''),halfLife:'',mechanism:mech,benefits:[],protocol:'',
+    sideEffects:r.sides?[esc(r.sides)]:[],
+    dflt:{times:['AM'],days:[0,1,2,3,4,5,6],doseAm:'',dosePm:'',unitAm:'mg',unitPm:'mg'},_served:true};
+}
+// Adds what the bundled list lacks; a bundled entry is never touched. Returns how many
+// served peptides the list holds afterwards.
+function _mergeServedPeptides(rows){
+  if(!Array.isArray(rows)||typeof PEPTIDE_CAT==='undefined')return 0;
+  rows.forEach(function(r){
+    var e=_peptideFromCatalog(r);if(!e)return;
+    var i=PEPTIDE_CAT.findIndex(function(c){return c.id===e.id;});
+    if(i<0)PEPTIDE_CAT.push(e);
+    else if(PEPTIDE_CAT[i]._served)PEPTIDE_CAT[i]=e;
+  });
+  return PEPTIDE_CAT.filter(function(c){return c._served;}).length;
+}
+async function syncPeptideCatalogFromAgent(){
+  // The last list this device received, so a start with no network still knows them.
+  try{var c=JSON.parse(localStorage.getItem(_PEP_CAT_CACHE_KEY)||'null');if(c)_mergeServedPeptides(c);}catch(e){}
+  var ctrl=new AbortController();var tid=setTimeout(function(){ctrl.abort();},10000);
+  try{
+    var r=await fetch(AGENT_URL+'/peptide-catalog',{headers:authHeaders(),signal:ctrl.signal});
+    clearTimeout(tid);
+    if(!r.ok){_logHttp('syncPeptideCatalog',r.status,'/peptide-catalog');return{ok:false,status:r.status};}
+    var d=await r.json();
+    var rows=Array.isArray(d)?d:(d.peptides||[]);
+    _mergeServedPeptides(rows);
+    try{localStorage.setItem(_PEP_CAT_CACHE_KEY,JSON.stringify(rows));}catch(e){}
+    return{ok:true};
+  }catch(e){clearTimeout(tid);_logErr('syncPeptideCatalog',e);return{ok:false,status:null,msg:String(e&&e.message||e)};}
+}
 var _cwiz={step:1,tpl:null,phase:'foundational',weeks:20,startDate:'',compounds:[]};
 function cycleWizardOpen(){
   if(_cycle&&_cycle.id&&!confirm('Start a new cycle? Your current cycle stays saved on the backend.'))return;

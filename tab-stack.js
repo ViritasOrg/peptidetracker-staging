@@ -1898,6 +1898,8 @@ function editAddPeptide(){
       var already=currentIds.includes(cat.id);
       var doseStr=cat.dflt.doseAm+(cat.dflt.unitAm?' '+cat.dflt.unitAm:'');
       if(cat.dflt.times&&cat.dflt.times.includes('PM'))doseStr+=' / '+cat.dflt.dosePm+(cat.dflt.unitPm?' '+cat.dflt.unitPm:'');
+      // A catalogue peptide with no preset dose: its class, not a bare unit.
+      if(!cat.dflt.doseAm&&!cat.dflt.dosePm)doseStr=cat.desc||'';
       html+='<div class="pep-card" onclick="'+(already?'':'editPickPeptide(\''+cat.id+'\')')+'" style="opacity:'+(already?0.4:1)+';cursor:'+(already?'default':'pointer')+';">';
       html+='<div class="pep-dot-sm" style="background:'+cat.dot+';"></div>';
       html+='<div style="flex:1;"><div style="font-size:13px;font-weight:600;color:var(--text);">'+cat.name+'</div>';
@@ -2123,7 +2125,7 @@ function showPeptideCard(id){
     +'<div style="margin-top:16px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">'
     +(cat.dflt&&cat.dflt.doseAm?'<div class="pcard-stat"><div class="pcard-lbl">Typical AM dose</div><div class="pcard-val" style="color:'+dot+'">'+cat.dflt.doseAm+' '+cat.dflt.unitAm+'</div></div>':'')
     +(cat.dflt&&cat.dflt.dosePm?'<div class="pcard-stat"><div class="pcard-lbl">Typical PM dose</div><div class="pcard-val" style="color:'+dot+'">'+cat.dflt.dosePm+' '+cat.dflt.unitPm+'</div></div>':'')
-    +(cat.dflt&&cat.dflt.times?'<div class="pcard-stat"><div class="pcard-lbl">Timing</div><div class="pcard-val">'+cat.dflt.times.join(' + ')+'</div></div>':'')
+    +(cat.dflt&&cat.dflt.times&&(cat.dflt.doseAm||cat.dflt.dosePm)?'<div class="pcard-stat"><div class="pcard-lbl">Timing</div><div class="pcard-val">'+cat.dflt.times.join(' + ')+'</div></div>':'')
     +(cat.sku?'<div class="pcard-stat"><div class="pcard-lbl">SKU</div><div class="pcard-val">'+cat.sku+'</div></div>':'')
     +'</div>'
     +'<div style="position:sticky;bottom:0;background:var(--surface);padding:16px 0 28px;margin-top:20px;">'

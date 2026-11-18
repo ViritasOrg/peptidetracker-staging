@@ -20540,6 +20540,123 @@ console.log('\n── Catalogue retried until it arrives ───────�
   })();
 }
 
+// ── Every catalogue peptide is in the picker (Henrik, 2026-11-18) ─────────────
+// "add all peptides we have in the catalog to the peptidetracker app, I wanted to log a
+// PT-141 1mg injection now at 00:36 but couldnt find it in the app."
+console.log('\n── Every catalogue peptide is in the picker ───────────────');
+{
+  const GP = sandbox;
+  const SERVED = [
+    {id:'pt141', catalog_id:'pt141', name:'PT-141 (Bremelanotide)', category:'Melanocortin',
+     group:'Melanocortin', goals:['other'], cg:[], description:'A melanocortin agonist.',
+     uses:'Licensed for HSDD.', sides:'Nausea <severe>.'},
+    {id:'liraglutide', catalog_id:'liraglutide', name:'Liraglutide', category:'GLP-1',
+     group:'Fat Loss', goals:['fat'], cg:['glp1'], description:'A daily GLP-1 agonist.', uses:'', sides:''},
+    {id:'kpv', catalog_id:'kpv', name:'KPV', category:'Peptide',
+     group:'Skin & Healing', goals:['skin'], cg:[], description:'k', uses:'', sides:''},
+    {id:'bpc157', catalog_id:'bpc157', name:'SERVED NAME', category:'Peptide',
+     group:'Skin & Healing', goals:['recovery'], cg:[], description:'x', uses:'', sides:''},
+    {id:"bad');alert(1);('", name:'Bad', group:'X', goals:['other']},
+    {id:'noname'},
+  ];
+  const before = GP.PEPTIDE_CAT.slice();
+  const bpcBefore = JSON.stringify(GP.PEPTIDE_CAT.find(c => c.id === 'bpc157'));
+  check('before the catalogue arrives PT-141 is not in the list (the report)',
+    !GP.PEPTIDE_CAT.some(c => c.id === 'pt141'));
+
+  const n = GP._mergeServedPeptides(SERVED);
+  const pt = GP.PEPTIDE_CAT.find(c => c.id === 'pt141');
+  check('a served peptide the app lacks is added', !!pt && n === 3);
+  check('  …with its name, section and goals', pt && pt.name === 'PT-141 (Bremelanotide)' &&
+    pt.group === 'Melanocortin' && pt.goals.join() === 'other');
+  check('  …with no dose made up for it, and the editor\'s default unit',
+    pt && pt.dflt.doseAm === '' && pt.dflt.dosePm === '' && pt.dflt.unitAm === 'mg' && pt.halfLife === '' && pt.protocol === '');
+  check('  …with the catalogue text escaped for the info card',
+    pt && pt.mechanism === 'A melanocortin agonist. Licensed for HSDD.' && pt.sideEffects[0] === 'Nausea &lt;severe&gt;.');
+  const lira = GP.PEPTIDE_CAT.find(c => c.id === 'liraglutide');
+  const reta = GP.PEPTIDE_CAT.find(c => c.id === 'retatrutide');
+  check('a served peptide in an existing section takes that section\'s colour and class',
+    lira && reta && lira.dot === reta.dot && lira.cg.join() === 'glp1');
+  check('a section with "&" in its name stays one section (regression: it was listed twice)',
+    GP.PEPTIDE_CAT.find(c => c.id === 'kpv').group === GP.PEPTIDE_CAT.find(c => c.id === 'bpc157').group &&
+    GP.PEPTIDE_CAT.find(c => c.id === 'kpv').dot === GP.PEPTIDE_CAT.find(c => c.id === 'bpc157').dot);
+  check('a peptide the app already has is left exactly as it was',
+    JSON.stringify(GP.PEPTIDE_CAT.find(c => c.id === 'bpc157')) === bpcBefore &&
+    GP.PEPTIDE_CAT.filter(c => c.id === 'bpc157').length === 1);
+  check('an id that is not a plain slug, or a row with no name, is not added',
+    GP.PEPTIDE_CAT.length === before.length + 3);
+  check('merging the same list again adds nothing', GP._mergeServedPeptides(SERVED) === 3 &&
+    GP.PEPTIDE_CAT.length === before.length + 3);
+  check('a later list updates a served peptide in place',
+    (GP._mergeServedPeptides([Object.assign({}, SERVED[0], {name:'PT-141'})]),
+     GP.PEPTIDE_CAT.find(c => c.id === 'pt141').name === 'PT-141') && GP.PEPTIDE_CAT.length === before.length + 3);
+  check('junk in place of a list does nothing', GP._mergeServedPeptides(null) === 0 || GP.PEPTIDE_CAT.length === before.length + 3);
+
+  // The screens that list peptides show it.
+  const _wSave = {wiz:GP._wiz, tier:GP._userTier};
+  GP._userTier = 1;
+  GP._wiz = {step:0,goals:[],peptides:[],trt:{enabled:false,compounds:[]},editMode:false,stackIndex:-1,stackName:'T',cycle_length:12};
+  const wb = {innerHTML:''}, wf = {innerHTML:''};
+  GP.wizStepPeptides(wb, wf);
+  check('the wizard lists PT-141', wb.innerHTML.includes("wizTogglePep('pt141')"));
+  GP._wiz.goals = ['fat'];
+  GP.wizStepPeptides(wb, wf);
+  check('  …and filters a served peptide by its goals like any other',
+    wb.innerHTML.includes("wizTogglePep('liraglutide')") && !wb.innerHTML.includes("wizTogglePep('pt141')"));
+  check('a served peptide is not mistaken for TRT support',
+    !GP.PEPTIDE_CAT.filter(p => p.goals.every(g => g === 'trt')).some(p => p._served));
+
+  // Picked, dosed and scheduled: the rows Today ticks to log an injection.
+  const d = pt.dflt;
+  const item = Object.assign({id:pt.id,name:pt.name,dot:pt.dot,times:d.times.slice(),days:d.days.slice(),note:'',active:true}, GP._slotFieldsFromDflt(d));
+  check('picked: the dose is empty and the unit is mg', item.dose_am === '' && item.unit_am === 'mg');
+  const today = GP.dateKey(new Date());
+  const noDose = GP._genInjBatches({cycle_start:today, cycle_length:1, peptides:[item]}, 'c1');
+  check('with no dose typed nothing is scheduled', noDose[0].compound_id === 'pt141' && noDose[0].entries.length === 0);
+  item.dose_am = '1';
+  const rows = GP._genInjBatches({cycle_start:today, cycle_length:1, peptides:[item]}, 'c1')[0].entries;
+  check('with 1 mg typed a PT-141 1 mg row is scheduled for today',
+    rows.length > 0 && rows[0].date === today && rows[0].compound_id === 'pt141' &&
+    rows[0].dose === '1' && rows[0].unit === 'mg' && rows[0].tier === 'peptide');
+  GP._wiz = _wSave.wiz; GP._userTier = _wSave.tier;
+
+  // Back to the bundled list for the sync test and for every block after this one.
+  GP.PEPTIDE_CAT.length = 0; before.forEach(c => GP.PEPTIDE_CAT.push(c));
+
+  // A start with no network: the kept list is applied before the fetch is even answered.
+  GP.localStorage.setItem('proto-peptide-cat', JSON.stringify(SERVED));
+  const _f0 = GP.fetch;
+  GP.fetch = async () => { throw new Error('offline'); };
+  const pOff = GP.syncPeptideCatalogFromAgent();
+  GP.fetch = _f0;
+  check('with no network the kept list still puts PT-141 in the picker', GP.PEPTIDE_CAT.some(c => c.id === 'pt141'));
+  pOff.then(r => check('  …and the failed fetch is reported, not thrown', r.ok === false));
+  GP.localStorage.removeItem('proto-peptide-cat');
+  GP.PEPTIDE_CAT.length = 0; before.forEach(c => GP.PEPTIDE_CAT.push(c));
+
+  // The sync: fetch is read when the call starts, so the stub is swapped back at once
+  // and never races the other async blocks.
+  const _f = GP.fetch; let asked = '';
+  GP.fetch = async (u) => { asked = String(u); return {ok:true, status:200, json: async () => ({peptides: SERVED})}; };
+  const pOk = GP.syncPeptideCatalogFromAgent();
+  GP.fetch = async () => ({ok:false, status:503, json: async () => ({})});
+  const pBad = GP.syncPeptideCatalogFromAgent();
+  GP.fetch = _f;
+  (async () => {
+    const r = await pOk;
+    let cached = null; try { cached = JSON.parse(GP.localStorage.getItem('proto-peptide-cat')); } catch (e) {}
+    const bad = await pBad;
+    check('the app fetches /peptide-catalog', /\/peptide-catalog$/.test(asked) && r.ok === true);
+    check('  …and PT-141 is in the list afterwards', GP.PEPTIDE_CAT.some(c => c.id === 'pt141'));
+    check('  …a failed fetch reports it so the retry runs again', bad.ok === false && bad.status === 503);
+    check('  …the list is kept for a start with no network', Array.isArray(cached) && cached.some(x => x.id === 'pt141'));
+    GP.PEPTIDE_CAT.length = 0; before.forEach(c => GP.PEPTIDE_CAT.push(c));
+    try { GP.localStorage.removeItem('proto-peptide-cat'); } catch (e) {}
+  })();
+  check('init starts the peptide catalogue with the same retries',
+    /syncCatalogUntilLoaded\(8,15000,syncPeptideCatalogFromAgent\)/.test(html));
+}
+
 // ── The app reads the merged catalogue ───────────────────────────────────────
 // Henrik, 2026-08-19: "Didn't we merge the catalogs?" We had — in the backend, in
 // Phase 1 — and nothing in the app was reading it. Two sources were still being
