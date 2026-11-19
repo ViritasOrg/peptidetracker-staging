@@ -5300,6 +5300,42 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     check('  …with no series id, because there is no series',
       posted[0] && (posted[0].series_id === null || posted[0].series_id === undefined));
 
+    // ── when it was taken (Henrik, 2026-11-19: the ad-hoc PT-141 dose, "now") ──
+    // Fails on the pre-fix source: the sheet wrote no logged_at at all.
+    check('a taken past dose is stamped on its own day', posted[0] &&
+      String(posted[0].logged_at).slice(0, 10) === daysAgo(4) && /T12:00:00/.test(posted[0].logged_at), String(posted[0] && posted[0].logged_at));
+    posted = [];
+    G._piDraft = {tier:'peptide', compId:'pt141', dose:'1', unit:'mg', date: daysAgo(2),
+                  time:'PM', isSeries:false, logged:true};
+    await G.savePastInjection();
+    check('  …at its slot\'s hour when a slot is picked', posted.length === 1 && posted[0].time_of_day === 'PM' &&
+      String(posted[0].logged_at).slice(0, 13) === daysAgo(2) + 'T20', String(posted[0] && posted[0].logged_at));
+    posted = [];
+    const _tBefore = Date.now();
+    G._piDraft = {tier:'peptide', compId:'pt141', dose:'1', unit:'mg', date: today,
+                  time:'', isSeries:false, logged:true};
+    await G.savePastInjection();
+    check('a dose dated today is stamped now', posted.length === 1 &&
+      Math.abs(new Date(posted[0].logged_at).getTime() - _tBefore) < 60000, String(posted[0] && posted[0].logged_at));
+    check('  …as PT-141, 1 mg, on no stack', posted[0] && posted[0].compound_id === 'pt141' &&
+      posted[0].dose === '1' && posted[0].unit === 'mg' && posted[0].tier === 'peptide' && posted[0].cycle_id === 'manual');
+    posted = [];
+    G._piDraft = {tier:'peptide', compId:'pt141', dose:'1', unit:'mg', date: daysAgo(1),
+                  time:'', isSeries:false, logged:false};
+    await G.savePastInjection();
+    check('a dose not taken gets no time', posted.length === 1 && posted[0].logged_at === null);
+    check('the saved row keeps its time for Today',
+      G._piToCacheRow({id:'a', date:today, logged_at:'2026-11-19T00:36:00+02:00'}, true).logged_at === '2026-11-19T00:36:00+02:00');
+
+    // ── the date box stays in its column, so the Time buttons can be tapped ──
+    G._piDraft = {tier:'peptide', compId:'pt141', dose:'1', unit:'mg', date: today, time:'', isSeries:false, logged:true};
+    const _sheet = G._piHtml();
+    const _dateRow = _sheet.slice(_sheet.lastIndexOf('<div style="display:grid', _sheet.indexOf('type="date"')), _sheet.indexOf('How many'));
+    check('the date and time columns cannot grow past their share',
+      /grid-template-columns:minmax\(0,1\.4fr\) minmax\(0,1fr\)/.test(_dateRow));
+    check('  …and the date input gives up its native minimum width',
+      /type="date"[^>]*min-width:0;max-width:100%;-webkit-appearance:none/.test(_dateRow));
+
     // ── refusals ──
     for (const [label, draft] of [
       ['a run with no count',    {tier:'trt',compId:'nebido',dose:'100',date:daysAgo(5),isSeries:true,count:0,intervalDays:2,logged:true}],
