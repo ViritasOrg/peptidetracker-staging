@@ -20602,7 +20602,30 @@ console.log('\n── Every catalogue peptide is in the picker ─────�
   GP._wiz.goals = ['fat'];
   GP.wizStepPeptides(wb, wf);
   check('  …and filters a served peptide by its goals like any other',
-    wb.innerHTML.includes("wizTogglePep('liraglutide')") && !wb.innerHTML.includes("wizTogglePep('pt141')"));
+    wb.innerHTML.includes("wizTogglePep('liraglutide')") && !wb.innerHTML.includes("wizTogglePep('kpv')"));
+  // Henrik, 2026-11-19: "The list is missing pt141 and isn't sorted by name". With a goal
+  // picked, every peptide filed under no wizard goal was filtered out. Fails on the pre-fix source.
+  check('  …but one filed under no wizard goal (PT-141) is listed whatever goals are picked',
+    wb.innerHTML.includes("wizTogglePep('pt141')"));
+  {
+    const order = (h, re) => { const out = []; let m; while ((m = re.exec(h))) out.push(m[1]); return out; };
+    const nameOf = id => GP.PEPTIDE_CAT.find(c => c.id === id);
+    const sortedWithinSections = ids => { const by = {};
+      ids.forEach(id => { const c = nameOf(id); (by[c.group] = by[c.group] || []).push(c.name.toLowerCase()); });
+      return Object.values(by).every(a => a.every((n, i) => i === 0 || a[i - 1].localeCompare(n, 'en', {sensitivity:'base', numeric:true}) <= 0)); };
+    GP._wiz.goals = [];
+    GP.wizStepPeptides(wb, wf);
+    const wizIds = order(wb.innerHTML, /wizTogglePep\('([^']+)'\)/g);
+    check('the wizard lists each section by name', wizIds.length > 20 && sortedWithinSections(wizIds));
+    const sorted = GP._pepByName(GP.PEPTIDE_CAT);
+    check('Add peptide\'s order: by name within each section, nothing lost',
+      sorted.length === GP.PEPTIDE_CAT.length && sortedWithinSections(sorted.map(c => c.id)));
+    check('  …sections stay in the order the list first names them',
+      sorted[0].group === GP.PEPTIDE_CAT[0].group &&
+      sorted.map(c => c.group).filter((g, i, a) => a.indexOf(g) === i).join() === GP.PEPTIDE_CAT.map(c => c.group).filter((g, i, a) => a.indexOf(g) === i).join());
+    check('  …and the list itself is not reordered', GP.PEPTIDE_CAT[0].id === 'cjc-ipa');
+    check('Add peptide reads that order', /_pepByName\(PEPTIDE_CAT\)\.forEach/.test(fs.readFileSync(path.join(__dirname, '../tab-stack.js'), 'utf8')));
+  }
   check('a served peptide is not mistaken for TRT support',
     !GP.PEPTIDE_CAT.filter(p => p.goals.every(g => g === 'trt')).some(p => p._served));
 
