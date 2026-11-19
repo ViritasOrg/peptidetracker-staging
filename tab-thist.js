@@ -415,9 +415,14 @@ function _piHtml() {
   h += '<div><label style="'+lSty+'">Dose</label><input type="text" inputmode="decimal" value="'+_esc(String(d.dose||''))+'" placeholder="0" oninput="_piSetField(\'dose\',this.value)" style="'+iSty+'"></div>';
   h += '<div><label style="'+lSty+'">Unit</label><select onchange="_piSetField(\'unit\',this.value)" style="'+iSty+'">'+unitOpts+'</select></div>';
   h += '</div>';
-  h += '<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:10px;margin-bottom:16px">';
-  h += '<div><label style="'+lSty+'">'+(d.isSeries?'First injection':'Date')+'</label><input type="date" value="'+_esc(d.date||'')+'" max="'+_thTodayStr()+'" onchange="_piSetField(\'date\',this.value)" style="'+iSty+'"></div>';
-  h += '<div><label style="'+lSty+'">Time</label><div style="display:flex;gap:5px">'+timeBtns+'</div></div>';
+  // THE DATE BOX STAYS IN ITS OWN COLUMN. Henrik, 2026-11-19, with a screenshot: he could
+  // not tap the Time buttons. iOS gives a date input a minimum width of its own, and a
+  // grid column sized `1.4fr` grows to fit it, so the box lay over "—" and AM and took
+  // their taps. minmax(0,…) lets the column hold its share, and the input gives up its
+  // native width and chrome so it fits inside.
+  h += '<div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:10px;margin-bottom:16px">';
+  h += '<div style="min-width:0"><label style="'+lSty+'">'+(d.isSeries?'First injection':'Date')+'</label><input type="date" value="'+_esc(d.date||'')+'" max="'+_thTodayStr()+'" onchange="_piSetField(\'date\',this.value)" style="'+iSty+';min-width:0;max-width:100%;-webkit-appearance:none;appearance:none"></div>';
+  h += '<div style="min-width:0"><label style="'+lSty+'">Time</label><div style="display:flex;gap:5px">'+timeBtns+'</div></div>';
   h += '</div>';
 
   // ── One dose, or the run a mid-cycle user actually has to enter ────────────
@@ -525,7 +530,8 @@ function _piToCacheRow(e, logged) {
   return { id: e.id, cycle_id: e.cycle_id, date: e.date, compound_id: e.compound_id,
            compound_name: e.compound_name, tier: e.tier, dose: e.dose, unit: e.unit,
            dot: e.dot || '#888', time_of_day: e.time_of_day || null, active: true,
-           logged: (logged === undefined) ? !!e.logged : !!logged, source: 'manual' };
+           logged: (logged === undefined) ? !!e.logged : !!logged, source: 'manual',
+           logged_at: e.logged_at || null };
 }
 
 async function savePastInjection() {
@@ -570,6 +576,11 @@ async function savePastInjection() {
                  tier: tier, dose: String(doseMg), unit: d.unit || _piDefaultUnit(tier),
                  dot: dot, time_of_day: (d.time || null), active: true, logged: logged,
                  source: 'manual', series_id: seriesId,
+                 // WHEN it was taken, like a tick on Today writes: a dose dated today is
+                 // stamped now, a past one on its own day at its slot's hour (midday with
+                 // no slot). Editable from its row on Today. Nothing for a dose not taken.
+                 logged_at: (logged && typeof _injStampFor === 'function')
+                   ? _injStampFor({ date: dates[i], time_of_day: (d.time || null) }) : null,
                  ester: meta.ester, half_life_days: meta.half_life_days, route: null };
     // Through inj-writer, like every other injection write.
     var r = await injWriteOne(body, 'pastInjection');
