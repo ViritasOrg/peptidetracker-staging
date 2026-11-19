@@ -335,10 +335,32 @@ function _piDates(d) {
   return out;
 }
 
+// The compounds of a tier, by name (Henrik, 2026-11-19, on this sheet's Peptide list: it
+// "isn't sorted by name"). A copy: the catalogues keep their own order.
 function _piCat(tier) {
-  if (tier === 'peptide')  return (typeof PEPTIDE_CAT !== 'undefined' ? PEPTIDE_CAT : []);
-  if (tier === 'enhanced') return (typeof ENHANCEMENT_COMPOUNDS !== 'undefined' ? (ENHANCEMENT_COMPOUNDS || []) : []);
-  return (typeof TRT_CAT !== 'undefined' ? TRT_CAT : []);   // trt
+  var list;
+  if (tier === 'peptide')  list = (typeof PEPTIDE_CAT !== 'undefined' ? PEPTIDE_CAT : []);
+  else if (tier === 'enhanced') list = (typeof ENHANCEMENT_COMPOUNDS !== 'undefined' ? (ENHANCEMENT_COMPOUNDS || []) : []);
+  else list = (typeof TRT_CAT !== 'undefined' ? TRT_CAT : []);   // trt
+  return list.slice().sort(function(a, b){
+    return String(a.name).localeCompare(String(b.name), 'en', {sensitivity:'base', numeric:true});
+  });
+}
+// THE SHEET ASKS FOR THE PEPTIDE CATALOGUE ITSELF WHEN THE APP HOLDS NONE.
+// Henrik, 2026-11-19: "I was adding an ad-hoc injection and picked peptide" and PT-141 was
+// not in the list. The catalogue is fetched at start and retried for two minutes; an app
+// started while the backend was not serving it kept the bundled list until it was closed
+// and reopened, and an installed PWA is rarely closed. This sheet is where a peptide that
+// is never part of a stack gets logged, so it cannot depend on that.
+function _piEnsurePeptides() {
+  if (typeof syncPeptideCatalogFromAgent !== 'function' || typeof PEPTIDE_CAT === 'undefined') return Promise.resolve(false);
+  var had = PEPTIDE_CAT.length;
+  if (PEPTIDE_CAT.some(function(c){ return c._served; })) return Promise.resolve(false);
+  return syncPeptideCatalogFromAgent().then(function(){
+    var grew = PEPTIDE_CAT.length > had;
+    if (grew && _piDraft && _piDraft.tier === 'peptide' && document.getElementById('pi-overlay')) _piRerender();
+    return grew;
+  }, function(){ return false; });
 }
 function _piCatEntry(tier, id) {
   return _piCat(tier).find(function(c){ return c.id === id; }) || null;
@@ -355,6 +377,7 @@ function openPastInjection(tier) {
   var wrap = document.createElement('div');
   wrap.innerHTML = _piHtml();
   document.body.appendChild(wrap.firstChild);
+  _piEnsurePeptides();
 }
 function _piClose() { var el = document.getElementById('pi-overlay'); if (el) el.remove(); _piDraft = null; }
 
