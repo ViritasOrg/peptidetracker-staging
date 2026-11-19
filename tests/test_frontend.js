@@ -5336,6 +5336,25 @@ console.log('\n── An edit re-reads the cache: the protocol path now ──�
     check('  …and the date input gives up its native minimum width',
       /type="date"[^>]*min-width:0;max-width:100%;-webkit-appearance:none/.test(_dateRow));
 
+    // ── the Time buttons light up, the date field opens from anywhere, its symbol is seen ──
+    // Henrik, 2026-11-19: "The AM / Pre-gym / PM buttons are still dead". The tap set the
+    // slot and the sheet was never redrawn. Fails on the pre-fix source.
+    {
+      const btn = (_sheet.match(/<button onclick="([^"]*_piSetField\('time','AM'\)[^"]*)"/) || [])[1] || '';
+      let redrawn = 0; const _rr = G._piRerender; G._piRerender = () => { redrawn++; };
+      new Function('_piSetField', '_piRerender', btn)(G._piSetField, () => G._piRerender());
+      G._piRerender = _rr;
+      check('tapping AM sets the slot and redraws the sheet', G._piDraft.time === 'AM' && redrawn === 1, btn);
+      check('  …and the redrawn sheet shows AM picked, not "—"',
+        /_piSetField\('time','AM'\);_piRerender\(\)" style="flex:1;background:rgba\(224,80,80,0\.22\)/.test(G._piHtml()));
+      G._piDraft.time = '';
+      const dateTag = (_sheet.match(/<input type="date"[^>]*>/) || [''])[0];
+      check('a tap anywhere in the date field opens the picker', /onclick="try\{this\.showPicker\(\)\}catch\(e\)\{\}"/.test(dateTag), dateTag);
+      const _css = fs.readFileSync(path.join(__dirname, '../css/main.css'), 'utf8');
+      check('the calendar symbol is drawn in the accent colour, not the browser\'s black',
+        /input\[type=date\]::-webkit-calendar-picker-indicator\{background-image:none;background-color:var\(--accent\);-webkit-mask:url\(/.test(_css));
+    }
+
     // ── refusals ──
     for (const [label, draft] of [
       ['a run with no count',    {tier:'trt',compId:'nebido',dose:'100',date:daysAgo(5),isSeries:true,count:0,intervalDays:2,logged:true}],

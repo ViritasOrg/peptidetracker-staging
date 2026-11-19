@@ -400,7 +400,10 @@ function _piHtml() {
     }));
   var timeBtns = times.map(function(tm){
     var sel = (d.time||'') === tm.id;
-    return '<button onclick="_piSetField(\'time\',\''+tm.id+'\')" style="flex:1;background:'+(sel?'rgba(224,80,80,0.22)':'none')+';color:'+(sel?'#e05050':'var(--muted2)')+';border:1px solid '+(sel?'#e0505066':'var(--border)')+';border-radius:8px;padding:8px 4px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">'+tm.label+'</button>';
+    // The tap is recorded AND drawn. Henrik, 2026-11-19: "The AM / Pre-gym / PM buttons
+    // are still dead": the draft took the slot and the sheet was never redrawn, so no
+    // button ever lit up.
+    return '<button onclick="_piSetField(\'time\',\''+tm.id+'\');_piRerender()" style="flex:1;background:'+(sel?'rgba(224,80,80,0.22)':'none')+';color:'+(sel?'#e05050':'var(--muted2)')+';border:1px solid '+(sel?'#e0505066':'var(--border)')+';border-radius:8px;padding:8px 4px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">'+tm.label+'</button>';
   }).join('');
   var h = '<div id="pi-overlay" onclick="if(event.target===this)_piClose()" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.85);display:flex;align-items:flex-end;justify-content:center;overflow-y:auto;-webkit-overflow-scrolling:touch">';
   h += '<div style="background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 40px;box-sizing:border-box">';
@@ -421,7 +424,7 @@ function _piHtml() {
   // their taps. minmax(0,…) lets the column hold its share, and the input gives up its
   // native width and chrome so it fits inside.
   h += '<div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:10px;margin-bottom:16px">';
-  h += '<div style="min-width:0"><label style="'+lSty+'">'+(d.isSeries?'First injection':'Date')+'</label><input type="date" value="'+_esc(d.date||'')+'" max="'+_thTodayStr()+'" onchange="_piSetField(\'date\',this.value)" style="'+iSty+';min-width:0;max-width:100%;-webkit-appearance:none;appearance:none"></div>';
+  h += '<div style="min-width:0"><label style="'+lSty+'">'+(d.isSeries?'First injection':'Date')+'</label><input type="date" class="pi-date" value="'+_esc(d.date||'')+'" max="'+_thTodayStr()+'" onclick="try{this.showPicker()}catch(e){}" onchange="_piSetField(\'date\',this.value)" style="'+iSty+';cursor:pointer;min-width:0;max-width:100%;-webkit-appearance:none;appearance:none"></div>';
   h += '<div style="min-width:0"><label style="'+lSty+'">Time</label><div style="display:flex;gap:5px">'+timeBtns+'</div></div>';
   h += '</div>';
 
