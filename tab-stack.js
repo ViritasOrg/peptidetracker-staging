@@ -1880,6 +1880,15 @@ function _renderEditTRT(trt){if(!trt)trt={};
   }
   var enabled=!!trt.enabled;var selIds=(trt.compounds||[]).map(function(c){return c.id;});var html='<div class="wiz-section" style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;"><span>Testosterone</span><div onclick="editToggleTRT()" style="cursor:pointer;"><div class="toggle-sw'+(enabled?' on':'')+'"></div></div></div>';html+=(typeof _renderTcalcTrtCard==='function'?_renderTcalcTrtCard():'');if(enabled)html+=_tcalcOwnsTestoNote('Testosterone');html+=(typeof _bfReadinessCard==='function'?_bfReadinessCard('trt'):'');if(enabled){TRT_CAT.forEach(function(c){var isSel=selIds.includes(c.id);var disabled=!isSel&&selIds.length>=2;var selData=isSel?(trt.compounds||[]).find(function(s){return s.id===c.id;}):null;html+='<div class="pep-card'+(isSel?' sel':'')+(disabled?' disabled':'')+'" onclick="'+(disabled?'':('editToggleTRTCompound(\''+c.id+'\')'))+'" style="margin-bottom:'+(isSel?'0':'6px')+';'+(isSel?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;':'')+(disabled?'opacity:0.4;cursor:default;pointer-events:none;':'')+'"><div class="pep-dot-sm" style="background:'+c.dot+'"></div><div class="pep-info"><div class="pep-name">'+c.name+'</div><div class="pep-meta">'+_metaWithHalfLife(c,c.sub)+'</div></div><div class="pep-chk">'+(isSel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="#0a0a0a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+'</div></div>';if(isSel&&selData){var doseNum=parseDec(selData.dose)||0;var weeklyDoseMg;if(c.id!=='nebido'&&selData.days&&selData.days.length){weeklyDoseMg=doseNum*selData.days.length;}else{var freqDays=((selData.freqUnit||'weeks')==='weeks'?(selData.freqVal||1)*7:(selData.freqVal||1));weeklyDoseMg=freqDays>0?doseNum*7/freqDays:0;}html+='<div style="border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;padding:12px 14px;margin-bottom:8px;background:rgba(232,255,60,0.015);">';var _doseRow='<div class="cfg-row"><div class="cfg-lbl">Dose</div><div class="dose-row"><input class="dose-in" type="text" inputmode="decimal" value="'+_esc(String(selData.dose||''))+'" oninput="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(x){return x.id===\''+c.id+'\'});if(cc)cc.dose=x;})(this.value)" placeholder="0"><select class="unit-sel" onchange="(function(x){var cc=(_editBuf.trt.compounds||[]).find(function(y){return y.id===\''+c.id+'\'});if(cc)cc.unit=x;})(this.value)">'+_trtUnitOptions(selData.unit)+'</select></div></div>';html+=_renderTRTPlan(c,selData,'edit',_doseRow);html+='<div class="cfg-row"><div class="cfg-lbl">Time</div><div class="time-chips">'+['AM','PM'].map(function(tm){return '<div class="time-chip'+(((selData.time||'AM')===tm)?' sel':'')+'" onclick="editSetTRTTime(\''+c.id+'\',\''+tm+'\')">'+tm+'</div>';}).join('')+'</div></div>';html+=_renderTRTTransition(c,selData,'edit');html+=_scheduleWarningHtml(_editBuf,selData,'trt');html+='<div id="trt-guide-'+c.id+'">'+_renderTRTGuide(c.id,weeklyDoseMg)+'</div>';html+='</div>';}})}return html;}
 function editSetTRTTime(id,tm){var c=((_editBuf.trt&&_editBuf.trt.compounds)||[]).find(function(c){return c.id===id;});if(!c)return;c.time=(tm==='PM'?'PM':'AM');_collectEditInputs();renderStackEditor();}
+// Peptides by name within each section, sections in the order the list first names them
+// (Henrik, 2026-11-19: the list "isn't sorted by name"). A copy: PEPTIDE_CAT keeps its order.
+function _pepByName(list){
+  var order=[];(list||[]).forEach(function(p){if(order.indexOf(p.group)<0)order.push(p.group);});
+  return (list||[]).slice().sort(function(a,b){
+    var g=order.indexOf(a.group)-order.indexOf(b.group);if(g)return g;
+    return String(a.name).localeCompare(String(b.name),'en',{sensitivity:'base',numeric:true});
+  });
+}
 function editAddPeptide(){
   var currentIds=(_editBuf.peptides||[]).map(function(p){return p.id;});
   var overlay=document.createElement('div');
@@ -1887,7 +1896,7 @@ function editAddPeptide(){
   overlay.onclick=function(e){if(e.target===overlay)document.body.removeChild(overlay);};
   var sheet=document.createElement('div');
   sheet.style.cssText='background:var(--surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px;max-height:75vh;overflow-y:auto;';
-  var groups={};PEPTIDE_CAT.forEach(function(cat){if(!groups[cat.group])groups[cat.group]=[];groups[cat.group].push(cat);});
+  var groups={};_pepByName(PEPTIDE_CAT).forEach(function(cat){if(!groups[cat.group])groups[cat.group]=[];groups[cat.group].push(cat);});
   var html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">';
   html+='<div style="font-family:var(--font-display);font-size:20px;letter-spacing:1px;color:var(--accent);">ADD PEPTIDE</div>';
   html+='<button onclick="this.closest(\'[style*=fixed]\').remove()" style="background:none;border:none;color:var(--muted2);font-size:22px;cursor:pointer;">×</button>';
@@ -2778,9 +2787,12 @@ function wizToggleGoal(id){
 
 function wizStepPeptides(body,footer){
   var filtered=PEPTIDE_CAT.filter(function(p){return !p.goals.every(function(g){return g==='trt';})&&p.group!=='Enhanced';});
-  if(_wiz.goals.length){filtered=filtered.filter(function(p){return p.goals.some(function(g){return _wiz.goals.includes(g);});});}
+  // A peptide filed under no wizard goal ('other': PT-141, the melanocortins, the immune
+  // peptides) is listed whatever goals are picked. Henrik, 2026-11-19: "The list is missing
+  // pt141": with any goal chosen the filter hid every one of them.
+  if(_wiz.goals.length){filtered=filtered.filter(function(p){return p.goals.includes('other')||p.goals.some(function(g){return _wiz.goals.includes(g);});});}
   var groups={};
-  filtered.forEach(function(p){if(!groups[p.group])groups[p.group]=[];groups[p.group].push(p);});
+  _pepByName(filtered).forEach(function(p){if(!groups[p.group])groups[p.group]=[];groups[p.group].push(p);});
   var selIds=_wiz.peptides.map(function(x){return x.id;});
   _wiz.peptides.forEach(function(sp){
     if(!filtered.find(function(f){return f.id===sp.id;})){
