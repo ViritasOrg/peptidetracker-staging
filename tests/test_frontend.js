@@ -20643,6 +20643,30 @@ console.log('\n── Every catalogue peptide is in the picker ─────�
     rows[0].dose === '1' && rows[0].unit === 'mg' && rows[0].tier === 'peptide');
   GP._wiz = _wSave.wiz; GP._userTier = _wSave.tier;
 
+  // ── The ad-hoc injection sheet (Henrik, 2026-11-19) ──────────────────────
+  // "I was adding an ad-hoc injection and picked peptide, some of them like PT-141 will
+  // obviously never be part of a stack/protocol": this sheet is where it gets logged.
+  {
+    const _dSave = GP._piDraft;
+    GP._piDraft = {tier:'peptide', compId:'pt141', dose:'1', unit:'mg', date:GP.dateKey(new Date()), time:'',
+                   isSeries:false, count:4, intervalDays:3.5, logged:true};
+    const sheet = GP._piHtml();
+    check('ad-hoc sheet: PT-141 is in the Peptide list', /<option value="pt141" selected>PT-141/.test(sheet));
+    const names = GP._piCat('peptide').map(c => c.name);
+    const byName = a => a.every((n, i) => i === 0 || a[i - 1].localeCompare(n, 'en', {sensitivity:'base', numeric:true}) <= 0);
+    check('ad-hoc sheet: the Peptide list is by name', names.length === GP.PEPTIDE_CAT.length && byName(names));
+    check('  …and so are the TRT and Enhanced lists',
+      byName(GP._piCat('trt').map(c => c.name)) && byName(GP._piCat('enhanced').map(c => c.name)));
+    check('  …the catalogue itself keeps its order', GP.PEPTIDE_CAT[0].id === 'cjc-ipa');
+    const opts = []; sheet.replace(/<option value="([^"]+)"[^>]*>/g, (m, id) => { opts.push(id); });
+    check('  …and the sheet draws them in that order',
+      opts.join() === GP._piCat('peptide').map(c => c.id).join());
+    check('ad-hoc sheet: with the catalogue loaded it does not fetch again',
+      (() => { const f = GP.fetch; let n = 0; GP.fetch = async () => { n++; return {ok:false, status:500, json: async () => ({})}; };
+               GP._piEnsurePeptides(); GP.fetch = f; return n === 0; })());
+    GP._piDraft = _dSave;
+  }
+
   // Back to the bundled list for the sync test and for every block after this one.
   GP.PEPTIDE_CAT.length = 0; before.forEach(c => GP.PEPTIDE_CAT.push(c));
 
@@ -20656,6 +20680,34 @@ console.log('\n── Every catalogue peptide is in the picker ─────�
   pOff.then(r => check('  …and the failed fetch is reported, not thrown', r.ok === false));
   GP.localStorage.removeItem('proto-peptide-cat');
   GP.PEPTIDE_CAT.length = 0; before.forEach(c => GP.PEPTIDE_CAT.push(c));
+
+  // An app that started while the backend was not serving the catalogue (the report:
+  // PT-141 missing from the ad-hoc sheet) asks for it when the sheet opens, and when the
+  // app comes back to the front. Fails on the pre-fix source: neither function exists.
+  // Run after the sync test below, which shares the list and the kept copy.
+  const _adhocAsync = async () => {
+    const f = GP.fetch; let asked2 = 0;
+    GP.fetch = async (u) => { if (/\/peptide-catalog$/.test(String(u))) asked2++; return {ok:true, status:200, json: async () => ({peptides: SERVED})}; };
+    const pEns = GP._piEnsurePeptides();
+    GP.fetch = f;
+    check('ad-hoc sheet: with no catalogue loaded it fetches it', asked2 === 1);
+    {
+      const grew = await pEns;
+      check('  …and PT-141 is then in its Peptide list', grew === true && GP._piCat('peptide').some(c => c.id === 'pt141'));
+      GP.PEPTIDE_CAT.length = 0; before.forEach(c => GP.PEPTIDE_CAT.push(c));
+      try { GP.localStorage.removeItem('proto-peptide-cat'); } catch (e) {}
+      const f2 = GP.fetch; let asked3 = 0;
+      GP.fetch = async (u) => { if (/\/peptide-catalog$/.test(String(u))) asked3++; return {ok:false, status:503, json: async () => ({})}; };
+      const r1 = GP._resyncPeptideCatalogIfMissing();
+      GP.fetch = f2;
+      check('back to the front with no catalogue: it is asked for again', asked3 === 1 && r1 && typeof r1.then === 'function');
+      GP._mergeServedPeptides(SERVED);
+      check('  …and not once it is loaded', GP._resyncPeptideCatalogIfMissing() === null);
+      GP.PEPTIDE_CAT.length = 0; before.forEach(c => GP.PEPTIDE_CAT.push(c));
+    }
+  };
+  check('the ad-hoc sheet asks for the catalogue when it opens',
+    /document\.body\.appendChild\(wrap\.firstChild\);\s*_piEnsurePeptides\(\);/.test(fs.readFileSync(path.join(__dirname, '../tab-thist.js'), 'utf8')));
 
   // The sync: fetch is read when the call starts, so the stub is swapped back at once
   // and never races the other async blocks.
@@ -20675,6 +20727,7 @@ console.log('\n── Every catalogue peptide is in the picker ─────�
     check('  …the list is kept for a start with no network', Array.isArray(cached) && cached.some(x => x.id === 'pt141'));
     GP.PEPTIDE_CAT.length = 0; before.forEach(c => GP.PEPTIDE_CAT.push(c));
     try { GP.localStorage.removeItem('proto-peptide-cat'); } catch (e) {}
+    await _adhocAsync();
   })();
   check('init starts the peptide catalogue with the same retries',
     /syncCatalogUntilLoaded\(8,15000,syncPeptideCatalogFromAgent\)/.test(html));

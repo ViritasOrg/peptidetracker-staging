@@ -306,6 +306,14 @@ async function syncPeptideCatalogFromAgent(){
     return{ok:true};
   }catch(e){clearTimeout(tid);_logErr('syncPeptideCatalog',e);return{ok:false,status:null,msg:String(e&&e.message||e)};}
 }
+// An installed PWA is resumed far more often than it is started. If the start-up tries
+// ran out with no catalogue (2026-11-19: the backend was mid-deploy), ask again whenever
+// the app comes back to the front, until it has one.
+function _resyncPeptideCatalogIfMissing(){
+  if(typeof PEPTIDE_CAT==='undefined'||PEPTIDE_CAT.some(function(c){return c._served;}))return null;
+  return syncPeptideCatalogFromAgent();
+}
+if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')_resyncPeptideCatalogIfMissing();});
 var _cwiz={step:1,tpl:null,phase:'foundational',weeks:20,startDate:'',compounds:[]};
 function cycleWizardOpen(){
   if(_cycle&&_cycle.id&&!confirm('Start a new cycle? Your current cycle stays saved on the backend.'))return;
