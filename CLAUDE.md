@@ -11,8 +11,8 @@ Henrik, 2026-09-08: "you must move code to Stage, and once ready for test ping m
 ## 🔗 ONE NUMBER, ONE SOURCE — NOTHING MAY DISAGREE WITH ITSELF 🔗
 Henrik, 2026-09-08: "make it a rule that nowhere in any app can there be data not agreeing with each other." Across peptidetracker, workout and their staging copies, the same quantity has one definition in one place and every surface reads it from there (compound parameters, half-lives, dose tiers, reference ranges, conversions, models, derived figures). A quantity read from the backend is read from the backend everywhere, never copied into a constant. One model, one implementation (the Dose Finder shares T-Calc's pharmacology `_tcFreeTSeries`); one renderer per kind of content (`_renderEnhancedGuide` everywhere dose guidance shows). A derived figure names its source. Fix a disagreement at the source, never at the display: say so, pick the authoritative one, make the other read from it.
 
-<!-- BEGIN ORG-WIDE RULES v26. Canonical copy: ViritasOrg/claude-agent-backend docs/org-rules.md. Edit it there; the Sync org rules workflow opens the PRs that copy this block into every other ViritasOrg repo, and the daily drift check reports any copy that differs. -->
-## Org-wide rules: every ViritasOrg repo (canonical v26, 2026-11-19)
+<!-- BEGIN ORG-WIDE RULES v27. Canonical copy: ViritasOrg/claude-agent-backend docs/org-rules.md. Edit it there; the Sync org rules workflow opens the PRs that copy this block into every other ViritasOrg repo, and the daily drift check reports any copy that differs. -->
+## Org-wide rules: every ViritasOrg repo (canonical v27, 2026-11-19)
 
 Identical in every repo's `CLAUDE.md` under `ViritasOrg`; the rest of each file adds repo-specific rules. If one seems to contradict this block, say so to Henrik instead of picking one. They bind every session, whatever started it (Claude Code, claude.ai, a Project, a scheduled task, an agent). The quote and incident behind each rule: https://github.com/ViritasOrg/claude-agent-backend/blob/main/docs/org-rules-history.md.
 
@@ -108,6 +108,7 @@ Identical in every repo's `CLAUDE.md` under `ViritasOrg`; the rest of each file 
 ### Every page has its own icon, and is readable for Henrik
 - **Every page or app ships its icon in its first PR**: favicon, PWA manifest with 192, 512 and maskable PNGs, `apple-touch-icon`; distinct per app, clear colours on black; production and staging never look alike (own title, manifest name and icon); a test that every page links them.
 - **High contrast, nothing small and grey** (https://github.com/ViritasOrg/flyt/issues/766, https://github.com/ViritasOrg/btcpay/issues/175): every text colour at least 7:1 (WCAG AAA) in every theme, no informational text under 15px, secondary text marked by size or weight never by greying; a `readable` test per page. **Bigger text never spills out of its card** (https://github.com/ViritasOrg/flyt/issues/847): layout tests busy and quiet, desktop to phone.
+- **A click never shifts the view** (Henrik, 2026-11-19, https://github.com/ViritasOrg/btcpay/issues/371): in every page and app, picking, selecting, sorting, filtering, opening or closing something changes that part in place; never a page load that puts the window back at the top, never content that jumps, resizes or reorders under the pointer, never a refresh that moves what he is looking at. Scroll position (both ways) and running drawings stay; a full page load is only for going to another page. A new picker, list or refresh gets this in the same PR, with a test.
 
 ### Security, auth and money
 - **Security takes precedence over convenience** (2026-10-11): build the more secure option and say what it costs. **No PIN or non-Google end-user login, ever**; the `x-api-secret` and read-only keys are Claude's tooling only, GET-only where read-only, never widened.
@@ -132,7 +133,7 @@ Identical in every repo's `CLAUDE.md` under `ViritasOrg`; the rest of each file 
 
 ### CLAUDE.md holds rules, not records
 - A repo's root `CLAUDE.md` is loaded into every session, so it stays under 200 lines: imperative rules, one line each, an issue URL as provenance, at most one line of why. Quotes, incident stories, feature logs, "current state" and design notes go to `docs/` (pointed to from `CLAUDE.md` in one line), or to `.claude/rules/<area>.md` with `paths:` frontmatter when a rule only matters for part of the repo. A rule Henrik gives goes in as a rule; the quote goes to `docs/rule-history.md`.
-<!-- END ORG-WIDE RULES v26 -->
+<!-- END ORG-WIDE RULES v27 -->
 
 ## This repo
 Single-file PWA: `index.html` (JS, CSS, HTML inline) plus `tab-*.js`, `css/main.css`; `const VERSION` matches `version.json`, both bumped by the version-bump workflow on merge. GitHub Pages deploys on push to `main` (the live `version.json` cannot be fetched from a session; confirm deploys from `deploy-status`, below). All development happens here; `peptidetracker` (prod) is read-only for Claude. Shared infrastructure with `workout-staging` (Push to Prod, settings sync, update checker, auth, backend calls, `IS_STAGING`): **a fix in one app is made in the other in the same session**. Tests: `node tests/test_frontend.js index.html`, 0 failures before any PR. The old `CLAUDE.md` with every incident and mechanism is `docs/claude-md-archive-2026-11-05.md`; a new rule goes below as one line, its story into `docs/rule-history.md`.
