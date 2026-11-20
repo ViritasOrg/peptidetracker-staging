@@ -15,3 +15,5 @@ Said after a bloodwork answer (which tests a Synlab package lacks for his next d
 > "stop suggesting things like this, I will not be able to pay more than the 160 + 45 for E2"
 
 Said after three answers in a row listed eight to ten extra Synlab tests (400 to 530 € of add-ons) on top of the package he was choosing. His panel is the 160 € Hälsokontroll testpaket man plus estradiol. The rule: say what the panel he chose covers; extra tests only when he asks.
+
+Later the same day: "add all knowledge about the Synlab tests and prices as well, I need guidance but not lets spend over €400 on bloodtests". The catalogue went to claude-agent-backend `docs/enhanced-bodybuilding/23-synlab-bloodwork-tests-and-prices.md`; the rule now allows guidance inside the budget (the best-value swap, one add-on with its total).
