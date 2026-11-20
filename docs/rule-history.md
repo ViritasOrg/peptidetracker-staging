@@ -10,3 +10,10 @@ Workout prod PR #334 (https://github.com/ViritasOrg/workout/pull/334) failed bec
 > "update your memory, since I have 4 kids, have had a vasectomy 10 yrs ago, will never do PCT stop bringing shit up that I dont care about"
 
 Said after a bloodwork answer (which tests a Synlab package lacks for his next draw) spent a line on prolactin and LH/FSH being "not needed now", citing the baseline and post-PCT rows of the monitoring tables in `docs/enhanced-bodybuilding/`. Those rows are for users who plan to come off or care about fertility; neither applies to him. The rule: answers for Henrik leave these topics out entirely; the docs and the app keep them for other users.
+
+## Henrik sets the bloodwork budget (2026-11-20)
+> "stop suggesting things like this, I will not be able to pay more than the 160 + 45 for E2"
+
+Said after three answers in a row listed eight to ten extra Synlab tests (400 to 530 € of add-ons) on top of the package he was choosing. His panel is the 160 € Hälsokontroll testpaket man plus estradiol. The rule: say what the panel he chose covers; extra tests only when he asks.
+
+Later the same day: "add all knowledge about the Synlab tests and prices as well, I need guidance but not lets spend over €400 on bloodtests". The catalogue went to claude-agent-backend `docs/enhanced-bodybuilding/23-synlab-bloodwork-tests-and-prices.md`; the rule now allows guidance inside the budget (the best-value swap, one add-on with its total).
