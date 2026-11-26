@@ -18335,6 +18335,46 @@ console.log('\n─────────────────────�
 }
 
 
+// ── The weight line never runs back in time ─────────────────────────────────────────
+// Henrik, 2026-11-23 (prod screenshot): "why is the yellow weight line going in an curve
+// back in time?" Two weigh-ins 2 days apart with the neighbours weeks away: the curve's
+// handles are sized from the neighbours, so they reached past both ends of the 2-day
+// segment and the line looped. REGRESSION: fails on the pre-fix source.
+console.log('\n── Weight chart: the line never runs back in time ──────────');
+if(typeof G.bcDrawWeightLeanChart==='function'){
+  const _gid=G.document.getElementById, _w=G.weights, KEY=G.BC_KEY||'proto-bodycomp-v2', _saved=G.localStorage.getItem(KEY);
+  const day=(off)=>vm.runInContext('(function(o){var x=new Date(NOW);x.setDate(x.getDate()+o);return dateKey(x);})('+off+')',sandbox);
+  const curves=[]; let cur=null;
+  const ctx=new Proxy({}, {get(t,k){
+    if(k==='moveTo')return (x,y)=>{cur={x,y};};
+    if(k==='lineTo')return (x,y)=>{cur={x,y};};
+    if(k==='bezierCurveTo')return (a,b,c,d,x,y)=>{curves.push({x0:cur.x,c1:a,c2:c,x1:x});cur={x,y};};
+    if(k==='createLinearGradient')return ()=>({addColorStop(){}});
+    if(k==='measureText')return ()=>({width:10});
+    return (k in t)?t[k]:function(){};
+  }, set(t,k,v){t[k]=v;return true;}});
+  G.document.getElementById=function(id){ return id==='chart-weight-trend' ? {style:{},offsetWidth:600,getContext:()=>ctx} : _gid.call(G.document,id); };
+  try{
+    G.localStorage.setItem(KEY,'[]');
+    // 90-day window: a weigh-in, 26 days, a weigh-in, 2 days, a weigh-in, 37 days, then three more.
+    G.weights=[[-85,80],[-59,79.5],[-57,78],[-20,81],[-12,81],[0,81]].map(r=>({date:day(r[0]),weight:r[1]}));
+    G.bcDrawWeightLeanChart();
+    const segs=curves.slice(0,5);   // the first pass (the fill) covers every segment once
+    const bad=segs.filter(s=>!(s.x0<=s.c1+1e-9 && s.c1<=s.c2+1e-9 && s.c2<=s.x1+1e-9));
+    check('the chart drew one curve per gap between weigh-ins', segs.length===5 && segs.every(s=>s.x1>s.x0), JSON.stringify(curves.length));
+    check('REGRESSION: every curve handle stays inside its own segment, in order, so the line only moves forward in time', bad.length===0, JSON.stringify(bad.map(s=>[s.x0,s.c1,s.c2,s.x1].map(v=>Math.round(v*10)/10))));
+    // Evenly spaced points keep the smoothing they had: handles are not flattened.
+    curves.length=0;
+    G.weights=[[-80,80],[-60,79],[-40,81],[-20,80],[0,82]].map(r=>({date:day(r[0]),weight:r[1]}));
+    G.bcDrawWeightLeanChart();
+    const mid=curves[1];
+    check('evenly spaced weigh-ins keep their curve (handles at 0.15 of the neighbour span, untouched)', curves.length>=4 && Math.abs((mid.c1-mid.x0)-(mid.x1-mid.x0)*2*0.15)<0.01 && Math.abs((mid.x1-mid.c2)-(mid.x1-mid.x0)*2*0.15)<0.01, JSON.stringify(mid));
+  } finally {
+    G.document.getElementById=_gid; G.weights=_w;
+    if(_saved===null)G.localStorage.removeItem(KEY); else G.localStorage.setItem(KEY,_saved);
+  }
+}
+
 // ── Body-comp labels survive a backend round-trip (regression, 2026-08-05) ──
 // Reported by the new diagnostics log, first real use:
 //   [syncBodyComp] null is not an object (evaluating 'labels[i].split')
