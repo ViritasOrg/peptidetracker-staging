@@ -17293,6 +17293,69 @@ if(typeof G._bcPrecision==='function'){
     G._bcPrecisionLabel({method:'dexa',bf:14}));
 }
 
+// ── A row with no method is a tape reading only if it has tape numbers ──────────────
+// Henrik, 2026-11-23 (prod screenshot): "Bodyfat seems to assume all measurements are us
+// navy, and thus get unhappy if no neck and waist numbers are given?" Two rows stored as
+// {date, bf} and nothing else showed "Neck null · Waist null", the tape dot, the tape
+// margin of error and the tape range warning. Every check below marked REGRESSION fails
+// on the pre-fix source.
+console.log('\n── Body fat: a row with no method and no tape numbers ──────');
+if(typeof G._bcEntryMethod==='function'){
+  const bare={date:'2026-09-18',bf:12,neck:null,belly:null,method:null,skinfolds:null};
+  const tape={date:'2026-07-17',bf:12,neck:40,belly:85,method:null};
+  check('a legacy row with neck and waist is still a tape reading',
+    G._bcEntryMethod(tape)==='navy' && /^Neck 40 · Waist 85/.test(G._bcEntryDetail(tape)) &&
+    G._bcOutsideGoodRange(tape)===true && /^±/.test(G._bcPrecisionLabel(tape)));
+  check('a stored method always wins', G._bcEntryMethod({bf:12,method:'ai'})==='ai' && G._bcEntryMethod({bf:12,method:'jp3'})==='jp3' && G._bcEntryMethod({bf:12,neck:40,belly:85,method:'dexa'})==='dexa');
+  check('REGRESSION: a bare {date, bf} row is not a tape reading', G._bcEntryMethod(bare)==='unknown' && G._bcMethodGroup(G._bcEntryMethod(bare))==='unknown');
+  check('REGRESSION: …its detail says so and never prints null', G._bcEntryDetail(bare)==='Method not recorded' && !/null|Neck|Waist/.test(G._bcEntryDetail(bare)), G._bcEntryDetail(bare));
+  check('REGRESSION: …it gets no tape margin of error', G._bcPrecisionLabel(bare)==='' && G._bcPrecision(G._bcEntryMethod(bare),12)===null, G._bcPrecisionLabel(bare));
+  check('REGRESSION: …and no tape range warning', G._bcOutsideGoodRange(bare)===false);
+  check('the unknown group is drawn and named, with a readable colour', G._BC_GROUP_ORDER.indexOf('unknown')>=0 && G._BC_GROUP.unknown.label==='Method not recorded' && (function(c){const v=parseInt(c.slice(1,3),16)/255,l=v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4);return (l+0.05)/0.05>=7;})(G._BC_GROUP.unknown.color));
+
+  // The whole flow, through bcRender and the real picker handler.
+  const _ls=G.localStorage, KEY=G.BC_KEY||'proto-bodycomp-v2', _saved=_ls.getItem(KEY), _gid=G.document.getElementById, _ce=G.document.createElement, _push=G.pushBodyCompToAgent, _w=G.weights;
+  const rowsOut=[], els={};
+  const _ctx=new Proxy({}, {get(t,k){ if(k==='createLinearGradient')return ()=>({addColorStop(){}}); if(k==='measureText')return ()=>({width:10}); return (k in t)?t[k]:function(){}; }, set(t,k,v){t[k]=v;return true;}});
+  const mk=()=>({style:{},classList:{add(){},remove(){},contains:()=>false},children:[],appendChild(){},getContext:()=>_ctx,offsetWidth:300,innerHTML:'',textContent:''});
+  let list=null;
+  G.document.getElementById=function(id){ if(id==='bc-history-list'){ return list; } return els[id]||(els[id]=mk()); };
+  G.document.createElement=function(){ return mk(); };
+  const sent=[]; G.pushBodyCompToAgent=function(e){ sent.push(JSON.parse(JSON.stringify(e))); };
+  const render=function(){ const out=[]; list={innerHTML:'',appendChild(r){out.push(r.innerHTML);}}; G.bcRender(); return out; };
+  try{
+    _ls.setItem(KEY, JSON.stringify([tape, bare, {date:'2026-10-14',bf:13,neck:40,belly:84,method:null}]));
+    let rows=render();   // newest first
+    const bareRow=rows[1], tapeRow=rows[2];
+    check('REGRESSION: history shows "Method not recorded" for the bare row, with no null and no tape warning',
+      rows.length===3 && bareRow.includes('Method not recorded') && !/Neck null|Waist null/.test(bareRow) && !/outside this method/.test(bareRow) && !bareRow.includes(G._BC_GROUP.navy.color), bareRow.replace(/<[^>]+>/g,' ').slice(0,160));
+    check('…with a picker offering DEXA and AI photo, and a link to what it means',
+      bareRow.includes('data-bc-set-method="2026-09-18"') && bareRow.includes("bcSetMethod('2026-09-18',this.value)") && bareRow.includes('<option value="dexa">DEXA scan</option>') && bareRow.includes('<option value="ai">AI photo estimate</option>') && bareRow.includes('href="help.html#bf-method-unknown"'));
+    check('a tape row keeps its range warning, now linked to its explanation, and has no picker',
+      tapeRow.includes('Neck 40 · Waist 85') && tapeRow.includes('href="help.html#bf-method-range"') && /outside this method’s range<\/a>/.test(tapeRow) && !tapeRow.includes('data-bc-set-method'));
+    check('Latest results never prints "Neck null" for a bare latest row', (function(){ _ls.setItem(KEY, JSON.stringify([tape,bare])); render(); const t=els['res-neck-belly'].textContent; _ls.setItem(KEY, JSON.stringify([tape, bare, {date:'2026-10-14',bf:13,neck:40,belly:84,method:null}])); return t==='Method not recorded'; })(), els['res-neck-belly']&&els['res-neck-belly'].textContent);
+
+    const before=render().map(r=>(r.match(/font-weight:500;color:var\(--text\)">([^<]*)</)||[])[1]);
+    G.bcSetMethod('2026-09-18','ai');
+    const stored=JSON.parse(_ls.getItem(KEY));
+    rows=render();
+    const after=rows.map(r=>(r.match(/font-weight:500;color:var\(--text\)">([^<]*)</)||[])[1]);
+    check('picking AI photo stores the method on that row only, same reading',
+      stored.length===3 && stored[1].date==='2026-09-18' && stored[1].method==='ai' && stored[1].bf===12 && !stored[0].method && !stored[2].method);
+    check('…and saves it to the backend in the same step', sent.length===1 && sent[0].date==='2026-09-18' && sent[0].method==='ai' && sent[0].bf===12, JSON.stringify(sent));
+    check('…the row changes in place: same rows in the same order, now "AI photo estimate", picker gone',
+      JSON.stringify(before)===JSON.stringify(after) && after.length===3 && rows[1].includes('AI photo estimate') && rows[1].includes(G._BC_GROUP.ai.color) && !rows[1].includes('data-bc-set-method') && !/location|scrollTo|reload/.test(String(G.bcSetMethod)));
+    G.bcSetMethod('2026-09-18','dexa'); G.bcSetMethod('2026-07-17','ai'); G.bcSetMethod('2026-10-14','navy'); G.bcSetMethod('2026-01-01','ai');
+    const st2=JSON.parse(_ls.getItem(KEY));
+    check('a row that already has a method or tape numbers is never overwritten, and only DEXA or AI can be set', sent.length===1 && st2[1].method==='ai' && !st2[0].method && !st2[2].method);
+  } finally {
+    G.document.getElementById=_gid; G.document.createElement=_ce; G.pushBodyCompToAgent=_push; G.weights=_w;
+    if(_saved===null)_ls.removeItem(KEY); else _ls.setItem(KEY,_saved);
+  }
+  const help=fs.readFileSync(path.join(__dirname,'..','help.html'),'utf8');
+  check('help page: both body-fat messages have their section', ['bf-method-unknown','bf-method-range'].every(id=>new RegExp('id="'+id+'"[\\s\\S]*?What it means[\\s\\S]*?What happens if you ignore it[\\s\\S]*?How to fix it').test(help)) && G.BC_METHOD_HELP==='help.html#bf-method-unknown' && G.BC_RANGE_HELP==='help.html#bf-method-range');
+} else { check('_bcEntryMethod defined', false); }
+
 // ── THE ERROR BARS ARE SOURCED, NOT EYEBALLED ────────────────────────
 // The anchors were read off a JPEG of Henrik's chart when this shipped, which is a poor
 // footing for an error bar: it is a claim about how much to trust a number, so it should
@@ -17385,7 +17448,7 @@ if(typeof G._BC_SEE==='object'){
   check('  …with the y band sized to hold the error bars',
     /los\.push\(e\.bf-p\);his\.push\(e\.bf\+p\)/.test(bodyJs));
   check('history rows carry the method colour and its margin of error',
-    /_BC_GROUP\[_bcMethodGroup\(e\.method\)\]/.test(bodyJs) && /_bcPrecisionLabel\(e\)/.test(bodyJs));
+    /_BC_GROUP\[_bcMethodGroup\(_bcEntryMethod\(e\)\)\]/.test(bodyJs) && /_bcPrecisionLabel\(e\)/.test(bodyJs));
 }
 
 // ── Injection pharmacology stamp (_injPkMeta) ──────────────────────────────

@@ -12,7 +12,7 @@ function navyBF(n,b,h,sex,hip){if(sex==='female'&&hip){return Math.round((495/(1
 function setBioSex(sex){localStorage.setItem('user_sex',sex);pushPepSettingsToAgent({'user_sex':sex});document.querySelectorAll('#sex-chip-male,#sex-chip-female').forEach(function(el){el.classList.remove('sel');});var chip=document.getElementById('sex-chip-'+sex);if(chip)chip.classList.add('sel');var hr=document.getElementById('bc-hip-row');if(hr)hr.style.display=sex==='female'?'flex':'none';if(typeof _bcMethod!=='undefined'&&_bcMethod==='caliper')renderCaliperInputs();}
 function parseVal(id){const _el=document.getElementById(id);if(!_el)return null;const raw=String(_el.value||'').trim().replace(',','.');const v=parseFloat(raw);return isNaN(v)?null:v;}
 function bcLog(){const sex=localStorage.getItem('user_sex')||'male';const h=parseInt(localStorage.getItem('user_height')||'182');const n=parseVal('bc-neck');const b=parseVal('bc-belly');const hip=sex==='female'?parseVal('bc-hip'):null;const err=document.getElementById('bc-err');err.textContent='';if(n===null){err.textContent='Enter neck circumference';return;}if(b===null){err.textContent='Enter waist circumference';return;}if(sex==='female'&&hip===null){err.textContent='Enter hip circumference';return;}if(n<20||n>60){err.textContent='Neck out of range';return;}if(b<50||b>200){err.textContent='Waist out of range';return;}if(sex==='female'&&hip!==null&&(hip<60||hip>200)){err.textContent='Hip out of range';return;}if(b<=n){err.textContent='Waist must be larger than neck';return;}const bf=navyBF(n,b,h,sex,hip);if(bf<3||bf>60){err.textContent='Result out of range — check measurements.';return;}const entry={date:dateKey(NOW),dateLabel:fmtDate(NOW),neck:n,belly:b,bf:bf,...(hip!==null?{hip}:{})};const arr=bcLoad();const idx=arr.findIndex(e=>e.date===entry.date);if(idx!==-1)arr[idx]=entry;else arr.push(entry);arr.sort((a,b)=>a.date.localeCompare(b.date));bcSave(arr);pushBodyCompToAgent(entry);document.getElementById('bc-neck').value=entry.neck;document.getElementById('bc-belly').value=entry.belly;if(sex==='female'&&entry.hip!=null){const he=document.getElementById('bc-hip');if(he)he.value=entry.hip;}bcRender();}
-function bcRender(){if(typeof _pfRenderInfo==='function')_pfRenderInfo();const _hcm=parseInt(localStorage.getItem('user_height')||'182');const _hdisp=document.getElementById('bc-height-display');if(_hdisp)_hdisp.textContent=_hcm+' cm';const stored=bcLoad();const storedDates=new Set(stored.map(e=>e.date));const raw=[...stored];raw.sort((a,b)=>new Date(a.date.replace(/-/g,'/'))-new Date(b.date.replace(/-/g,'/')));const arr=raw.map(e=>{const w=getWeightForDate(e.date);const bmi=w?Math.round(w/Math.pow(_hcm/100,2)*10)/10:null;const lean=w?Math.round(w*(1-e.bf/100)*10)/10:null;return{...e,resolvedWeight:w,bmi,lean};});document.getElementById('bc-date-badge').textContent=fmtDate(NOW).toUpperCase();bcDrawWeightLeanChart();bcRenderWeightHistory();if(!arr.length){document.getElementById('bc-results-card').style.display='none';document.getElementById('bc-chart-card').style.display='none';document.getElementById('bc-history-card').style.display='none';return;}const latest=arr[arr.length-1];document.getElementById('bc-results-card').style.display='';var _ra=document.getElementById('res-age');if(_ra)_ra.textContent=_bcAgeLabel(latest.date);document.getElementById('res-bf').textContent=latest.bf;const latestW=weights.length?weights[weights.length-1].weight:null;const latestBmi=latestW?Math.round(latestW/Math.pow(_hcm/100,2)*10)/10:null;const latestLean=latestW?Math.round(latestW*(1-latest.bf/100)*10)/10:null;document.getElementById('res-bmi').textContent=latestBmi?latestBmi.toFixed(1):'—';document.getElementById('res-weight').textContent=latestW?String(latestW):'—';document.getElementById('res-lean').textContent=latestLean?String(latestLean):'—';document.getElementById('res-neck-belly').textContent=((latest.method&&latest.method!=='navy')?_bcEntryDetail(latest):('Neck '+latest.neck+' cm · Waist '+latest.belly+' cm'+(latest.hip?' · Hip '+latest.hip+' cm':'')))+(_bcPrecisionLabel(latest)?(' · '+_bcPrecisionLabel(latest)):'');document.getElementById('bc-chart-card').style.display='';document.getElementById('bc-entries-badge').textContent=arr.length+' entr'+(arr.length===1?'y':'ies');bcDrawBfChart(arr);const bmiData=arr.filter(e=>e.bmi);let bmiVals=bmiData.map(e=>e.bmi);let bmiLabels=bmiData.map(e=>_bcLabel(e));if(latestW&&arr.length){const lastDate=arr[arr.length-1].date;const todayKey=dateKey(NOW);if(todayKey>lastDate){const todayBmi=Math.round(latestW/Math.pow(_hcm/100,2)*10)/10;bmiVals=[...bmiVals,todayBmi];bmiLabels=[...bmiLabels,fmtDate(NOW)];}}if(bmiVals.length>=1)bcDrawChart('chart-bmi',bmiVals,bmiLabels,'#3cffa0','');document.getElementById('bc-history-card').style.display='';const list=document.getElementById('bc-history-list');list.innerHTML='';[...arr].reverse().forEach((e,i)=>{const row=document.createElement('div');row.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px;';if(i===arr.length-1)row.style.borderBottom='none';const _g=_BC_GROUP[_bcMethodGroup(e.method)]||{color:'var(--muted2)'};const _pl=_bcPrecisionLabel(e);const _warn=_bcOutsideGoodRange(e);row.innerHTML=`<div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:${_g.color};flex-shrink:0"></span><div><div style="font-weight:500;color:var(--text)">${_bcLabel(e)}</div><div style="color:var(--muted2);margin-top:2px;">${_bcEntryDetail(e)}${_pl?' · '+_pl:''}${e.resolvedWeight?' · '+e.resolvedWeight+'kg':''}${_warn?' · <span style="color:#f59e0b">outside this method\u2019s range</span>':''}</div></div></div><div style="display:flex;gap:12px;align-items:center;"><div style="text-align:center"><div style="font-family:var(--font-mono);font-size:20px;color:var(--accent2);line-height:1">${e.bf}%</div><div style="font-size:9px;color:var(--muted2);">BF</div></div>${e.lean!=null?`<div style="text-align:center"><div style="font-family:var(--font-mono);font-size:20px;color:var(--accent4);line-height:1">${e.lean}</div><div style="font-size:9px;color:var(--muted2);">lean kg</div></div>`:''}${e.bmi?`<div style="text-align:center"><div style="font-family:var(--font-mono);font-size:20px;color:var(--accent3);line-height:1">${e.bmi}</div><div style="font-size:9px;color:var(--muted2);">BMI</div></div>`:''}<button onclick="bcDeleteEntry('${e.date}')" style="background:none;border:none;color:var(--muted2);font-size:18px;cursor:pointer;padding:4px 6px;line-height:1;">✕</button></div>`;list.appendChild(row);});}
+function bcRender(){if(typeof _pfRenderInfo==='function')_pfRenderInfo();const _hcm=parseInt(localStorage.getItem('user_height')||'182');const _hdisp=document.getElementById('bc-height-display');if(_hdisp)_hdisp.textContent=_hcm+' cm';const stored=bcLoad();const storedDates=new Set(stored.map(e=>e.date));const raw=[...stored];raw.sort((a,b)=>new Date(a.date.replace(/-/g,'/'))-new Date(b.date.replace(/-/g,'/')));const arr=raw.map(e=>{const w=getWeightForDate(e.date);const bmi=w?Math.round(w/Math.pow(_hcm/100,2)*10)/10:null;const lean=w?Math.round(w*(1-e.bf/100)*10)/10:null;return{...e,resolvedWeight:w,bmi,lean};});document.getElementById('bc-date-badge').textContent=fmtDate(NOW).toUpperCase();bcDrawWeightLeanChart();bcRenderWeightHistory();if(!arr.length){document.getElementById('bc-results-card').style.display='none';document.getElementById('bc-chart-card').style.display='none';document.getElementById('bc-history-card').style.display='none';return;}const latest=arr[arr.length-1];document.getElementById('bc-results-card').style.display='';var _ra=document.getElementById('res-age');if(_ra)_ra.textContent=_bcAgeLabel(latest.date);document.getElementById('res-bf').textContent=latest.bf;const latestW=weights.length?weights[weights.length-1].weight:null;const latestBmi=latestW?Math.round(latestW/Math.pow(_hcm/100,2)*10)/10:null;const latestLean=latestW?Math.round(latestW*(1-latest.bf/100)*10)/10:null;document.getElementById('res-bmi').textContent=latestBmi?latestBmi.toFixed(1):'—';document.getElementById('res-weight').textContent=latestW?String(latestW):'—';document.getElementById('res-lean').textContent=latestLean?String(latestLean):'—';document.getElementById('res-neck-belly').textContent=((_bcEntryMethod(latest)!=='navy')?_bcEntryDetail(latest):('Neck '+latest.neck+' cm · Waist '+latest.belly+' cm'+(latest.hip?' · Hip '+latest.hip+' cm':'')))+(_bcPrecisionLabel(latest)?(' · '+_bcPrecisionLabel(latest)):'');document.getElementById('bc-chart-card').style.display='';document.getElementById('bc-entries-badge').textContent=arr.length+' entr'+(arr.length===1?'y':'ies');bcDrawBfChart(arr);const bmiData=arr.filter(e=>e.bmi);let bmiVals=bmiData.map(e=>e.bmi);let bmiLabels=bmiData.map(e=>_bcLabel(e));if(latestW&&arr.length){const lastDate=arr[arr.length-1].date;const todayKey=dateKey(NOW);if(todayKey>lastDate){const todayBmi=Math.round(latestW/Math.pow(_hcm/100,2)*10)/10;bmiVals=[...bmiVals,todayBmi];bmiLabels=[...bmiLabels,fmtDate(NOW)];}}if(bmiVals.length>=1)bcDrawChart('chart-bmi',bmiVals,bmiLabels,'#3cffa0','');document.getElementById('bc-history-card').style.display='';const list=document.getElementById('bc-history-list');list.innerHTML='';[...arr].reverse().forEach((e,i)=>{const row=document.createElement('div');row.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px;';if(i===arr.length-1)row.style.borderBottom='none';const _g=_BC_GROUP[_bcMethodGroup(_bcEntryMethod(e))]||{color:'var(--muted2)'};const _pl=_bcPrecisionLabel(e);const _warn=_bcOutsideGoodRange(e);row.innerHTML=`<div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:${_g.color};flex-shrink:0"></span><div><div style="font-weight:500;color:var(--text)">${_bcLabel(e)}</div><div style="color:var(--muted2);margin-top:2px;">${_bcEntryDetail(e)}${_pl?' · '+_pl:''}${e.resolvedWeight?' · '+e.resolvedWeight+'kg':''}${_warn?' · <a href="'+BC_RANGE_HELP+'" target="_blank" rel="noopener" style="color:#f59e0b">outside this method\u2019s range</a>':''}${_bcEntryMethod(e)==='unknown'?_bcSetMethodHtml(e):''}</div></div></div><div style="display:flex;gap:12px;align-items:center;"><div style="text-align:center"><div style="font-family:var(--font-mono);font-size:20px;color:var(--accent2);line-height:1">${e.bf}%</div><div style="font-size:9px;color:var(--muted2);">BF</div></div>${e.lean!=null?`<div style="text-align:center"><div style="font-family:var(--font-mono);font-size:20px;color:var(--accent4);line-height:1">${e.lean}</div><div style="font-size:9px;color:var(--muted2);">lean kg</div></div>`:''}${e.bmi?`<div style="text-align:center"><div style="font-family:var(--font-mono);font-size:20px;color:var(--accent3);line-height:1">${e.bmi}</div><div style="font-size:9px;color:var(--muted2);">BMI</div></div>`:''}<button onclick="bcDeleteEntry('${e.date}')" style="background:none;border:none;color:var(--muted2);font-size:18px;cursor:pointer;padding:4px 6px;line-height:1;">✕</button></div>`;list.appendChild(row);});}
 // The backend stores {date, bf} only — no dateLabel, because a display string is not
 // data. syncBodyCompFromAgent rebuilds the list from the remote records, so any entry
 // that has round-tripped comes back without one. Derive it from the date instead of
@@ -102,9 +102,42 @@ function caliperBF(method,sex,age,vals){
   var bf=_siriBF(bd);if(!isFinite(bf))return null;
   return Math.round(bf*10)/10;
 }
+// ⚠️ A ROW WITH NO METHOD IS ONLY A TAPE READING IF IT HAS TAPE NUMBERS.
+// Henrik, 2026-11-23: "Bodyfat seems to assume all measurements are us navy". Rows stored
+// before `method` existed are tape readings and carry neck and waist. Rows written as
+// {date, bf} and nothing else (the shape Workout writes) are not: calling them tape gave
+// them "Neck null · Waist null", the tape dot, the tape error bar and the tape range
+// warning. Such a row is 'unknown' until the user says what it was (bcSetMethod).
+function _bcEntryMethod(e){
+  if(!e)return 'unknown';
+  if(e.method)return e.method;
+  return (e.neck>0&&e.belly>0)?'navy':'unknown';
+}
+var BC_METHOD_HELP='help.html#bf-method-unknown', BC_RANGE_HELP='help.html#bf-method-range';
+// The picker a history row shows while its method is unknown. Only the two methods that
+// are a finished percentage are offered: tape and calipers need their measurements.
+function _bcSetMethodHtml(e){
+  var h='<div style="margin-top:6px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px">'
+    +'<select data-bc-set-method="'+e.date+'" onchange="bcSetMethod(\''+e.date+'\',this.value)" aria-label="Set how this reading was measured" style="font-size:16px;padding:8px 10px;border-radius:8px;border:1px solid var(--border-strong,var(--border));background:var(--surface2);color:var(--text);font-family:inherit">'
+    +'<option value="">Set the method\u2026</option>';
+  for(var k in _BC_DIRECT_LABEL)h+='<option value="'+k+'">'+_BC_DIRECT_LABEL[k]+'</option>';
+  return h+'</select><a href="'+BC_METHOD_HELP+'" target="_blank" rel="noopener" style="font-size:15px;font-weight:700;color:var(--accent)">What this means</a></div>';
+}
+// Changes the one row in place: same date, same reading, now carrying its method.
+function bcSetMethod(date,m){
+  if(!_BC_DIRECT_LABEL[m])return;
+  var arr=bcLoad(),e=null;
+  for(var i=0;i<arr.length;i++){if(arr[i].date===date){e=arr[i];break;}}
+  if(!e||_bcEntryMethod(e)!=='unknown')return;
+  e.method=m;
+  bcSave(arr);pushBodyCompToAgent(e);
+  bcRender();
+}
 // One-line detail string for a stored entry (tape vs caliper), used in results + history
 function _bcEntryDetail(e){
-  if(e&&e.method&&e.method!=='navy'){
+  var _m=_bcEntryMethod(e);
+  if(e&&_m==='unknown')return _BC_GROUP.unknown.label;
+  if(e&&_m!=='navy'){
     var lbl=_BC_CAL_LABEL[e.method]||_BC_DIRECT_LABEL[e.method]||e.method,sum=0;
     if(e.skinfolds){for(var k in e.skinfolds)sum+=(e.skinfolds[k]||0);}
     return lbl+(sum>0?' · Σ'+(Math.round(sum*10)/10)+'mm':'');
@@ -291,9 +324,12 @@ var _BC_GROUP={
   navy:   {label:'Tape (Navy)',       color:'#3b9eff', shape:'circle',  good:[15,30]},
   caliper:{label:'Caliper',           color:'#ff6b2b', shape:'square',  good:[15,30]},
   dexa:   {label:'DEXA',              color:'#3cffa0', shape:'diamond', good:null},
-  ai:     {label:'AI photo estimate', color:'#c084fc', shape:'triangle',good:null}
+  ai:     {label:'AI photo estimate', color:'#c084fc', shape:'triangle',good:null},
+  // Not a method: the rows nobody has named yet (_bcEntryMethod). No range and no entry
+  // in _BC_PRECISION, because an error bar belongs to an instrument.
+  unknown:{label:'Method not recorded',color:'#e6e6e6', shape:'circle',  good:null}
 };
-var _BC_GROUP_ORDER=['navy','caliper','dexa','ai'];
+var _BC_GROUP_ORDER=['navy','caliper','dexa','ai','unknown'];
 // Margin of error for one reading, in absolute BF percentage points.
 function _bcPrecision(method,bf){
   var tbl=_BC_PRECISION[_bcMethodGroup(method)];
@@ -311,14 +347,14 @@ function _bcPrecision(method,bf){
 // "± 3.6%" for a row, or '' when the method is unknown.
 function _bcPrecisionLabel(e){
   if(!e)return '';
-  var p=_bcPrecision(e.method,e.bf);
+  var p=_bcPrecision(_bcEntryMethod(e),e.bf);
   return (p===null)?'':('±'+p.toFixed(1)+'%');
 }
 // Is this reading inside the range its method is actually good for? Only the tape and
 // the calipers have one — they are the two that fall apart at both ends.
 function _bcOutsideGoodRange(e){
   if(!e)return false;
-  var g=_BC_GROUP[_bcMethodGroup(e.method)];
+  var g=_BC_GROUP[_bcMethodGroup(_bcEntryMethod(e))];
   if(!g||!g.good)return false;
   return !(e.bf>=g.good[0]&&e.bf<=g.good[1]);
 }
@@ -353,7 +389,7 @@ function bcDrawBfChart(entries){
   // The band has to hold the whiskers, or an error bar is clipped and reads as a smaller
   // uncertainty than it is.
   var los=[],his=[];
-  rows.forEach(function(e){var p=_bcPrecision(e.method,e.bf)||0;los.push(e.bf-p);his.push(e.bf+p);});
+  rows.forEach(function(e){var p=_bcPrecision(_bcEntryMethod(e),e.bf)||0;los.push(e.bf-p);his.push(e.bf+p);});
   var minV=Math.min.apply(null,los), maxV=Math.max.apply(null,his), range=(maxV-minV)||1;
   var vMin=minV-range*0.12, vMax=maxV+range*0.12;
   var yOf=function(v){return PAD.top+cH-((v-vMin)/(vMax-vMin))*cH;};
@@ -362,14 +398,14 @@ function bcDrawBfChart(entries){
   ctx.fillStyle='#555';ctx.font='9px -apple-system,system-ui,sans-serif';ctx.textAlign='right';
   for(var gi=0;gi<=3;gi++){var vv=vMax-(vMax-vMin)*(gi/3);ctx.fillText(vv.toFixed(1)+'%',PAD.left-4,PAD.top+(cH/3)*gi+3);}
   var groups={};
-  rows.forEach(function(e){var k=_bcMethodGroup(e.method);(groups[k]=groups[k]||[]).push(e);});
+  rows.forEach(function(e){var k=_bcMethodGroup(_bcEntryMethod(e));(groups[k]=groups[k]||[]).push(e);});
   var present=_BC_GROUP_ORDER.filter(function(k){return groups[k]&&groups[k].length;});
   present.forEach(function(k){
     var meta=_BC_GROUP[k], pts=groups[k].slice().sort(function(a,b){return tOf(a)-tOf(b);});
     // Whiskers first, so the marks sit on top of their own uncertainty.
     ctx.strokeStyle=meta.color+'66';ctx.lineWidth=2;ctx.lineCap='butt';
     pts.forEach(function(e){
-      var p=_bcPrecision(e.method,e.bf);if(!(p>0))return;
+      var p=_bcPrecision(_bcEntryMethod(e),e.bf);if(!(p>0))return;
       var x=xOf(tOf(e)), y1=yOf(e.bf-p), y2=yOf(e.bf+p);
       ctx.beginPath();ctx.moveTo(x,y1);ctx.lineTo(x,y2);ctx.stroke();
       ctx.beginPath();ctx.moveTo(x-3,y1);ctx.lineTo(x+3,y1);ctx.moveTo(x-3,y2);ctx.lineTo(x+3,y2);ctx.stroke();
