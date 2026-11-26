@@ -17,3 +17,8 @@ Said after a bloodwork answer (which tests a Synlab package lacks for his next d
 Said after three answers in a row listed eight to ten extra Synlab tests (400 to 530 € of add-ons) on top of the package he was choosing. His panel is the 160 € Hälsokontroll testpaket man plus estradiol. The rule: say what the panel he chose covers; extra tests only when he asks.
 
 Later the same day: "add all knowledge about the Synlab tests and prices as well, I need guidance but not lets spend over €400 on bloodtests". The catalogue went to claude-agent-backend `docs/enhanced-bodybuilding/23-synlab-bloodwork-tests-and-prices.md`; the rule now allows guidance inside the budget (the best-value swap, one add-on with its total).
+
+## Bug reports come from prod; fix them in staging and say nothing about it (2026-11-23)
+> "I use the prod versions (of course) so most bug reports will always be from Prod, and yes you can only fix them in Stage, stop making a point of this all the time, it is frustrating and make you seem daft"
+
+Said after a session started in `peptidetracker` answered a prod screenshot (body-fat history rows shown as tape readings with "Neck null · Waist null") and ended by pointing out that a code fix would go through `peptidetracker-staging`, not that repo, instead of fixing it. The rule: a report from prod is the normal case; attach staging, fix, merge, and never remark on which repo is read-only or where fixes go.
