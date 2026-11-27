@@ -23646,5 +23646,31 @@ console.log('\n── Food Edit: Update an entry ──────────�
     check('…the body-fat chart is measured the same way', /cssW=\(canvas\.style\.width='100%',canvas\.offsetWidth\)\|\|300/.test(fs.readFileSync(path.join(__dirname, '..', 'tab-body.js'), 'utf8')));
     G.document.getElementById = _gid3; G.window.devicePixelRatio = _dpr;
   }
+// ── HELP LINKS OPEN IN THE APP (Henrik, 2026-11-27) ──────────────────
+// In Workout: "there is no way to close that page without swiping away the whole pwa app and restart it".
+{
+  const body = fs.readFileSync(path.join(__dirname, '..', 'tab-body.js'), 'utf8');
+  const links = body.match(/<a href="'\+[A-Z_]*HELP\+'"[^>]*>/g) || [];
+  check('help links: every "What this means" link opens in the app, none as a page', links.length >= 3 && links.every(a => /onclick="return openHelp\(this\)"/.test(a) && !/target=/.test(a)), links.join(' | '));
+  const fnSrc = body.slice(body.indexOf('function _helpSection('), body.indexOf('return false;}', body.indexOf('function openHelp(')) + 'return false;}'.length);
+  const els = {};
+  const mk = id => ({ id, style: {}, innerHTML: '', setAttribute() {}, });
+  const H = vm.createContext({
+    document: { getElementById: id => els[id] || null,
+      createElement: () => mk(''),
+      body: { appendChild: el => { els[el.id] = el; els['help-overlay-body'] = mk('help-overlay-body'); } } },
+    DOMParser: function () { this.parseFromString = html => ({ getElementById: id => { const m = html.match(new RegExp('<section id="' + id + '">([\\s\\S]*?)</section>')); return m ? { innerHTML: m[1] } : null; } }); },
+    fetch: async url => ({ ok: url === 'help.html', text: async () => '<section id="a"><p>alpha</p></section><section id="b"><p>beta</p></section>' }) });
+  vm.runInContext(fnSrc, H);
+  const ret = H.openHelp({ getAttribute: () => 'help.html#b' });
+  await new Promise(r => setTimeout(r, 0));
+  {
+    check('  …openHelp shows only that section in an in-app card with ×', ret === false && els['help-overlay'] && els['help-overlay'].style.display === 'block' &&
+      /beta/.test(els['help-overlay-body'].innerHTML) && !/alpha/.test(els['help-overlay-body'].innerHTML) && /closeHelp\(\)/.test(els['help-overlay'].innerHTML));
+    H.closeHelp();
+    check('  …and × closes it, leaving the app where it was', els['help-overlay'].style.display === 'none');
+  }
+}
+
   if (failed > 0) process.exitCode = 1;
 })();
